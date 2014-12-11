@@ -699,8 +699,6 @@ int ps3_vuart_read_async(struct ps3_system_bus_device *dev, unsigned int bytes)
 
 	BUG_ON(!bytes);
 
-	PREPARE_WORK(&priv->rx_list.work.work, ps3_vuart_work);
-
 	spin_lock_irqsave(&priv->rx_list.lock, flags);
 	if (priv->rx_list.bytes_held >= bytes) {
 		dev_dbg(&dev->core, "%s:%d: schedule_work %xh bytes\n",
@@ -952,7 +950,7 @@ static int ps3_vuart_bus_interrupt_get(void)
 	}
 
 	result = request_irq(vuart_bus_priv.virq, ps3_vuart_irq_handler,
-		IRQF_DISABLED, "vuart", &vuart_bus_priv);
+		0, "vuart", &vuart_bus_priv);
 
 	if (result) {
 		pr_debug("%s:%d: request_irq failed (%d)\n",
@@ -1052,7 +1050,7 @@ static int ps3_vuart_probe(struct ps3_system_bus_device *dev)
 	INIT_LIST_HEAD(&priv->rx_list.head);
 	spin_lock_init(&priv->rx_list.lock);
 
-	INIT_WORK(&priv->rx_list.work.work, NULL);
+	INIT_WORK(&priv->rx_list.work.work, ps3_vuart_work);
 	priv->rx_list.work.trigger = 0;
 	priv->rx_list.work.dev = dev;
 

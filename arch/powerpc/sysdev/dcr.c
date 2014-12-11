@@ -20,6 +20,7 @@
 #undef DEBUG
 
 #include <linux/kernel.h>
+#include <linux/export.h>
 #include <asm/prom.h>
 #include <asm/dcr.h>
 
@@ -151,9 +152,9 @@ EXPORT_SYMBOL_GPL(dcr_resource_len);
 
 #ifdef CONFIG_PPC_DCR_MMIO
 
-u64 of_translate_dcr_address(struct device_node *dev,
-			     unsigned int dcr_n,
-			     unsigned int *out_stride)
+static u64 of_translate_dcr_address(struct device_node *dev,
+				    unsigned int dcr_n,
+				    unsigned int *out_stride)
 {
 	struct device_node *dp;
 	const u32 *p;

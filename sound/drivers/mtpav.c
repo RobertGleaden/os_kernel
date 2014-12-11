@@ -52,6 +52,7 @@
 
 #include <linux/init.h>
 #include <linux/interrupt.h>
+#include <linux/module.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
 #include <linux/ioport.h>
@@ -582,14 +583,14 @@ static irqreturn_t snd_mtpav_irqh(int irq, void *dev_id)
 /*
  * get ISA resources
  */
-static int __devinit snd_mtpav_get_ISA(struct mtpav * mcard)
+static int snd_mtpav_get_ISA(struct mtpav *mcard)
 {
 	if ((mcard->res_port = request_region(port, 3, "MotuMTPAV MIDI")) == NULL) {
 		snd_printk(KERN_ERR "MTVAP port 0x%lx is busy\n", port);
 		return -EBUSY;
 	}
 	mcard->port = port;
-	if (request_irq(irq, snd_mtpav_irqh, IRQF_DISABLED, "MOTU MTPAV", mcard)) {
+	if (request_irq(irq, snd_mtpav_irqh, 0, "MOTU MTPAV", mcard)) {
 		snd_printk(KERN_ERR "MTVAP IRQ %d busy\n", irq);
 		return -EBUSY;
 	}
@@ -618,8 +619,8 @@ static struct snd_rawmidi_ops snd_mtpav_input = {
  * get RAWMIDI resources
  */
 
-static void __devinit snd_mtpav_set_name(struct mtpav *chip,
-				      struct snd_rawmidi_substream *substream)
+static void snd_mtpav_set_name(struct mtpav *chip,
+			       struct snd_rawmidi_substream *substream)
 {
 	if (substream->number >= 0 && substream->number < chip->num_ports)
 		sprintf(substream->name, "MTP direct %d", (substream->number % chip->num_ports) + 1);
@@ -633,7 +634,7 @@ static void __devinit snd_mtpav_set_name(struct mtpav *chip,
 		strcpy(substream->name, "MTP broadcast");
 }
 
-static int __devinit snd_mtpav_get_RAWMIDI(struct mtpav *mcard)
+static int snd_mtpav_get_RAWMIDI(struct mtpav *mcard)
 {
 	int rval;
 	struct snd_rawmidi *rawmidi;
@@ -690,13 +691,14 @@ static void snd_mtpav_free(struct snd_card *card)
 
 /*
  */
-static int __devinit snd_mtpav_probe(struct platform_device *dev)
+static int snd_mtpav_probe(struct platform_device *dev)
 {
 	struct snd_card *card;
 	int err;
 	struct mtpav *mtp_card;
 
-	err = snd_card_create(index, id, THIS_MODULE, sizeof(*mtp_card), &card);
+	err = snd_card_new(&dev->dev, index, id, THIS_MODULE,
+			   sizeof(*mtp_card), &card);
 	if (err < 0)
 		return err;
 
@@ -731,7 +733,6 @@ static int __devinit snd_mtpav_probe(struct platform_device *dev)
 
 	snd_mtpav_portscan(mtp_card);
 
-	snd_card_set_dev(card, &dev->dev);
 	err = snd_card_register(mtp_card->card);
 	if (err < 0)
 		goto __error;
@@ -745,10 +746,9 @@ static int __devinit snd_mtpav_probe(struct platform_device *dev)
 	return err;
 }
 
-static int __devexit snd_mtpav_remove(struct platform_device *devptr)
+static int snd_mtpav_remove(struct platform_device *devptr)
 {
 	snd_card_free(platform_get_drvdata(devptr));
-	platform_set_drvdata(devptr, NULL);
 	return 0;
 }
 
@@ -756,9 +756,10 @@ static int __devexit snd_mtpav_remove(struct platform_device *devptr)
 
 static struct platform_driver snd_mtpav_driver = {
 	.probe		= snd_mtpav_probe,
-	.remove		= __devexit_p(snd_mtpav_remove),
+	.remove		= snd_mtpav_remove,
 	.driver		= {
-		.name	= SND_MTPAV_DRIVER
+		.name	= SND_MTPAV_DRIVER,
+		.owner	= THIS_MODULE,
 	},
 };
 
