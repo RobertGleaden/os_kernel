@@ -10,12 +10,11 @@
 
 /* pull in the relevant register and map files. */
 
+#include <linux/serial_s3c.h>
 #include <plat/map-base.h>
 #include <plat/map-s5p.h>
 
-#include <plat/regs-serial.h>
-
-	.macro addruart, rp, rv
+	.macro addruart, rp, rv, tmp
 		mov	\rp, #0xE0000000
 		orr	\rp, \rp, #0x00100000
 		ldr	\rp, [\rp, #0x118 ]
@@ -30,4 +29,4 @@
 #endif
 	.endm
 
-#include <plat/debug-macro.S>
+#include <debug/samsung.S>

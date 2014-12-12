@@ -17,6 +17,9 @@
  * USA.
  */
 
+#ifndef __USBIP_STUB_H
+#define __USBIP_STUB_H
+
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -32,7 +35,6 @@
 struct stub_device {
 	struct usb_interface *interface;
 	struct usb_device *udev;
-	struct list_head list;
 
 	struct usbip_device ud;
 	__u32 devid;
@@ -84,6 +86,7 @@ struct bus_id_priv {
 	char status;
 	int interf_count;
 	struct stub_device *sdev;
+	struct usb_device *udev;
 	char shutdown_busid;
 };
 
@@ -91,7 +94,7 @@ struct bus_id_priv {
 extern struct kmem_cache *stub_priv_cache;
 
 /* stub_dev.c */
-extern struct usb_driver stub_driver;
+extern struct usb_device_driver stub_driver;
 
 /* stub_main.c */
 struct bus_id_priv *get_busid_priv(const char *busid);
@@ -106,3 +109,5 @@ void stub_enqueue_ret_unlink(struct stub_device *sdev, __u32 seqnum,
 			     __u32 status);
 void stub_complete(struct urb *urb);
 int stub_tx_loop(void *data);
+
+#endif /* __USBIP_STUB_H */

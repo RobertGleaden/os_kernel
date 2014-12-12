@@ -4,6 +4,8 @@
  * Author: Ryan Wilson <hap9@epoch.ncsc.mil>
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/kernel.h>
 #include <linux/pci.h>
 #include "pciback.h"
@@ -15,7 +17,6 @@ struct pci_bar_info {
 	int which;
 };
 
-#define DRV_NAME	"xen-pciback"
 #define is_enable_cmd(value) ((value)&(PCI_COMMAND_MEMORY|PCI_COMMAND_IO))
 #define is_master_cmd(value) ((value)&PCI_COMMAND_MASTER)
 
@@ -25,7 +26,7 @@ static int command_read(struct pci_dev *dev, int offset, u16 *value, void *data)
 	int ret;
 
 	ret = xen_pcibk_read_config_word(dev, offset, value, data);
-	if (!atomic_read(&dev->enable_cnt))
+	if (!pci_is_enabled(dev))
 		return ret;
 
 	for (i = 0; i < PCI_ROM_RESOURCE; i++) {
@@ -76,10 +77,8 @@ static int command_write(struct pci_dev *dev, int offset, u16 value, void *data)
 			       pci_name(dev));
 		err = pci_set_mwi(dev);
 		if (err) {
-			printk(KERN_WARNING
-			       DRV_NAME ": %s: cannot enable "
-			       "memory-write-invalidate (%d)\n",
-			       pci_name(dev), err);
+			pr_warn("%s: cannot enable memory-write-invalidate (%d)\n",
+				pci_name(dev), err);
 			value &= ~PCI_COMMAND_INVALIDATE;
 		}
 	}
@@ -92,7 +91,7 @@ static int rom_write(struct pci_dev *dev, int offset, u32 value, void *data)
 	struct pci_bar_info *bar = data;
 
 	if (unlikely(!bar)) {
-		printk(KERN_WARNING DRV_NAME ": driver data not found for %s\n",
+		pr_warn(DRV_NAME ": driver data not found for %s\n",
 		       pci_name(dev));
 		return XEN_PCI_ERR_op_failed;
 	}
@@ -126,7 +125,7 @@ static int bar_write(struct pci_dev *dev, int offset, u32 value, void *data)
 	struct pci_bar_info *bar = data;
 
 	if (unlikely(!bar)) {
-		printk(KERN_WARNING DRV_NAME ": driver data not found for %s\n",
+		pr_warn(DRV_NAME ": driver data not found for %s\n",
 		       pci_name(dev));
 		return XEN_PCI_ERR_op_failed;
 	}
@@ -154,7 +153,7 @@ static int bar_read(struct pci_dev *dev, int offset, u32 * value, void *data)
 	struct pci_bar_info *bar = data;
 
 	if (unlikely(!bar)) {
-		printk(KERN_WARNING DRV_NAME ": driver data not found for %s\n",
+		pr_warn(DRV_NAME ": driver data not found for %s\n",
 		       pci_name(dev));
 		return XEN_PCI_ERR_op_failed;
 	}
@@ -187,7 +186,7 @@ static inline void read_dev_bar(struct pci_dev *dev,
 
 	bar_info->val = res[pos].start |
 			(res[pos].flags & PCI_REGION_FLAG_MASK);
-	bar_info->len_val = res[pos].end - res[pos].start + 1;
+	bar_info->len_val = resource_size(&res[pos]);
 }
 
 static void *bar_init(struct pci_dev *dev, int offset)
@@ -376,7 +375,7 @@ int xen_pcibk_config_header_add_fields(struct pci_dev *dev)
 
 	default:
 		err = -EINVAL;
-		printk(KERN_ERR DRV_NAME ": %s: Unsupported header type %d!\n",
+		pr_err("%s: Unsupported header type %d!\n",
 		       pci_name(dev), dev->hdr_type);
 		break;
 	}

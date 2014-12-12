@@ -29,7 +29,6 @@
 .globl ret_from_exception
 .globl ret_from_signal
 .globl sys_call_table
-.globl ret_from_interrupt
 .globl bad_interrupt
 .globl inthandler
 
@@ -63,7 +62,7 @@ ret_from_signal:
 	jra	ret_from_exception
 
 ENTRY(system_call)
-	SAVE_ALL
+	SAVE_ALL_SYS
 
 	/* save top of frame*/
 	pea	%sp@
@@ -115,7 +114,7 @@ Lsignal_return:
 	subql	#4,%sp			/* dummy return address*/
 	SAVE_SWITCH_STACK
 	pea	%sp@(SWITCH_STACK_SIZE)
-	bsrw	do_signal
+	bsrw	do_notify_resume
 	addql	#4,%sp
 	RESTORE_SWITCH_STACK
 	addql	#4,%sp
@@ -125,33 +124,16 @@ Lsignal_return:
  * This is the main interrupt handler, responsible for calling do_IRQ()
  */
 inthandler:
-	SAVE_ALL
+	SAVE_ALL_INT
 	movew	%sp@(PT_OFF_FORMATVEC), %d0
 	and.l	#0x3ff, %d0
 	lsr.l   #0x02,  %d0
 
 	movel	%sp,%sp@-
 	movel	%d0,%sp@- 		/*  put vector # on stack*/
-	jbsr	do_IRQ			/*  process the IRQ*/
-3:     	addql	#8,%sp			/*  pop parameters off stack*/
-	bra	ret_from_interrupt
-
-ret_from_interrupt:
-	jeq	1f
-2:
-	RESTORE_ALL
-1:
-	moveb	%sp@(PT_OFF_SR), %d0
-	and	#7, %d0
-	jhi	2b
-	/* check if we need to do software interrupts */
-
-	movel	irq_stat+CPUSTAT_SOFTIRQ_PENDING,%d0
-	jeq	ret_from_exception
-
-	pea	ret_from_exception
-	jra	do_softirq
-
+	jbsr	do_IRQ			/*  process the IRQ */
+	addql	#8,%sp			/*  pop parameters off stack*/
+	jra	ret_from_exception
 
 /*
  * Handler for uninitialized and spurious interrupts.

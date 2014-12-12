@@ -8,25 +8,12 @@
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
- *
  */
 
 #ifndef __M66592_UDC_H__
 #define __M66592_UDC_H__
 
-#ifdef CONFIG_HAVE_CLK
 #include <linux/clk.h>
-#endif
-
 #include <linux/usb/m66592.h>
 
 #define M66592_SYSCFG		0x00
@@ -466,7 +453,7 @@ struct m66592_ep {
 	unsigned		use_dma:1;
 	u16			pipenum;
 	u16			type;
-	const struct usb_endpoint_descriptor	*desc;
+
 	/* register address */
 	unsigned long		fifoaddr;
 	unsigned long		fifosel;
@@ -478,9 +465,7 @@ struct m66592_ep {
 struct m66592 {
 	spinlock_t		lock;
 	void __iomem		*reg;
-#ifdef CONFIG_HAVE_CLK
 	struct clk *clk;
-#endif
 	struct m66592_platdata	*pdata;
 	unsigned long		irq_trigger;
 
@@ -507,6 +492,7 @@ struct m66592 {
 	int isochronous;
 	int num_dma;
 };
+#define to_m66592(g)	(container_of((g), struct m66592, gadget))
 
 #define gadget_to_m66592(_gadget) container_of(_gadget, struct m66592, gadget)
 #define m66592_to_gadget(m66592) (&m66592->gadget)

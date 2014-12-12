@@ -1,7 +1,3 @@
-/*
- * $Id: libsbew.h,v 2.1 2005/10/27 18:54:19 rickd PMCC4_3_1B $
- */
-
 #ifndef _INC_LIBSBEW_H_
 #define _INC_LIBSBEW_H_
 
@@ -25,31 +21,7 @@
  * For further information, contact via email: support@sbei.com
  * SBE, Inc.  San Ramon, California  U.S.A.
  *-----------------------------------------------------------------------------
- * RCS info:
- * RCS revision: $Revision: 2.1 $
- * Last changed on $Date: 2005/10/27 18:54:19 $
- * Changed by $Author: rickd $
- *-----------------------------------------------------------------------------
- * $Log: libsbew.h,v $
- * Revision 2.1  2005/10/27 18:54:19  rickd
- * Add E1PLAIN support.
- *
- * Revision 2.0  2005/09/28 00:10:08  rickd
- * Customized for PMCC4 comet-per-port design.
- *
- * Revision 1.15  2005/03/29 00:51:31  rickd
- * File imported from C1T3 port, Revision 1.15
- *-----------------------------------------------------------------------------
  */
-
-#ifndef __KERNEL__
-#include <sys/types.h>
-#endif
-
-#ifdef __cplusplus
-extern      "C"
-{
-#endif
 
 /********************************/
 /**  set driver logging level  **/
@@ -323,7 +295,7 @@ struct sbecom_port_param
 #define CFG_CH_DINV_TX      0x02
 
 
-/* Posssible resettable chipsets/functions */
+/* Possible resettable chipsets/functions */
 #define RESET_DEV_TEMUX     1
 #define RESET_DEV_TECT3     RESET_DEV_TEMUX
 #define RESET_DEV_PLL       2
@@ -542,40 +514,36 @@ struct sbecom_port_param
     };
     typedef struct wancfg wcfg_t;
 
-    extern wcfg_t *wancfg_init (char *, char *);
-    extern int  wancfg_card_blink (wcfg_t *, int);
-    extern int  wancfg_ctl (wcfg_t *, int, void *, int, void *, int);
-    extern int  wancfg_del_card_stats (wcfg_t *);
-    extern int  wancfg_del_chan_stats (wcfg_t *, int);
-    extern int  wancfg_enable_ports (wcfg_t *, int);
-    extern int  wancfg_free (wcfg_t *);
-    extern int  wancfg_get_brdaddr (wcfg_t *, struct sbe_brd_addr *);
-    extern int  wancfg_get_brdinfo (wcfg_t *, struct sbe_brd_info *);
-    extern int  wancfg_get_card (wcfg_t *, struct sbecom_card_param *);
-    extern int  wancfg_get_card_chan_stats (wcfg_t *, struct sbecom_chan_stats *);
-    extern int  wancfg_get_card_sn (wcfg_t *);
-    extern int  wancfg_get_card_stats (wcfg_t *, struct temux_card_stats *);
-    extern int  wancfg_get_chan (wcfg_t *, int, struct sbecom_chan_param *);
-    extern int  wancfg_get_chan_stats (wcfg_t *, int, struct sbecom_chan_stats *);
-    extern int  wancfg_get_drvinfo (wcfg_t *, int, struct sbe_drv_info *);
-    extern int  wancfg_get_framer (wcfg_t *, int, struct sbecom_framer_param *);
-    extern int  wancfg_get_iid (wcfg_t *, int, struct sbe_iid_info *);
-    extern int  wancfg_get_sn (wcfg_t *, unsigned int *);
-    extern int  wancfg_read (wcfg_t *, int, struct sbecom_wrt_vec *);
-    extern int  wancfg_reset_device (wcfg_t *, int);
-    extern int  wancfg_set_card (wcfg_t *, struct sbecom_card_param *);
-    extern int  wancfg_set_chan (wcfg_t *, int, struct sbecom_chan_param *);
-    extern int  wancfg_set_framer (wcfg_t *, int, struct sbecom_framer_param *);
-    extern int  wancfg_set_loglevel (wcfg_t *, uint);
-    extern int  wancfg_write (wcfg_t *, int, struct sbecom_wrt_vec *);
+    extern wcfg_t *wancfg_init(char *, char *);
+    extern int wancfg_card_blink(wcfg_t *, int);
+    extern int wancfg_ctl(wcfg_t *, int, void *, int, void *, int);
+    extern int wancfg_del_card_stats(wcfg_t *);
+    extern int wancfg_del_chan_stats(wcfg_t *, int);
+    extern int wancfg_enable_ports(wcfg_t *, int);
+    extern int wancfg_free(wcfg_t *);
+    extern int wancfg_get_brdaddr(wcfg_t *, struct sbe_brd_addr *);
+    extern int wancfg_get_brdinfo(wcfg_t *, struct sbe_brd_info *);
+    extern int wancfg_get_card(wcfg_t *, struct sbecom_card_param *);
+    extern int wancfg_get_card_chan_stats(wcfg_t *, struct sbecom_chan_stats *);
+    extern int wancfg_get_card_sn(wcfg_t *);
+    extern int wancfg_get_card_stats(wcfg_t *, struct temux_card_stats *);
+    extern int wancfg_get_chan(wcfg_t *, int, struct sbecom_chan_param *);
+    extern int wancfg_get_chan_stats(wcfg_t *, int, struct sbecom_chan_stats *);
+    extern int wancfg_get_drvinfo(wcfg_t *, int, struct sbe_drv_info *);
+    extern int wancfg_get_framer(wcfg_t *, int, struct sbecom_framer_param *);
+    extern int wancfg_get_iid(wcfg_t *, int, struct sbe_iid_info *);
+    extern int wancfg_get_sn(wcfg_t *, unsigned int *);
+    extern int wancfg_read(wcfg_t *, int, struct sbecom_wrt_vec *);
+    extern int wancfg_reset_device(wcfg_t *, int);
+    extern int wancfg_set_card(wcfg_t *, struct sbecom_card_param *);
+    extern int wancfg_set_chan(wcfg_t *, int, struct sbecom_chan_param *);
+    extern int wancfg_set_framer(wcfg_t *, int, struct sbecom_framer_param *);
+    extern int wancfg_set_loglevel(wcfg_t *, uint);
+    extern int wancfg_write(wcfg_t *, int, struct sbecom_wrt_vec *);
 
 #ifdef NOT_YET_COMMON
-    extern int  wancfg_get_tsioc (wcfg_t *, struct wanc1t3_ts_hdr *, struct wanc1t3_ts_param *);
-    extern int  wancfg_set_tsioc (wcfg_t *, struct wanc1t3_ts_param *);
-#endif
-
-#ifdef __cplusplus
-}
+    extern int  wancfg_get_tsioc(wcfg_t *, struct wanc1t3_ts_hdr *, struct wanc1t3_ts_param *);
+    extern int  wancfg_set_tsioc(wcfg_t *, struct wanc1t3_ts_param *);
 #endif
 
 #endif                          /*** _INC_LIBSBEW_H_ ***/

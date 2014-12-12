@@ -12,8 +12,8 @@
 
 /* pull in the relevant register and map files. */
 
+#include <linux/serial_s3c.h>
 #include <mach/map.h>
-#include <plat/regs-serial.h>
 
 	/* note, for the boot process to work we have to keep the UART
 	 * virtual address aligned to an 1MiB boundary for the L1
@@ -21,7 +21,7 @@
 	 * aligned and add in the offset when we load the value here.
 	 */
 
-	.macro addruart, rp, rv
+	.macro addruart, rp, rv, tmp
 		ldr	\rp, = S3C_PA_UART
 		ldr	\rv, = S3C_VA_UART
 #if CONFIG_DEBUG_S3C_UART != 0
@@ -38,4 +38,4 @@
  * will be fine with us.
  */
 
-#include <plat/debug-macro.S>
+#include <debug/samsung.S>

@@ -29,6 +29,7 @@
 #include <linux/types.h>
 #include <linux/usb.h>
 #include <linux/wait.h>
+#include "uapi/usbip.h"
 
 #define USBIP_VERSION "1.0.0"
 
@@ -126,12 +127,12 @@ extern struct device_attribute dev_attr_usbip_debug;
  *
  */
 #define USBIP_CMD_SUBMIT	0x0001
-#define USBIP_RET_SUBMIT	0x0002
-#define USBIP_CMD_UNLINK	0x0003
+#define USBIP_CMD_UNLINK	0x0002
+#define USBIP_RET_SUBMIT	0x0003
 #define USBIP_RET_UNLINK	0x0004
 
-#define USBIP_DIR_IN	0x00
-#define USBIP_DIR_OUT	0x01
+#define USBIP_DIR_OUT	0x00
+#define USBIP_DIR_IN	0x01
 
 /**
  * struct usbip_header_basic - data pertinent to every request
@@ -235,22 +236,6 @@ enum usbip_side {
 	USBIP_STUB,
 };
 
-enum usbip_status {
-	/* sdev is available. */
-	SDEV_ST_AVAILABLE = 0x01,
-	/* sdev is now used. */
-	SDEV_ST_USED,
-	/* sdev is unusable because of a fatal error. */
-	SDEV_ST_ERROR,
-
-	/* vdev does not connect a remote device. */
-	VDEV_ST_NULL,
-	/* vdev is used, but the USB address is not assigned yet */
-	VDEV_ST_NOTASSIGNED,
-	VDEV_ST_USED,
-	VDEV_ST_ERROR
-};
-
 /* event handler */
 #define USBIP_EH_SHUTDOWN	(1 << 0)
 #define USBIP_EH_BYE		(1 << 1)
@@ -271,7 +256,7 @@ enum usbip_status {
 /* a common structure for stub_device and vhci_device */
 struct usbip_device {
 	enum usbip_side side;
-	enum usbip_status status;
+	enum usbip_device_status status;
 
 	/* lock for status */
 	spinlock_t lock;
@@ -292,31 +277,39 @@ struct usbip_device {
 	} eh_ops;
 };
 
-#if 0
-int usbip_sendmsg(struct socket *, struct msghdr *, int);
-int set_sockaddr(struct socket *socket, struct sockaddr_storage *ss);
-int setnodelay(struct socket *);
-int setquickack(struct socket *);
-int setkeepalive(struct socket *socket);
-void setreuse(struct socket *);
-#endif
+#define kthread_get_run(threadfn, data, namefmt, ...)			   \
+({									   \
+	struct task_struct *__k						   \
+		= kthread_create(threadfn, data, namefmt, ## __VA_ARGS__); \
+	if (!IS_ERR(__k)) {						   \
+		get_task_struct(__k);					   \
+		wake_up_process(__k);					   \
+	}								   \
+	__k;								   \
+})
+
+#define kthread_stop_put(k)		\
+	do {				\
+		kthread_stop(k);	\
+		put_task_struct(k);	\
+	} while (0)
 
 /* usbip_common.c */
 void usbip_dump_urb(struct urb *purb);
 void usbip_dump_header(struct usbip_header *pdu);
 
-int usbip_xmit(int send, struct socket *sock, char *buf, int size,
-	       int msg_flags);
-struct socket *sockfd_to_socket(unsigned int sockfd);
+int usbip_recv(struct socket *sock, void *buf, int size);
 
 void usbip_pack_pdu(struct usbip_header *pdu, struct urb *urb, int cmd,
 		    int pack);
 void usbip_header_correct_endian(struct usbip_header *pdu, int send);
 
-void *usbip_alloc_iso_desc_pdu(struct urb *urb, ssize_t *bufflen);
+struct usbip_iso_packet_descriptor*
+usbip_alloc_iso_desc_pdu(struct urb *urb, ssize_t *bufflen);
+
 /* some members of urb must be substituted before. */
 int usbip_recv_iso(struct usbip_device *ud, struct urb *urb);
-int usbip_pad_iso(struct usbip_device *ud, struct urb *urb);
+void usbip_pad_iso(struct usbip_device *ud, struct urb *urb);
 int usbip_recv_xbuff(struct usbip_device *ud, struct urb *urb);
 
 /* usbip_event.c */
@@ -328,18 +321,15 @@ int usbip_event_happened(struct usbip_device *ud);
 static inline int interface_to_busnum(struct usb_interface *interface)
 {
 	struct usb_device *udev = interface_to_usbdev(interface);
+
 	return udev->bus->busnum;
 }
 
 static inline int interface_to_devnum(struct usb_interface *interface)
 {
 	struct usb_device *udev = interface_to_usbdev(interface);
-	return udev->devnum;
-}
 
-static inline int interface_to_infnum(struct usb_interface *interface)
-{
-	return interface->cur_altsetting->desc.bInterfaceNumber;
+	return udev->devnum;
 }
 
 #endif /* __USBIP_COMMON_H */

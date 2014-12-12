@@ -113,7 +113,6 @@
  
 #include <linux/module.h>
 
-#include <asm/system.h>
 #include <linux/signal.h>
 #include <linux/proc_fs.h>
 #include <asm/io.h>
@@ -389,7 +388,8 @@ int __init pas16_detect(struct scsi_host_template * tpnt)
     int  count;
 
     tpnt->proc_name = "pas16";
-    tpnt->proc_info = &pas16_proc_info;
+    tpnt->show_info = pas16_show_info;
+    tpnt->write_info = pas16_write_info;
 
     if (pas16_addr != 0) {
 	overrides[0].io_port = pas16_addr;
@@ -453,7 +453,7 @@ int __init pas16_detect(struct scsi_host_template * tpnt)
 	    instance->irq = NCR5380_probe_irq(instance, PAS16_IRQS);
 
 	if (instance->irq != SCSI_IRQ_NONE) 
-	    if (request_irq(instance->irq, pas16_intr, IRQF_DISABLED,
+	    if (request_irq(instance->irq, pas16_intr, 0,
 			    "pas16", instance)) {
 		printk("scsi%d : IRQ%d not free, interrupts disabled\n", 
 		    instance->host_no, instance->irq);

@@ -54,7 +54,6 @@
 #include <linux/sdla.h>
 #include <linux/bitops.h>
 
-#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/dma.h>
 #include <asm/uaccess.h>
@@ -1323,10 +1322,6 @@ NOTE:  This is rather a useless action right now, as the
 
 static int sdla_change_mtu(struct net_device *dev, int new_mtu)
 {
-	struct frad_local *flp;
-
-	flp = netdev_priv(dev);
-
 	if (netif_running(dev))
 		return -EBUSY;
 

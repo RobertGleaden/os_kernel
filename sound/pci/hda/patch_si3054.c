@@ -25,6 +25,7 @@
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
+#include <linux/module.h>
 #include <sound/core.h>
 #include "hda_codec.h"
 #include "hda_local.h"
@@ -235,7 +236,7 @@ static int si3054_init(struct hda_codec *codec)
 	} while ((val & SI3054_MEI_READY) != SI3054_MEI_READY && wait_count--);
 
 	if((val&SI3054_MEI_READY) != SI3054_MEI_READY) {
-		snd_printk(KERN_ERR "si3054: cannot initialize. EXT MID = %04x\n", val);
+		codec_err(codec, "si3054: cannot initialize. EXT MID = %04x\n", val);
 		/* let's pray that this is no fatal error */
 		/* return -EACCES; */
 	}
@@ -246,7 +247,8 @@ static int si3054_init(struct hda_codec *codec)
 	SET_REG(codec, SI3054_LINE_CFG1,0x200);
 
 	if((GET_REG(codec,SI3054_LINE_STATUS) & (1<<6)) == 0) {
-		snd_printd("Link Frame Detect(FDT) is not ready (line status: %04x)\n",
+		codec_dbg(codec,
+			  "Link Frame Detect(FDT) is not ready (line status: %04x)\n",
 				GET_REG(codec,SI3054_LINE_STATUS));
 	}
 
