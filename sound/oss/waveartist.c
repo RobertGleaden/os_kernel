@@ -42,6 +42,7 @@
 #include <linux/spinlock.h>
 #include <linux/bitops.h>
 
+#include <asm/system.h>
 
 #include "sound_config.h"
 #include "waveartist.h"
@@ -1482,9 +1483,9 @@ vnc_mute_spkr(wavnc_info *devc)
 {
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&nw_gpio_lock, flags);
+	spin_lock_irqsave(&nw_gpio_lock, flags);
 	nw_cpld_modify(CPLD_UNMUTE, devc->spkr_mute_state ? 0 : CPLD_UNMUTE);
-	raw_spin_unlock_irqrestore(&nw_gpio_lock, flags);
+	spin_unlock_irqrestore(&nw_gpio_lock, flags);
 }
 
 static void

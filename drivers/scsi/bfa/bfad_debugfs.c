@@ -16,7 +16,6 @@
  */
 
 #include <linux/debugfs.h>
-#include <linux/export.h>
 
 #include "bfad_drv.h"
 #include "bfad_im.h"
@@ -173,9 +172,31 @@ bfad_debugfs_open_reg(struct inode *inode, struct file *file)
 static loff_t
 bfad_debugfs_lseek(struct file *file, loff_t offset, int orig)
 {
-	struct bfad_debug_info *debug = file->private_data;
-	return fixed_size_llseek(file, offset, orig,
-				debug->buffer_len);
+	struct bfad_debug_info *debug;
+	loff_t pos = file->f_pos;
+
+	debug = file->private_data;
+
+	switch (orig) {
+	case 0:
+		file->f_pos = offset;
+		break;
+	case 1:
+		file->f_pos += offset;
+		break;
+	case 2:
+		file->f_pos = debug->buffer_len - offset;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	if (file->f_pos < 0 || file->f_pos > debug->buffer_len) {
+		file->f_pos = pos;
+		return -EINVAL;
+	}
+
+	return file->f_pos;
 }
 
 static ssize_t
@@ -450,7 +471,7 @@ static const struct file_operations bfad_debugfs_op_regwr = {
 
 struct bfad_debugfs_entry {
 	const char *name;
-	umode_t	mode;
+	mode_t	mode;
 	const struct file_operations *fops;
 };
 
@@ -535,7 +556,8 @@ bfad_debugfs_exit(struct bfad_port_s *port)
 		}
 	}
 
-	/* Remove the pci_dev debugfs directory for the port */
+	/*
+	 * Remove the pci_dev debugfs directory for the port */
 	if (port->port_debugfs_root) {
 		debugfs_remove(port->port_debugfs_root);
 		port->port_debugfs_root = NULL;

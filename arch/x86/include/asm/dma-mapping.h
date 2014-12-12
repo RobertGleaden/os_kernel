@@ -2,7 +2,7 @@
 #define _ASM_X86_DMA_MAPPING_H
 
 /*
- * IOMMU interface. See Documentation/DMA-API-HOWTO.txt and
+ * IOMMU interface. See Documentation/PCI/PCI-DMA-mapping.txt and
  * Documentation/DMA-API.txt for documentation.
  */
 
@@ -13,7 +13,6 @@
 #include <asm/io.h>
 #include <asm/swiotlb.h>
 #include <asm-generic/dma-coherent.h>
-#include <linux/dma-contiguous.h>
 
 #ifdef CONFIG_ISA
 # define ISA_DMA_BIT_MASK DMA_BIT_MASK(24)
@@ -31,7 +30,7 @@ extern struct dma_map_ops *dma_ops;
 
 static inline struct dma_map_ops *get_dma_ops(struct device *dev)
 {
-#ifndef CONFIG_X86_DEV_DMA_OPS
+#ifdef CONFIG_X86_32
 	return dma_ops;
 #else
 	if (unlikely(!dev) || !dev->archdata.dma_ops)
@@ -47,7 +46,6 @@ static inline struct dma_map_ops *get_dma_ops(struct device *dev)
 static inline int dma_mapping_error(struct device *dev, dma_addr_t dma_addr)
 {
 	struct dma_map_ops *ops = get_dma_ops(dev);
-	debug_dma_mapping_error(dev, dma_addr);
 	if (ops->mapping_error)
 		return ops->mapping_error(dev, dma_addr);
 
@@ -61,18 +59,7 @@ extern int dma_supported(struct device *hwdev, u64 mask);
 extern int dma_set_mask(struct device *dev, u64 mask);
 
 extern void *dma_generic_alloc_coherent(struct device *dev, size_t size,
-					dma_addr_t *dma_addr, gfp_t flag,
-					struct dma_attrs *attrs);
-
-extern void dma_generic_free_coherent(struct device *dev, size_t size,
-				      void *vaddr, dma_addr_t dma_addr,
-				      struct dma_attrs *attrs);
-
-#ifdef CONFIG_X86_DMA_REMAP /* Platform code defines bridge-specific code */
-extern bool dma_capable(struct device *dev, dma_addr_t addr, size_t size);
-extern dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr);
-extern phys_addr_t dma_to_phys(struct device *dev, dma_addr_t daddr);
-#else
+					dma_addr_t *dma_addr, gfp_t flag);
 
 static inline bool dma_capable(struct device *dev, dma_addr_t addr, size_t size)
 {
@@ -91,7 +78,6 @@ static inline phys_addr_t dma_to_phys(struct device *dev, dma_addr_t daddr)
 {
 	return daddr;
 }
-#endif /* CONFIG_X86_DMA_REMAP */
 
 static inline void
 dma_cache_sync(struct device *dev, void *vaddr, size_t size,
@@ -125,11 +111,9 @@ static inline gfp_t dma_alloc_coherent_gfp_flags(struct device *dev, gfp_t gfp)
        return gfp;
 }
 
-#define dma_alloc_coherent(d,s,h,f)	dma_alloc_attrs(d,s,h,f,NULL)
-
 static inline void *
-dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *dma_handle,
-		gfp_t gfp, struct dma_attrs *attrs)
+dma_alloc_coherent(struct device *dev, size_t size, dma_addr_t *dma_handle,
+		gfp_t gfp)
 {
 	struct dma_map_ops *ops = get_dma_ops(dev);
 	void *memory;
@@ -145,21 +129,18 @@ dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *dma_handle,
 	if (!is_device_dma_capable(dev))
 		return NULL;
 
-	if (!ops->alloc)
+	if (!ops->alloc_coherent)
 		return NULL;
 
-	memory = ops->alloc(dev, size, dma_handle,
-			    dma_alloc_coherent_gfp_flags(dev, gfp), attrs);
+	memory = ops->alloc_coherent(dev, size, dma_handle,
+				     dma_alloc_coherent_gfp_flags(dev, gfp));
 	debug_dma_alloc_coherent(dev, size, *dma_handle, memory);
 
 	return memory;
 }
 
-#define dma_free_coherent(d,s,c,h) dma_free_attrs(d,s,c,h,NULL)
-
-static inline void dma_free_attrs(struct device *dev, size_t size,
-				  void *vaddr, dma_addr_t bus,
-				  struct dma_attrs *attrs)
+static inline void dma_free_coherent(struct device *dev, size_t size,
+				     void *vaddr, dma_addr_t bus)
 {
 	struct dma_map_ops *ops = get_dma_ops(dev);
 
@@ -169,8 +150,8 @@ static inline void dma_free_attrs(struct device *dev, size_t size,
 		return;
 
 	debug_dma_free_coherent(dev, size, vaddr, bus);
-	if (ops->free)
-		ops->free(dev, size, vaddr, bus, attrs);
+	if (ops->free_coherent)
+		ops->free_coherent(dev, size, vaddr, bus);
 }
 
 #endif

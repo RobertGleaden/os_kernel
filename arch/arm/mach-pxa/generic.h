@@ -9,11 +9,10 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/reboot.h>
-
 struct irq_data;
+struct sys_timer;
 
-extern void pxa_timer_init(void);
+extern struct sys_timer pxa_timer;
 
 extern void __init pxa_map_io(void);
 
@@ -50,6 +49,7 @@ extern unsigned pxa3xx_get_clk_frequency_khz(int);
 #endif
 
 extern struct syscore_ops pxa_irq_syscore_ops;
+extern struct syscore_ops pxa_gpio_syscore_ops;
 extern struct syscore_ops pxa2xx_mfp_syscore_ops;
 extern struct syscore_ops pxa3xx_mfp_syscore_ops;
 
@@ -57,5 +57,3 @@ void __init pxa_set_ffuart_info(void *info);
 void __init pxa_set_btuart_info(void *info);
 void __init pxa_set_stuart_info(void *info);
 void __init pxa_set_hwuart_info(void *info);
-
-void pxa_restart(enum reboot_mode, const char *);

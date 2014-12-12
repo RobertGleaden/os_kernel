@@ -34,8 +34,6 @@
  *
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/module.h>
 
 #include <linux/types.h>
@@ -60,6 +58,7 @@
 
 #include <linux/io.h>
 #include <linux/uaccess.h>
+#include <asm/system.h>
 
 #define LCD_MINOR		156
 #define KEYPAD_MINOR		185
@@ -137,8 +136,8 @@
 #define r_ctr(x)        (parport_read_control((x)->port))
 #define r_dtr(x)        (parport_read_data((x)->port))
 #define r_str(x)        (parport_read_status((x)->port))
-#define w_ctr(x, y)     (parport_write_control((x)->port, (y)))
-#define w_dtr(x, y)     (parport_write_data((x)->port, (y)))
+#define w_ctr(x, y)     do { parport_write_control((x)->port, (y)); } while (0)
+#define w_dtr(x, y)     do { parport_write_data((x)->port, (y)); } while (0)
 
 /* this defines which bits are to be used and which ones to be ignored */
 /* logical or of the output bits involved in the scan matrix */
@@ -171,8 +170,8 @@ struct logical_input {
 
 	union {
 		struct {	/* valid when type == INPUT_TYPE_STD */
-			void (*press_fct)(int);
-			void (*release_fct)(int);
+			void (*press_fct) (int);
+			void (*release_fct) (int);
 			int press_data;
 			int release_data;
 		} std;
@@ -185,7 +184,7 @@ struct logical_input {
 	} u;
 };
 
-static LIST_HEAD(logical_inputs);	/* list of all defined logical inputs */
+LIST_HEAD(logical_inputs);	/* list of all defined logical inputs */
 
 /* physical contacts history
  * Physical contacts are a 45 bits string of 9 groups of 5 bits each.
@@ -417,9 +416,9 @@ static char lcd_must_clear;
 static char lcd_left_shift;
 static char init_in_progress;
 
-static void (*lcd_write_cmd)(int);
-static void (*lcd_write_data)(int);
-static void (*lcd_clear_fast)(void);
+static void (*lcd_write_cmd) (int);
+static void (*lcd_write_data) (int);
+static void (*lcd_clear_fast) (void);
 
 static DEFINE_SPINLOCK(pprt_lock);
 static struct timer_list scan_timer;
@@ -457,12 +456,14 @@ MODULE_PARM_DESC(keypad_enabled, "Deprecated option, use keypad_type instead");
 static int lcd_type = -1;
 module_param(lcd_type, int, 0000);
 MODULE_PARM_DESC(lcd_type,
-		 "LCD type: 0=none, 1=old //, 2=serial ks0074, 3=hantronix //, 4=nexcom //, 5=compiled-in");
+		 "LCD type: 0=none, 1=old //, 2=serial ks0074, "
+		 "3=hantronix //, 4=nexcom //, 5=compiled-in");
 
 static int lcd_proto = -1;
 module_param(lcd_proto, int, 0000);
 MODULE_PARM_DESC(lcd_proto,
-		 "LCD communication: 0=parallel (//), 1=serial, 2=TI LCD Interface");
+		"LCD communication: 0=parallel (//), 1=serial,"
+		"2=TI LCD Interface");
 
 static int lcd_charset = -1;
 module_param(lcd_charset, int, 0000);
@@ -471,7 +472,8 @@ MODULE_PARM_DESC(lcd_charset, "LCD character set: 0=standard, 1=KS0074");
 static int keypad_type = -1;
 module_param(keypad_type, int, 0000);
 MODULE_PARM_DESC(keypad_type,
-		 "Keypad type: 0=none, 1=old 6 keys, 2=new 6+1 keys, 3=nexcom 4 keys");
+		 "Keypad type: 0=none, 1=old 6 keys, 2=new 6+1 keys, "
+		 "3=nexcom 4 keys");
 
 static int profile = DEFAULT_PROFILE;
 module_param(profile, int, 0000);
@@ -491,37 +493,43 @@ MODULE_PARM_DESC(profile,
 static int lcd_e_pin  = PIN_NOT_SET;
 module_param(lcd_e_pin, int, 0000);
 MODULE_PARM_DESC(lcd_e_pin,
-		 "# of the // port pin connected to LCD 'E' signal, with polarity (-17..17)");
+		 "# of the // port pin connected to LCD 'E' signal, "
+		 "with polarity (-17..17)");
 
 static int lcd_rs_pin = PIN_NOT_SET;
 module_param(lcd_rs_pin, int, 0000);
 MODULE_PARM_DESC(lcd_rs_pin,
-		 "# of the // port pin connected to LCD 'RS' signal, with polarity (-17..17)");
+		 "# of the // port pin connected to LCD 'RS' signal, "
+		 "with polarity (-17..17)");
 
 static int lcd_rw_pin = PIN_NOT_SET;
 module_param(lcd_rw_pin, int, 0000);
 MODULE_PARM_DESC(lcd_rw_pin,
-		 "# of the // port pin connected to LCD 'RW' signal, with polarity (-17..17)");
+		 "# of the // port pin connected to LCD 'RW' signal, "
+		 "with polarity (-17..17)");
 
 static int lcd_bl_pin = PIN_NOT_SET;
 module_param(lcd_bl_pin, int, 0000);
 MODULE_PARM_DESC(lcd_bl_pin,
-		 "# of the // port pin connected to LCD backlight, with polarity (-17..17)");
+		 "# of the // port pin connected to LCD backlight, "
+		 "with polarity (-17..17)");
 
 static int lcd_da_pin = PIN_NOT_SET;
 module_param(lcd_da_pin, int, 0000);
 MODULE_PARM_DESC(lcd_da_pin,
-		 "# of the // port pin connected to serial LCD 'SDA' signal, with polarity (-17..17)");
+		 "# of the // port pin connected to serial LCD 'SDA' "
+		 "signal, with polarity (-17..17)");
 
 static int lcd_cl_pin = PIN_NOT_SET;
 module_param(lcd_cl_pin, int, 0000);
 MODULE_PARM_DESC(lcd_cl_pin,
-		 "# of the // port pin connected to serial LCD 'SCL' signal, with polarity (-17..17)");
+		 "# of the // port pin connected to serial LCD 'SCL' "
+		 "signal, with polarity (-17..17)");
 
-static const unsigned char *lcd_char_conv;
+static unsigned char *lcd_char_conv;
 
 /* for some LCD drivers (ks0074) we need a charset conversion table. */
-static const unsigned char lcd_char_conv_ks0074[256] = {
+static unsigned char lcd_char_conv_ks0074[256] = {
 	/*          0|8   1|9   2|A   3|B   4|C   5|D   6|E   7|F */
 	/* 0x00 */ 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
 	/* 0x08 */ 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
@@ -557,7 +565,7 @@ static const unsigned char lcd_char_conv_ks0074[256] = {
 	/* 0xF8 */ 0xac, 0xa6, 0xea, 0xef, 0x7e, 0xeb, 0xb2, 0x79,
 };
 
-static const char old_keypad_profile[][4][9] = {
+char old_keypad_profile[][4][9] = {
 	{"S0", "Left\n", "Left\n", ""},
 	{"S1", "Down\n", "Down\n", ""},
 	{"S2", "Up\n", "Up\n", ""},
@@ -568,7 +576,7 @@ static const char old_keypad_profile[][4][9] = {
 };
 
 /* signals, press, repeat, release */
-static const char new_keypad_profile[][4][9] = {
+char new_keypad_profile[][4][9] = {
 	{"S0", "Left\n", "Left\n", ""},
 	{"S1", "Down\n", "Down\n", ""},
 	{"S2", "Up\n", "Up\n", ""},
@@ -581,7 +589,7 @@ static const char new_keypad_profile[][4][9] = {
 };
 
 /* signals, press, repeat, release */
-static const char nexcom_keypad_profile[][4][9] = {
+char nexcom_keypad_profile[][4][9] = {
 	{"a-p-e-", "Down\n", "Down\n", ""},
 	{"a-p-E-", "Ret\n", "Ret\n", ""},
 	{"a-P-E-", "Esc\n", "Esc\n", ""},
@@ -590,7 +598,7 @@ static const char nexcom_keypad_profile[][4][9] = {
 	{"", "", "", ""}
 };
 
-static const char (*keypad_profile)[4][9] = old_keypad_profile;
+static char (*keypad_profile)[4][9] = old_keypad_profile;
 
 /* FIXME: this should be converted to a bit array containing signals states */
 static struct {
@@ -660,16 +668,12 @@ static void panel_set_bits(void)
  *   out(dport, in(dport) & d_val[2] | d_val[signal_state])
  *   out(cport, in(cport) & c_val[2] | c_val[signal_state])
  */
-static void pin_to_bits(int pin, unsigned char *d_val, unsigned char *c_val)
+void pin_to_bits(int pin, unsigned char *d_val, unsigned char *c_val)
 {
 	int d_bit, c_bit, inv;
 
-	d_val[0] = 0;
-	c_val[0] = 0;
-	d_val[1] = 0;
-	c_val[1] = 0;
-	d_val[2] = 0xFF;
-	c_val[2] = 0xFF;
+	d_val[0] = c_val[0] = d_val[1] = c_val[1] = 0;
+	d_val[2] = c_val[2] = 0xFF;
 
 	if (pin == 0)
 		return;
@@ -678,8 +682,7 @@ static void pin_to_bits(int pin, unsigned char *d_val, unsigned char *c_val)
 	if (inv)
 		pin = -pin;
 
-	d_bit = 0;
-	c_bit = 0;
+	d_bit = c_bit = 0;
 
 	switch (pin) {
 	case PIN_STROBE:	/* strobe, inverted */
@@ -716,9 +719,10 @@ static void pin_to_bits(int pin, unsigned char *d_val, unsigned char *c_val)
 /* sleeps that many milliseconds with a reschedule */
 static void long_sleep(int ms)
 {
-	if (in_interrupt()) {
+
+	if (in_interrupt())
 		mdelay(ms);
-	} else {
+	else {
 		current->state = TASK_INTERRUPTIBLE;
 		schedule_timeout((ms * HZ + 999) / 1000);
 	}
@@ -751,39 +755,39 @@ static void lcd_backlight(int on)
 	if (lcd_bl_pin == PIN_NONE)
 		return;
 
-	/* The backlight is activated by setting the AUTOFEED line to +5V  */
-	spin_lock_irq(&pprt_lock);
+	/* The backlight is activated by seting the AUTOFEED line to +5V  */
+	spin_lock(&pprt_lock);
 	bits.bl = on;
 	panel_set_bits();
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 }
 
 /* send a command to the LCD panel in serial mode */
 static void lcd_write_cmd_s(int cmd)
 {
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	lcd_send_serial(0x1F);	/* R/W=W, RS=0 */
 	lcd_send_serial(cmd & 0x0F);
 	lcd_send_serial((cmd >> 4) & 0x0F);
 	udelay(40);		/* the shortest command takes at least 40 us */
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 }
 
 /* send data to the LCD panel in serial mode */
 static void lcd_write_data_s(int data)
 {
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	lcd_send_serial(0x5F);	/* R/W=W, RS=1 */
 	lcd_send_serial(data & 0x0F);
 	lcd_send_serial((data >> 4) & 0x0F);
 	udelay(40);		/* the shortest data takes at least 40 us */
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 }
 
 /* send a command to the LCD panel in 8 bits parallel mode */
 static void lcd_write_cmd_p8(int cmd)
 {
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	/* present the data to the data port */
 	w_dtr(pprt, cmd);
 	udelay(20);	/* maintain the data during 20 us before the strobe */
@@ -799,13 +803,13 @@ static void lcd_write_cmd_p8(int cmd)
 	set_ctrl_bits();
 
 	udelay(120);	/* the shortest command takes at least 120 us */
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 }
 
 /* send data to the LCD panel in 8 bits parallel mode */
 static void lcd_write_data_p8(int data)
 {
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	/* present the data to the data port */
 	w_dtr(pprt, data);
 	udelay(20);	/* maintain the data during 20 us before the strobe */
@@ -821,27 +825,27 @@ static void lcd_write_data_p8(int data)
 	set_ctrl_bits();
 
 	udelay(45);	/* the shortest data takes at least 45 us */
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 }
 
 /* send a command to the TI LCD panel */
 static void lcd_write_cmd_tilcd(int cmd)
 {
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	/* present the data to the control port */
 	w_ctr(pprt, cmd);
 	udelay(60);
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 }
 
 /* send data to the TI LCD panel */
 static void lcd_write_data_tilcd(int data)
 {
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	/* present the data to the data port */
 	w_dtr(pprt, data);
 	udelay(60);
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 }
 
 static void lcd_gotoxy(void)
@@ -871,22 +875,19 @@ static void lcd_print(char c)
 static void lcd_clear_fast_s(void)
 {
 	int pos;
-
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	lcd_gotoxy();
 
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	for (pos = 0; pos < lcd_height * lcd_hwidth; pos++) {
 		lcd_send_serial(0x5F);	/* R/W=W, RS=1 */
 		lcd_send_serial(' ' & 0x0F);
 		lcd_send_serial((' ' >> 4) & 0x0F);
 		udelay(40);	/* the shortest data takes at least 40 us */
 	}
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	lcd_gotoxy();
 }
 
@@ -894,12 +895,10 @@ static void lcd_clear_fast_s(void)
 static void lcd_clear_fast_p8(void)
 {
 	int pos;
-
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	lcd_gotoxy();
 
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	for (pos = 0; pos < lcd_height * lcd_hwidth; pos++) {
 		/* present the data to the data port */
 		w_dtr(pprt, ' ');
@@ -921,10 +920,9 @@ static void lcd_clear_fast_p8(void)
 		/* the shortest data takes at least 45 us */
 		udelay(45);
 	}
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	lcd_gotoxy();
 }
 
@@ -932,22 +930,19 @@ static void lcd_clear_fast_p8(void)
 static void lcd_clear_fast_tilcd(void)
 {
 	int pos;
-
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	lcd_gotoxy();
 
-	spin_lock_irq(&pprt_lock);
+	spin_lock(&pprt_lock);
 	for (pos = 0; pos < lcd_height * lcd_hwidth; pos++) {
 		/* present the data to the data port */
 		w_dtr(pprt, ' ');
 		udelay(60);
 	}
 
-	spin_unlock_irq(&pprt_lock);
+	spin_unlock(&pprt_lock);
 
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	lcd_gotoxy();
 }
 
@@ -955,14 +950,14 @@ static void lcd_clear_fast_tilcd(void)
 static void lcd_clear_display(void)
 {
 	lcd_write_cmd(0x01);	/* clear display */
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	/* we must wait a few milliseconds (15) */
 	long_sleep(15);
 }
 
 static void lcd_init_display(void)
 {
+
 	lcd_flags = ((lcd_height > 1) ? LCD_FLAG_N : 0)
 	    | LCD_FLAG_D | LCD_FLAG_C | LCD_FLAG_B;
 
@@ -1105,7 +1100,6 @@ static inline int handle_lcd_special_code(void)
 		break;
 	case 'k': {	/* kill end of line */
 		int x;
-
 		for (x = lcd_addr_x; x < lcd_bwidth; x++)
 			lcd_write_data(' ');
 
@@ -1151,13 +1145,13 @@ static inline int handle_lcd_special_code(void)
 		value = 0;
 		while (*esc && cgoffset < 8) {
 			shift ^= 4;
-			if (*esc >= '0' && *esc <= '9') {
+			if (*esc >= '0' && *esc <= '9')
 				value |= (*esc - '0') << shift;
-			} else if (*esc >= 'A' && *esc <= 'Z') {
+			else if (*esc >= 'A' && *esc <= 'Z')
 				value |= (*esc - 'A' + 10) << shift;
-			} else if (*esc >= 'a' && *esc <= 'z') {
+			else if (*esc >= 'a' && *esc <= 'z')
 				value |= (*esc - 'a' + 10) << shift;
-			} else {
+			else {
 				esc++;
 				continue;
 			}
@@ -1185,17 +1179,18 @@ static inline int handle_lcd_special_code(void)
 			break;
 
 		while (*esc) {
+			char *endp;
+
 			if (*esc == 'x') {
 				esc++;
-				if (kstrtoul(esc, 10, &lcd_addr_x) < 0)
-					break;
+				lcd_addr_x = simple_strtoul(esc, &endp, 10);
+				esc = endp;
 			} else if (*esc == 'y') {
 				esc++;
-				if (kstrtoul(esc, 10, &lcd_addr_y) < 0)
-					break;
-			} else {
+				lcd_addr_y = simple_strtoul(esc, &endp, 10);
+				esc = endp;
+			} else
 				break;
-			}
 		}
 
 		lcd_gotoxy();
@@ -1203,7 +1198,7 @@ static inline int handle_lcd_special_code(void)
 		break;
 	}
 
-	/* Check whether one flag was changed */
+	/* Check wether one flag was changed */
 	if (oldflags != lcd_flags) {
 		/* check whether one of B,C,D flags were changed */
 		if ((oldflags ^ lcd_flags) &
@@ -1218,7 +1213,7 @@ static inline int handle_lcd_special_code(void)
 			lcd_write_cmd(0x30
 				      | ((lcd_flags & LCD_FLAG_F) ? 4 : 0)
 				      | ((lcd_flags & LCD_FLAG_N) ? 8 : 0));
-		/* check whether L flag was changed */
+		/* check wether L flag was changed */
 		else if ((oldflags ^ lcd_flags) & (LCD_FLAG_L)) {
 			if (lcd_flags & (LCD_FLAG_L))
 				lcd_backlight(1);
@@ -1232,114 +1227,111 @@ static inline int handle_lcd_special_code(void)
 	return processed;
 }
 
-static void lcd_write_char(char c)
-{
-	/* first, we'll test if we're in escape mode */
-	if ((c != '\n') && lcd_escape_len >= 0) {
-		/* yes, let's add this char to the buffer */
-		lcd_escape[lcd_escape_len++] = c;
-		lcd_escape[lcd_escape_len] = 0;
-	} else {
-		/* aborts any previous escape sequence */
-		lcd_escape_len = -1;
-
-		switch (c) {
-		case LCD_ESCAPE_CHAR:
-			/* start of an escape sequence */
-			lcd_escape_len = 0;
-			lcd_escape[lcd_escape_len] = 0;
-			break;
-		case '\b':
-			/* go back one char and clear it */
-			if (lcd_addr_x > 0) {
-				/* check if we're not at the
-				   end of the line */
-				if (lcd_addr_x < lcd_bwidth)
-					/* back one char */
-					lcd_write_cmd(0x10);
-				lcd_addr_x--;
-			}
-			/* replace with a space */
-			lcd_write_data(' ');
-			/* back one char again */
-			lcd_write_cmd(0x10);
-			break;
-		case '\014':
-			/* quickly clear the display */
-			lcd_clear_fast();
-			break;
-		case '\n':
-			/* flush the remainder of the current line and
-			   go to the beginning of the next line */
-			for (; lcd_addr_x < lcd_bwidth; lcd_addr_x++)
-				lcd_write_data(' ');
-			lcd_addr_x = 0;
-			lcd_addr_y = (lcd_addr_y + 1) % lcd_height;
-			lcd_gotoxy();
-			break;
-		case '\r':
-			/* go to the beginning of the same line */
-			lcd_addr_x = 0;
-			lcd_gotoxy();
-			break;
-		case '\t':
-			/* print a space instead of the tab */
-			lcd_print(' ');
-			break;
-		default:
-			/* simply print this char */
-			lcd_print(c);
-			break;
-		}
-	}
-
-	/* now we'll see if we're in an escape mode and if the current
-	   escape sequence can be understood. */
-	if (lcd_escape_len >= 2) {
-		int processed = 0;
-
-		if (!strcmp(lcd_escape, "[2J")) {
-			/* clear the display */
-			lcd_clear_fast();
-			processed = 1;
-		} else if (!strcmp(lcd_escape, "[H")) {
-			/* cursor to home */
-			lcd_addr_x = 0;
-			lcd_addr_y = 0;
-			lcd_gotoxy();
-			processed = 1;
-		}
-		/* codes starting with ^[[L */
-		else if ((lcd_escape_len >= 3) &&
-			 (lcd_escape[0] == '[') &&
-			 (lcd_escape[1] == 'L')) {
-			processed = handle_lcd_special_code();
-		}
-
-		/* LCD special escape codes */
-		/* flush the escape sequence if it's been processed
-		   or if it is getting too long. */
-		if (processed || (lcd_escape_len >= LCD_ESCAPE_LEN))
-			lcd_escape_len = -1;
-	} /* escape codes */
-}
-
 static ssize_t lcd_write(struct file *file,
-			 const char __user *buf, size_t count, loff_t *ppos)
+			 const char *buf, size_t count, loff_t *ppos)
 {
-	const char __user *tmp = buf;
+	const char *tmp = buf;
 	char c;
 
-	for (; count-- > 0; (*ppos)++, tmp++) {
+	for (; count-- > 0; (ppos ? (*ppos)++ : 0), ++tmp) {
 		if (!in_interrupt() && (((count + 1) & 0x1f) == 0))
 			/* let's be a little nice with other processes
 			   that need some CPU */
 			schedule();
 
-		if (get_user(c, tmp))
+		if (ppos == NULL && file == NULL)
+			/* let's not use get_user() from the kernel ! */
+			c = *tmp;
+		else if (get_user(c, tmp))
 			return -EFAULT;
 
-		lcd_write_char(c);
+		/* first, we'll test if we're in escape mode */
+		if ((c != '\n') && lcd_escape_len >= 0) {
+			/* yes, let's add this char to the buffer */
+			lcd_escape[lcd_escape_len++] = c;
+			lcd_escape[lcd_escape_len] = 0;
+		} else {
+			/* aborts any previous escape sequence */
+			lcd_escape_len = -1;
+
+			switch (c) {
+			case LCD_ESCAPE_CHAR:
+				/* start of an escape sequence */
+				lcd_escape_len = 0;
+				lcd_escape[lcd_escape_len] = 0;
+				break;
+			case '\b':
+				/* go back one char and clear it */
+				if (lcd_addr_x > 0) {
+					/* check if we're not at the
+					   end of the line */
+					if (lcd_addr_x < lcd_bwidth)
+						/* back one char */
+						lcd_write_cmd(0x10);
+					lcd_addr_x--;
+				}
+				/* replace with a space */
+				lcd_write_data(' ');
+				/* back one char again */
+				lcd_write_cmd(0x10);
+				break;
+			case '\014':
+				/* quickly clear the display */
+				lcd_clear_fast();
+				break;
+			case '\n':
+				/* flush the remainder of the current line and
+				   go to the beginning of the next line */
+				for (; lcd_addr_x < lcd_bwidth; lcd_addr_x++)
+					lcd_write_data(' ');
+				lcd_addr_x = 0;
+				lcd_addr_y = (lcd_addr_y + 1) % lcd_height;
+				lcd_gotoxy();
+				break;
+			case '\r':
+				/* go to the beginning of the same line */
+				lcd_addr_x = 0;
+				lcd_gotoxy();
+				break;
+			case '\t':
+				/* print a space instead of the tab */
+				lcd_print(' ');
+				break;
+			default:
+				/* simply print this char */
+				lcd_print(c);
+				break;
+			}
+		}
+
+		/* now we'll see if we're in an escape mode and if the current
+		   escape sequence can be understood. */
+		if (lcd_escape_len >= 2) {
+			int processed = 0;
+
+			if (!strcmp(lcd_escape, "[2J")) {
+				/* clear the display */
+				lcd_clear_fast();
+				processed = 1;
+			} else if (!strcmp(lcd_escape, "[H")) {
+				/* cursor to home */
+				lcd_addr_x = lcd_addr_y = 0;
+				lcd_gotoxy();
+				processed = 1;
+			}
+			/* codes starting with ^[[L */
+			else if ((lcd_escape_len >= 3) &&
+				 (lcd_escape[0] == '[') &&
+				 (lcd_escape[1] == 'L')) {
+				processed = handle_lcd_special_code();
+			}
+
+			/* LCD special escape codes */
+			/* flush the escape sequence if it's been processed
+			   or if it is getting too long. */
+			if (processed || (lcd_escape_len >= LCD_ESCAPE_LEN))
+				lcd_escape_len = -1;
+		} /* escape codes */
 	}
 
 	return tmp - buf;
@@ -1381,25 +1373,14 @@ static struct miscdevice lcd_dev = {
 };
 
 /* public function usable from the kernel for any purpose */
-static void panel_lcd_print(const char *s)
+void panel_lcd_print(char *s)
 {
-	const char *tmp = s;
-	int count = strlen(s);
-
-	if (lcd_enabled && lcd_initialized) {
-		for (; count-- > 0; tmp++) {
-			if (!in_interrupt() && (((count + 1) & 0x1f) == 0))
-				/* let's be a little nice with other processes
-				   that need some CPU */
-				schedule();
-
-			lcd_write_char(*tmp);
-		}
-	}
+	if (lcd_enabled && lcd_initialized)
+		lcd_write(NULL, s, strlen(s), NULL);
 }
 
 /* initialize the LCD driver */
-static void lcd_init(void)
+void lcd_init(void)
 {
 	switch (lcd_type) {
 	case LCD_TYPE_OLD:
@@ -1589,8 +1570,7 @@ static void lcd_init(void)
 	panel_lcd_print("\x1b[Lc\x1b[Lb\x1b[L*Linux-" UTS_RELEASE "\nPanel-"
 			PANEL_VERSION);
 #endif
-	lcd_addr_x = 0;
-	lcd_addr_y = 0;
+	lcd_addr_x = lcd_addr_y = 0;
 	/* clear the display on the next device opening */
 	lcd_must_clear = 1;
 	lcd_gotoxy();
@@ -1601,17 +1581,18 @@ static void lcd_init(void)
  */
 
 static ssize_t keypad_read(struct file *file,
-			   char __user *buf, size_t count, loff_t *ppos)
+			   char *buf, size_t count, loff_t *ppos)
 {
+
 	unsigned i = *ppos;
-	char __user *tmp = buf;
+	char *tmp = buf;
 
 	if (keypad_buflen == 0) {
 		if (file->f_flags & O_NONBLOCK)
 			return -EAGAIN;
 
-		if (wait_event_interruptible(keypad_read_wait,
-					     keypad_buflen != 0))
+		interruptible_sleep_on(&keypad_read_wait);
+		if (signal_pending(current))
 			return -EINTR;
 	}
 
@@ -1627,6 +1608,7 @@ static ssize_t keypad_read(struct file *file,
 
 static int keypad_open(struct inode *inode, struct file *file)
 {
+
 	if (keypad_open_cnt)
 		return -EBUSY;	/* open only once at a time */
 
@@ -1657,7 +1639,7 @@ static struct miscdevice keypad_dev = {
 	&keypad_fops
 };
 
-static void keypad_send_key(const char *string, int max_len)
+static void keypad_send_key(char *string, int max_len)
 {
 	if (init_in_progress)
 		return;
@@ -1756,8 +1738,8 @@ static inline int input_state_high(struct logical_input *input)
 	 * release function.
 	 * eg: 0 -(press A)-> A -(press B)-> AB : don't match A's release.
 	 */
-	if (((phys_prev & input->mask) == input->value) &&
-	    ((phys_curr & input->mask) >  input->value)) {
+	if (((phys_prev & input->mask) == input->value)
+	    && ((phys_curr & input->mask) > input->value)) {
 		input->state = INPUT_ST_LOW; /* invalidate */
 		return 1;
 	}
@@ -1775,22 +1757,17 @@ static inline int input_state_high(struct logical_input *input)
 
 			if (input->high_timer == 0) {
 				char *press_str = input->u.kbd.press_str;
-
-				if (press_str[0]) {
-					int s = sizeof(input->u.kbd.press_str);
-
-					keypad_send_key(press_str, s);
-				}
+				if (press_str[0])
+					keypad_send_key(press_str,
+							sizeof(press_str));
 			}
 
 			if (input->u.kbd.repeat_str[0]) {
 				char *repeat_str = input->u.kbd.repeat_str;
-
 				if (input->high_timer >= KEYPAD_REP_START) {
-					int s = sizeof(input->u.kbd.repeat_str);
-
 					input->high_timer -= KEYPAD_REP_DELAY;
-					keypad_send_key(repeat_str, s);
+					keypad_send_key(repeat_str,
+							sizeof(repeat_str));
 				}
 				/* we will need to come back here soon */
 				inputs_stable = 0;
@@ -1812,8 +1789,8 @@ static inline void input_state_falling(struct logical_input *input)
 {
 #if 0
 	/* FIXME !!! same comment as in input_state_high */
-	if (((phys_prev & input->mask) == input->value) &&
-	    ((phys_curr & input->mask) >  input->value)) {
+	if (((phys_prev & input->mask) == input->value)
+	    && ((phys_curr & input->mask) > input->value)) {
 		input->state = INPUT_ST_LOW;	/* invalidate */
 		return;
 	}
@@ -1826,13 +1803,10 @@ static inline void input_state_falling(struct logical_input *input)
 
 			if (input->u.kbd.repeat_str[0]) {
 				char *repeat_str = input->u.kbd.repeat_str;
-
-				if (input->high_timer >= KEYPAD_REP_START) {
-					int s = sizeof(input->u.kbd.repeat_str);
-
+				if (input->high_timer >= KEYPAD_REP_START)
 					input->high_timer -= KEYPAD_REP_DELAY;
-					keypad_send_key(repeat_str, s);
-				}
+					keypad_send_key(repeat_str,
+							sizeof(repeat_str));
 				/* we will need to come back here soon */
 				inputs_stable = 0;
 			}
@@ -1845,17 +1819,13 @@ static inline void input_state_falling(struct logical_input *input)
 		/* call release event */
 		if (input->type == INPUT_TYPE_STD) {
 			void (*release_fct)(int) = input->u.std.release_fct;
-
 			if (release_fct != NULL)
 				release_fct(input->u.std.release_data);
 		} else if (input->type == INPUT_TYPE_KBD) {
 			char *release_str = input->u.kbd.release_str;
-
-			if (release_str[0]) {
-				int s = sizeof(input->u.kbd.release_str);
-
-				keypad_send_key(release_str, s);
-			}
+			if (release_str[0])
+				keypad_send_key(release_str,
+						sizeof(release_str));
 		}
 
 		input->state = INPUT_ST_LOW;
@@ -1869,6 +1839,12 @@ static void panel_process_inputs(void)
 {
 	struct list_head *item;
 	struct logical_input *input;
+
+#if 0
+	printk(KERN_DEBUG
+	       "entering panel_process_inputs with pp=%016Lx & pc=%016Lx\n",
+	       phys_prev, phys_curr);
+#endif
 
 	keypressed = 0;
 	inputs_stable = 1;
@@ -1917,11 +1893,11 @@ static void panel_process_inputs(void)
 static void panel_scan_timer(void)
 {
 	if (keypad_enabled && keypad_initialized) {
-		if (spin_trylock_irq(&pprt_lock)) {
+		if (spin_trylock(&pprt_lock)) {
 			phys_scan_contacts();
 
 			/* no need for the parport anymore */
-			spin_unlock_irq(&pprt_lock);
+			spin_unlock(&pprt_lock);
 		}
 
 		if (!inputs_stable || phys_curr != phys_prev)
@@ -1960,24 +1936,19 @@ static void init_scan_timer(void)
  * corresponding to out and in bits respectively.
  * returns 1 if ok, 0 if error (in which case, nothing is written).
  */
-static int input_name2mask(const char *name, pmask_t *mask, pmask_t *value,
+static int input_name2mask(char *name, pmask_t *mask, pmask_t *value,
 			   char *imask, char *omask)
 {
 	static char sigtab[10] = "EeSsPpAaBb";
 	char im, om;
 	pmask_t m, v;
 
-	om = 0ULL;
-	im = 0ULL;
-	m = 0ULL;
-	v = 0ULL;
+	om = im = m = v = 0ULL;
 	while (*name) {
 		int in, out, bit, neg;
-
-		for (in = 0; (in < sizeof(sigtab)) && (sigtab[in] != *name);
-		     in++)
+		for (in = 0; (in < sizeof(sigtab)) &&
+			     (sigtab[in] != *name); in++)
 			;
-
 		if (in >= sizeof(sigtab))
 			return 0;	/* input name not found */
 		neg = (in & 1);	/* odd (lower) names are negated */
@@ -1988,11 +1959,10 @@ static int input_name2mask(const char *name, pmask_t *mask, pmask_t *value,
 		if (isdigit(*name)) {
 			out = *name - '0';
 			om |= (1 << out);
-		} else if (*name == '-') {
+		} else if (*name == '-')
 			out = 8;
-		} else {
+		else
 			return 0;	/* unknown bit name */
-		}
 
 		bit = (out * 5) + in;
 
@@ -2014,16 +1984,16 @@ static int input_name2mask(const char *name, pmask_t *mask, pmask_t *value,
  * strings <press>, <repeat>, <release> for these respective events.
  * Returns the pointer to the new key if ok, NULL if the key could not be bound.
  */
-static struct logical_input *panel_bind_key(const char *name, const char *press,
-					    const char *repeat,
-					    const char *release)
+static struct logical_input *panel_bind_key(char *name, char *press,
+					    char *repeat, char *release)
 {
 	struct logical_input *key;
 
-	key = kzalloc(sizeof(*key), GFP_KERNEL);
-	if (!key)
+	key = kzalloc(sizeof(struct logical_input), GFP_KERNEL);
+	if (!key) {
+		printk(KERN_ERR "panel: not enough memory\n");
 		return NULL;
-
+	}
 	if (!input_name2mask(name, &key->mask, &key->value, &scan_mask_i,
 			     &scan_mask_o)) {
 		kfree(key);
@@ -2035,6 +2005,10 @@ static struct logical_input *panel_bind_key(const char *name, const char *press,
 	key->rise_time = 1;
 	key->fall_time = 1;
 
+#if 0
+	printk(KERN_DEBUG "bind: <%s> : m=%016Lx v=%016Lx\n", name, key->mask,
+	       key->value);
+#endif
 	strncpy(key->u.kbd.press_str, press, sizeof(key->u.kbd.press_str));
 	strncpy(key->u.kbd.repeat_str, repeat, sizeof(key->u.kbd.repeat_str));
 	strncpy(key->u.kbd.release_str, release,
@@ -2051,17 +2025,18 @@ static struct logical_input *panel_bind_key(const char *name, const char *press,
  * be bound.
  */
 static struct logical_input *panel_bind_callback(char *name,
-						 void (*press_fct)(int),
+						 void (*press_fct) (int),
 						 int press_data,
-						 void (*release_fct)(int),
+						 void (*release_fct) (int),
 						 int release_data)
 {
 	struct logical_input *callback;
 
-	callback = kmalloc(sizeof(*callback), GFP_KERNEL);
-	if (!callback)
+	callback = kmalloc(sizeof(struct logical_input), GFP_KERNEL);
+	if (!callback) {
+		printk(KERN_ERR "panel: not enough memory\n");
 		return NULL;
-
+	}
 	memset(callback, 0, sizeof(struct logical_input));
 	if (!input_name2mask(name, &callback->mask, &callback->value,
 			     &scan_mask_i, &scan_mask_o))
@@ -2083,7 +2058,6 @@ static struct logical_input *panel_bind_callback(char *name,
 static void keypad_init(void)
 {
 	int keynum;
-
 	init_waitqueue_head(&keypad_read_wait);
 	keypad_buflen = 0;	/* flushes any eventual noisy keystroke */
 
@@ -2139,8 +2113,10 @@ static void panel_attach(struct parport *port)
 		return;
 
 	if (pprt) {
-		pr_err("%s: port->number=%d parport=%d, already registered!\n",
-		       __func__, port->number, parport);
+		printk(KERN_ERR
+		       "panel_attach(): port->number=%d parport=%d, "
+		       "already registered !\n",
+		       port->number, parport);
 		return;
 	}
 
@@ -2149,14 +2125,16 @@ static void panel_attach(struct parport *port)
 				       /*PARPORT_DEV_EXCL */
 				       0, (void *)&pprt);
 	if (pprt == NULL) {
-		pr_err("%s: port->number=%d parport=%d, parport_register_device() failed\n",
-		       __func__, port->number, parport);
+		pr_err("panel_attach(): port->number=%d parport=%d, "
+		       "parport_register_device() failed\n",
+		       port->number, parport);
 		return;
 	}
 
 	if (parport_claim(pprt)) {
-		pr_err("could not claim access to parport%d. Aborting.\n",
-		       parport);
+		printk(KERN_ERR
+		       "Panel: could not claim access to parport%d. "
+		       "Aborting.\n", parport);
 		goto err_unreg_device;
 	}
 
@@ -2190,8 +2168,10 @@ static void panel_detach(struct parport *port)
 		return;
 
 	if (!pprt) {
-		pr_err("%s: port->number=%d parport=%d, nothing to unregister.\n",
-		       __func__, port->number, parport);
+		printk(KERN_ERR
+		       "panel_detach(): port->number=%d parport=%d, "
+		       "nothing to unregister.\n",
+		       port->number, parport);
 		return;
 	}
 
@@ -2217,7 +2197,7 @@ static struct parport_driver panel_driver = {
 };
 
 /* init function */
-static int panel_init(void)
+int panel_init(void)
 {
 	/* for backwards compatibility */
 	if (keypad_type < 0)
@@ -2301,7 +2281,8 @@ static int panel_init(void)
 	init_in_progress = 1;
 
 	if (parport_register_driver(&panel_driver)) {
-		pr_err("could not register with parport. Aborting.\n");
+		printk(KERN_ERR
+		       "Panel: could not register with parport. Aborting.\n");
 		return -EIO;
 	}
 
@@ -2313,19 +2294,20 @@ static int panel_init(void)
 			pprt = NULL;
 		}
 		parport_unregister_driver(&panel_driver);
-		pr_err("driver version " PANEL_VERSION " disabled.\n");
+		printk(KERN_ERR "Panel driver version " PANEL_VERSION
+		       " disabled.\n");
 		return -ENODEV;
 	}
 
 	register_reboot_notifier(&panel_notifier);
 
 	if (pprt)
-		pr_info("driver version " PANEL_VERSION
-			" registered on parport%d (io=0x%lx).\n", parport,
-			pprt->port->base);
+		printk(KERN_INFO "Panel driver version " PANEL_VERSION
+		       " registered on parport%d (io=0x%lx).\n", parport,
+		       pprt->port->base);
 	else
-		pr_info("driver version " PANEL_VERSION
-			" not yet registered\n");
+		printk(KERN_INFO "Panel driver version " PANEL_VERSION
+		       " not yet registered\n");
 	/* tells various subsystems about the fact that initialization
 	   is finished */
 	init_in_progress = 0;
@@ -2342,7 +2324,7 @@ static void __exit panel_cleanup_module(void)
 	unregister_reboot_notifier(&panel_notifier);
 
 	if (scan_timer.function != NULL)
-		del_timer_sync(&scan_timer);
+		del_timer(&scan_timer);
 
 	if (pprt != NULL) {
 		if (keypad_enabled) {

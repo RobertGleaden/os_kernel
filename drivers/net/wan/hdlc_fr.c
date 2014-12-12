@@ -1087,7 +1087,7 @@ static int fr_add_pvc(struct net_device *frad, unsigned int dlci, int type)
 	}
 
 	if (type == ARPHRD_ETHER)
-		eth_hw_addr_random(dev);
+		random_ether_addr(dev->dev_addr);
 	else {
 		*(__be16*)dev->dev_addr = htons(dlci);
 		dlci_to_q922(dev->broadcast, dlci);

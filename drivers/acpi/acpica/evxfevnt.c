@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2014, Intel Corp.
+ * Copyright (C) 2000 - 2011, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -41,8 +41,6 @@
  * POSSIBILITY OF SUCH DAMAGES.
  */
 
-#define EXPORT_ACPI_INTERFACES
-
 #include <acpi/acpi.h>
 #include "accommon.h"
 #include "actables.h"
@@ -50,7 +48,6 @@
 #define _COMPONENT          ACPI_EVENTS
 ACPI_MODULE_NAME("evxfevnt")
 
-#if (!ACPI_REDUCED_HARDWARE)	/* Entire module */
 /*******************************************************************************
  *
  * FUNCTION:    acpi_enable
@@ -62,6 +59,7 @@ ACPI_MODULE_NAME("evxfevnt")
  * DESCRIPTION: Transfers the system into ACPI mode.
  *
  ******************************************************************************/
+
 acpi_status acpi_enable(void)
 {
 	acpi_status status;
@@ -73,12 +71,6 @@ acpi_status acpi_enable(void)
 
 	if (!acpi_tb_tables_loaded()) {
 		return_ACPI_STATUS(AE_NO_ACPI_TABLES);
-	}
-
-	/* If the Hardware Reduced flag is set, machine is always in acpi mode */
-
-	if (acpi_gbl_reduced_hardware) {
-		return_ACPI_STATUS(AE_OK);
 	}
 
 	/* Check current mode */
@@ -133,12 +125,6 @@ acpi_status acpi_disable(void)
 
 	ACPI_FUNCTION_TRACE(acpi_disable);
 
-	/* If the Hardware Reduced flag is set, machine is always in acpi mode */
-
-	if (acpi_gbl_reduced_hardware) {
-		return_ACPI_STATUS(AE_OK);
-	}
-
 	if (acpi_hw_get_mode() == ACPI_SYS_MODE_LEGACY) {
 		ACPI_DEBUG_PRINT((ACPI_DB_INIT,
 				  "System is already in legacy (non-ACPI) mode\n"));
@@ -165,8 +151,8 @@ ACPI_EXPORT_SYMBOL(acpi_disable)
  *
  * FUNCTION:    acpi_enable_event
  *
- * PARAMETERS:  event           - The fixed eventto be enabled
- *              flags           - Reserved
+ * PARAMETERS:  Event           - The fixed eventto be enabled
+ *              Flags           - Reserved
  *
  * RETURN:      Status
  *
@@ -222,8 +208,8 @@ ACPI_EXPORT_SYMBOL(acpi_enable_event)
  *
  * FUNCTION:    acpi_disable_event
  *
- * PARAMETERS:  event           - The fixed event to be disabled
- *              flags           - Reserved
+ * PARAMETERS:  Event           - The fixed eventto be enabled
+ *              Flags           - Reserved
  *
  * RETURN:      Status
  *
@@ -277,7 +263,7 @@ ACPI_EXPORT_SYMBOL(acpi_disable_event)
  *
  * FUNCTION:    acpi_clear_event
  *
- * PARAMETERS:  event           - The fixed event to be cleared
+ * PARAMETERS:  Event           - The fixed event to be cleared
  *
  * RETURN:      Status
  *
@@ -313,7 +299,7 @@ ACPI_EXPORT_SYMBOL(acpi_clear_event)
  *
  * FUNCTION:    acpi_get_event_status
  *
- * PARAMETERS:  event           - The fixed event
+ * PARAMETERS:  Event           - The fixed event
  *              event_status    - Where the current status of the event will
  *                                be returned
  *
@@ -365,4 +351,3 @@ acpi_status acpi_get_event_status(u32 event, acpi_event_status * event_status)
 }
 
 ACPI_EXPORT_SYMBOL(acpi_get_event_status)
-#endif				/* !ACPI_REDUCED_HARDWARE */

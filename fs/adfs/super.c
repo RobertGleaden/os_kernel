@@ -15,7 +15,6 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/statfs.h>
-#include <linux/user_namespace.h>
 #include "adfs.h"
 #include "dir_f.h"
 #include "dir_fplus.h"
@@ -123,17 +122,18 @@ static void adfs_put_super(struct super_block *sb)
 	for (i = 0; i < asb->s_map_size; i++)
 		brelse(asb->s_map[i].dm_bh);
 	kfree(asb->s_map);
-	kfree_rcu(asb, rcu);
+	kfree(asb);
+	sb->s_fs_info = NULL;
 }
 
-static int adfs_show_options(struct seq_file *seq, struct dentry *root)
+static int adfs_show_options(struct seq_file *seq, struct vfsmount *mnt)
 {
-	struct adfs_sb_info *asb = ADFS_SB(root->d_sb);
+	struct adfs_sb_info *asb = ADFS_SB(mnt->mnt_sb);
 
-	if (!uid_eq(asb->s_uid, GLOBAL_ROOT_UID))
-		seq_printf(seq, ",uid=%u", from_kuid_munged(&init_user_ns, asb->s_uid));
-	if (!gid_eq(asb->s_gid, GLOBAL_ROOT_GID))
-		seq_printf(seq, ",gid=%u", from_kgid_munged(&init_user_ns, asb->s_gid));
+	if (asb->s_uid != 0)
+		seq_printf(seq, ",uid=%u", asb->s_uid);
+	if (asb->s_gid != 0)
+		seq_printf(seq, ",gid=%u", asb->s_gid);
 	if (asb->s_owner_mask != ADFS_DEFAULT_OWNER_MASK)
 		seq_printf(seq, ",ownmask=%o", asb->s_owner_mask);
 	if (asb->s_other_mask != ADFS_DEFAULT_OTHER_MASK)
@@ -175,16 +175,12 @@ static int parse_options(struct super_block *sb, char *options)
 		case Opt_uid:
 			if (match_int(args, &option))
 				return -EINVAL;
-			asb->s_uid = make_kuid(current_user_ns(), option);
-			if (!uid_valid(asb->s_uid))
-				return -EINVAL;
+			asb->s_uid = option;
 			break;
 		case Opt_gid:
 			if (match_int(args, &option))
 				return -EINVAL;
-			asb->s_gid = make_kgid(current_user_ns(), option);
-			if (!gid_valid(asb->s_gid))
-				return -EINVAL;
+			asb->s_gid = option;
 			break;
 		case Opt_ownmask:
 			if (match_octal(args, &option))
@@ -212,7 +208,6 @@ static int parse_options(struct super_block *sb, char *options)
 
 static int adfs_remount(struct super_block *sb, int *flags, char *data)
 {
-	sync_filesystem(sb);
 	*flags |= MS_NODIRATIME;
 	return parse_options(sb, data);
 }
@@ -251,6 +246,7 @@ static struct inode *adfs_alloc_inode(struct super_block *sb)
 static void adfs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
+	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(adfs_inode_cachep, ADFS_I(inode));
 }
 
@@ -266,7 +262,7 @@ static void init_once(void *foo)
 	inode_init_once(&ei->vfs_inode);
 }
 
-static int __init init_inodecache(void)
+static int init_inodecache(void)
 {
 	adfs_inode_cachep = kmem_cache_create("adfs_inode_cache",
 					     sizeof(struct adfs_inode_info),
@@ -280,11 +276,6 @@ static int __init init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	/*
-	 * Make sure all delayed rcu free inodes are flushed before we
-	 * destroy cache.
-	 */
-	rcu_barrier();
 	kmem_cache_destroy(adfs_inode_cachep);
 }
 
@@ -379,8 +370,8 @@ static int adfs_fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_fs_info = asb;
 
 	/* set default options */
-	asb->s_uid = GLOBAL_ROOT_UID;
-	asb->s_gid = GLOBAL_ROOT_GID;
+	asb->s_uid = 0;
+	asb->s_gid = 0;
 	asb->s_owner_mask = ADFS_DEFAULT_OWNER_MASK;
 	asb->s_other_mask = ADFS_DEFAULT_OTHER_MASK;
 	asb->s_ftsuffix = 0;
@@ -492,9 +483,10 @@ static int adfs_fill_super(struct super_block *sb, void *data, int silent)
 
 	sb->s_d_op = &adfs_dentry_operations;
 	root = adfs_iget(sb, &root_obj);
-	sb->s_root = d_make_root(root);
+	sb->s_root = d_alloc_root(root);
 	if (!sb->s_root) {
 		int i;
+		iput(root);
 		for (i = 0; i < asb->s_map_size; i++)
 			brelse(asb->s_map[i].dm_bh);
 		kfree(asb->s_map);
@@ -524,7 +516,6 @@ static struct file_system_type adfs_fs_type = {
 	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
-MODULE_ALIAS_FS("adfs");
 
 static int __init init_adfs_fs(void)
 {

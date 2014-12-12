@@ -23,7 +23,7 @@
  * software indicates your acceptance of these terms and conditions.  If you do
  * not agree with these terms and conditions, do not use the software.
  *
- * Copyright Â© 2003 Agere Systems Inc.
+ * Copyright © 2003 Agere Systems Inc.
  * All rights reserved.
  *
  * Redistribution and use in source or binary forms, with or without
@@ -44,7 +44,7 @@
  *
  * Disclaimer
  *
- * THIS SOFTWARE IS PROVIDED Â“AS ISÂ” AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * THIS SOFTWARE IS PROVIDED “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES,
  * INCLUDING, BUT NOT LIMITED TO, INFRINGEMENT AND THE IMPLIED WARRANTIES OF
  * MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  ANY
  * USE, MODIFICATION OR DISTRIBUTION OF THIS SOFTWARE IS SOLELY AT THE USERS OWN
@@ -63,7 +63,7 @@
  *  constant definitions
  ******************************************************************************/
 
-/* Allow support for calling system fcns to access F/W image file */
+/* Allow support for calling system fcns to access F/W iamge file */
 #define __KERNEL_SYSCALLS__
 
 /*******************************************************************************
@@ -73,26 +73,41 @@
 
 #include <linux/module.h>
 #include <linux/proc_fs.h>
-#include <linux/seq_file.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
+// #include <linux/sched.h>
+// #include <linux/ptrace.h>
+// #include <linux/slab.h>
+// #include <linux/ctype.h>
+// #include <linux/string.h>
+// #include <linux/timer.h>
+//#include <linux/interrupt.h>
+// #include <linux/tqueue.h>
+// #include <linux/in.h>
+// #include <linux/delay.h>
+// #include <asm/io.h>
+// #include <asm/system.h>
+// #include <asm/bitops.h>
 #include <linux/unistd.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+// #include <linux/skbuff.h>
+// #include <linux/if_arp.h>
+// #include <linux/ioport.h>
 
 #define BIN_DL 0
 #if BIN_DL
 #include <linux/vmalloc.h>
-#endif /* BIN_DL */
+#endif // BIN_DL
 
 
 #include <debug.h>
 
 #include <hcf.h>
 #include <dhf.h>
-/* in order to get around:: wl_main.c:2229: `HREG_EV_RDMAD' undeclared (first use in this function) */
+//in order to get around:: wl_main.c:2229: `HREG_EV_RDMAD' undeclared (first use in this function)
 #include <hcfdef.h>
 
 #include <wl_if.h>
@@ -114,11 +129,12 @@
 #include <wl_pci.h>
 #endif  /* BUS_PCI */
 /*******************************************************************************
- *	macro definitions
+ *	macro defintions
  ******************************************************************************/
 #define VALID_PARAM(C) \
 	{ \
-		if (!(C)) { \
+		if (!(C)) \
+		{ \
 			printk(KERN_INFO "Wireless, parameter error: \"%s\"\n", #C); \
 			goto failed; \
 		} \
@@ -126,33 +142,20 @@
 /*******************************************************************************
  *	local functions
  ******************************************************************************/
-void wl_isr_handler(unsigned long p);
+void wl_isr_handler( unsigned long p );
 
 #if 0 //SCULL_USE_PROC /* don't waste space if unused */
-static int scull_read_procmem(struct seq_file *m, void *v);
+//int scull_read_procmem(char *buf, char **start, off_t offset, int len, int unused);
+int scull_read_procmem(char *buf, char **start, off_t offset, int len, int *eof, void *data );
 static int write_int(struct file *file, const char *buffer, unsigned long count, void *data);
-
-/*
- * seq_file wrappers for procfile show routines.
- */
-static int scull_read_procmem_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, scull_read_procmem, PDE_DATA(inode));
-}
-
-static const struct file_operations scull_read_procmem_fops = {
-	.open		= scull_read_procmem_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+static void proc_write(const char *name, write_proc_t *w, void *data);
 
 #endif /* SCULL_USE_PROC */
 
 /*******************************************************************************
  * module parameter definitions - set with 'insmod'
  ******************************************************************************/
-static p_u16    irq_mask                = 0xdeb8; /* IRQ3,4,5,7,9,10,11,12,14,15 */
+static p_u16    irq_mask                = 0xdeb8; // IRQ3,4,5,7,9,10,11,12,14,15
 static p_s8     irq_list[4]             = { -1 };
 
 #if 0
@@ -167,7 +170,7 @@ static p_u16    PARM_AUTH_KEY_MGMT_SUITE   	= PARM_DEFAULT_AUTH_KEY_MGMT_SUITE;
 static p_u16    PARM_BRSC_2GHZ             	= PARM_DEFAULT_BRSC_2GHZ;
 static p_u16    PARM_BRSC_5GHZ             	= PARM_DEFAULT_BRSC_5GHZ;
 static p_u16    PARM_COEXISTENCE           	= PARM_DEFAULT_COEXISTENCE;
-static p_u16    PARM_CONNECTION_CONTROL   	= PARM_DEFAULT_CONNECTION_CONTROL;  /* ;?rename and move */
+static p_u16    PARM_CONNECTION_CONTROL    	= PARM_DEFAULT_CONNECTION_CONTROL;  //;?rename and move
 static p_char  *PARM_CREATE_IBSS           	= PARM_DEFAULT_CREATE_IBSS_STR;
 static p_char  *PARM_DESIRED_SSID          	= PARM_DEFAULT_SSID;
 static p_char  *PARM_DOWNLOAD_FIRMWARE      = "";
@@ -204,7 +207,7 @@ static p_u16    PARM_RTS_THRESHOLD3        	= PARM_DEFAULT_RTS_THRESHOLD;
 static p_u16    PARM_RTS_THRESHOLD4        	= PARM_DEFAULT_RTS_THRESHOLD;
 static p_u16    PARM_RTS_THRESHOLD5        	= PARM_DEFAULT_RTS_THRESHOLD;
 static p_u16    PARM_RTS_THRESHOLD6        	= PARM_DEFAULT_RTS_THRESHOLD;
-#endif /* USE_WDS */
+#endif // USE_WDS
 static p_u16    PARM_RTS_THRESHOLD         	= PARM_DEFAULT_RTS_THRESHOLD;
 static p_u16    PARM_SRSC_2GHZ             	= PARM_DEFAULT_SRSC_2GHZ;
 static p_u16    PARM_SRSC_5GHZ             	= PARM_DEFAULT_SRSC_5GHZ;
@@ -218,7 +221,7 @@ static p_u16    PARM_TX_RATE3              	= PARM_DEFAULT_TX_RATE_2GHZ;
 static p_u16    PARM_TX_RATE4              	= PARM_DEFAULT_TX_RATE_2GHZ;
 static p_u16    PARM_TX_RATE5              	= PARM_DEFAULT_TX_RATE_2GHZ;
 static p_u16    PARM_TX_RATE6              	= PARM_DEFAULT_TX_RATE_2GHZ;
-#endif /* USE_WDS */
+#endif // USE_WDS
 static p_u16    PARM_TX_RATE               	= PARM_DEFAULT_TX_RATE_2GHZ;
 #ifdef USE_WDS
 static p_u8     PARM_WDS_ADDRESS1[ETH_ALEN]	= PARM_DEFAULT_NETWORK_ADDR;
@@ -227,7 +230,7 @@ static p_u8     PARM_WDS_ADDRESS3[ETH_ALEN]	= PARM_DEFAULT_NETWORK_ADDR;
 static p_u8     PARM_WDS_ADDRESS4[ETH_ALEN]	= PARM_DEFAULT_NETWORK_ADDR;
 static p_u8     PARM_WDS_ADDRESS5[ETH_ALEN]	= PARM_DEFAULT_NETWORK_ADDR;
 static p_u8     PARM_WDS_ADDRESS6[ETH_ALEN]	= PARM_DEFAULT_NETWORK_ADDR;
-#endif /* USE_WDS */
+#endif // USE_WDS
 
 
 #if 0
@@ -283,41 +286,39 @@ MODULE_PARM(PARM_BRSC_2GHZ,             "b");
 MODULE_PARM_DESC(PARM_BRSC_2GHZ,                "Basic Rate Set Control 2.4 GHz");
 MODULE_PARM(PARM_BRSC_5GHZ,             "b");
 MODULE_PARM_DESC(PARM_BRSC_5GHZ,                "Basic Rate Set Control 5.0 GHz");
-#if 1 /* (HCF_TYPE) & HCF_TYPE_STA */
-/* ;?seems reasonable that even an AP-only driver could afford this small additional footprint */
+#if 1 //;? (HCF_TYPE) & HCF_TYPE_STA
+//;?seems reasonable that even an AP-only driver could afford this small additional footprint
 MODULE_PARM(PARM_PM_ENABLED,            "h");
 MODULE_PARM_DESC(PARM_PM_ENABLED,               "Power Management State (0 - 2, 8001 - 8002) [0]");
 MODULE_PARM(PARM_PORT_TYPE,             "b");
 MODULE_PARM_DESC(PARM_PORT_TYPE,                "Port Type (1 - 3) [1]");
-/*
- * ;?MODULE_PARM(PARM_CREATE_IBSS,           "s");
- *;?MODULE_PARM_DESC(PARM_CREATE_IBSS,              "Create IBSS (<string> N or Y) [N]");
- *;?MODULE_PARM(PARM_MULTICAST_RX,          "s");
- *;?MODULE_PARM_DESC(PARM_MULTICAST_RX,             "Multicast Receive Enable (<string> N or Y) [Y]");
- *;?MODULE_PARM(PARM_MAX_SLEEP,             "h");
- *;?MODULE_PARM_DESC(PARM_MAX_SLEEP,                "Maximum Power Management Sleep Duration (0 - 65535) [100]");
- *;?MODULE_PARM(PARM_NETWORK_ADDR,          "6b");
- *;?MODULE_PARM_DESC(PARM_NETWORK_ADDR,             "Hardware Ethernet Address ([0x00-0xff],[0x00-0xff],[0x00-0xff],[0x00-0xff],[0x00-0xff],[0x00-0xff]) [<factory value>]");
- *;?MODULE_PARM(PARM_AUTHENTICATION,        "b");
- *
- *tracker 12448
- *;?MODULE_PARM_DESC(PARM_AUTHENTICATION,           "Authentication Type (0-2) [0] 0=Open 1=SharedKey 2=LEAP");
- *;?MODULE_PARM_DESC(authentication,         "Authentication Type (1-2) [1] 1=Open 2=SharedKey");
- *tracker 12448
- *
- *;?MODULE_PARM(PARM_OWN_ATIM_WINDOW,       "b");
- *;?MODULE_PARM_DESC(PARM_OWN_ATIM_WINDOW,          "ATIM Window time in TU for IBSS creation (0-100) [0]");
- *;?MODULE_PARM(PARM_PM_HOLDOVER_DURATION,  "b");
- *;?MODULE_PARM_DESC(PARM_PM_HOLDOVER_DURATION,     "Time station remains awake after MAC frame transfer when PM is on (0-65535) [100]");
- *;?MODULE_PARM(PARM_PROMISCUOUS_MODE,      "s");
- *;?MODULE_PARM_DESC(PARM_PROMISCUOUS_MODE,         "Promiscuous Mode Enable (<string> Y or N ) [N]" );
- *;?
- */
+//;?MODULE_PARM(PARM_CREATE_IBSS,           "s");
+//;?MODULE_PARM_DESC(PARM_CREATE_IBSS,              "Create IBSS (<string> N or Y) [N]");
+//;?MODULE_PARM(PARM_MULTICAST_RX,          "s");
+//;?MODULE_PARM_DESC(PARM_MULTICAST_RX,             "Multicast Receive Enable (<string> N or Y) [Y]");
+//;?MODULE_PARM(PARM_MAX_SLEEP,             "h");
+//;?MODULE_PARM_DESC(PARM_MAX_SLEEP,                "Maximum Power Management Sleep Duration (0 - 65535) [100]");
+//;?MODULE_PARM(PARM_NETWORK_ADDR,          "6b");
+//;?MODULE_PARM_DESC(PARM_NETWORK_ADDR,             "Hardware Ethernet Address ([0x00-0xff],[0x00-0xff],[0x00-0xff],[0x00-0xff],[0x00-0xff],[0x00-0xff]) [<factory value>]");
+//;?MODULE_PARM(PARM_AUTHENTICATION,        "b");
+//
+//tracker 12448
+//;?MODULE_PARM_DESC(PARM_AUTHENTICATION,           "Authentication Type (0-2) [0] 0=Open 1=SharedKey 2=LEAP");
+//;?MODULE_PARM_DESC(authentication,         "Authentication Type (1-2) [1] 1=Open 2=SharedKey");
+//tracker 12448
+//
+//;?MODULE_PARM(PARM_OWN_ATIM_WINDOW,       "b");
+//;?MODULE_PARM_DESC(PARM_OWN_ATIM_WINDOW,          "ATIM Window time in TU for IBSS creation (0-100) [0]");
+//;?MODULE_PARM(PARM_PM_HOLDOVER_DURATION,  "b");
+//;?MODULE_PARM_DESC(PARM_PM_HOLDOVER_DURATION,     "Time station remains awake after MAC frame transfer when PM is on (0-65535) [100]");
+//;?MODULE_PARM(PARM_PROMISCUOUS_MODE,      "s");
+//;?MODULE_PARM_DESC(PARM_PROMISCUOUS_MODE,         "Promiscuous Mode Enable (<string> Y or N ) [N]" );
+//;?
 MODULE_PARM(PARM_CONNECTION_CONTROL,    "b");
 MODULE_PARM_DESC(PARM_CONNECTION_CONTROL,       "Connection Control (0 - 3) [2]");
 #endif /* HCF_STA */
-#if 1 /* ;? (HCF_TYPE) & HCF_TYPE_AP */
-					/* ;?should we restore this to allow smaller memory footprint */
+#if 1 //;? (HCF_TYPE) & HCF_TYPE_AP
+					//;?should we restore this to allow smaller memory footprint
 MODULE_PARM(PARM_OWN_DTIM_PERIOD,       "b");
 MODULE_PARM_DESC(PARM_OWN_DTIM_PERIOD,          "DTIM Period (0 - 255) [1]");
 MODULE_PARM(PARM_REJECT_ANY,            "s");
@@ -380,22 +381,21 @@ MODULE_PARM_DESC(PARM_COEXISTENCE,      "Coexistence (0-7) [0]");
 #if DBG
 
 static p_u32    pc_debug = DBG_LVL;
-/*
- * MODULE_PARM(pc_debug, "i");
- *static ;?conflicts with my understanding of CL parameters and breaks now I moved
+//MODULE_PARM(pc_debug, "i");
+/*static ;?conflicts with my understanding of CL parameters and breaks now I moved
  * the correspondig logic to wl_profile
- */ p_u32    DebugFlag = ~0; /* recognizable "undefined value" rather then DBG_DEFAULTS; */
-/* MODULE_PARM(DebugFlag, "l"); */
+ */ p_u32    DebugFlag = ~0; //recognizable "undefined value" rather then DBG_DEFAULTS;
+//MODULE_PARM(DebugFlag, "l");
 
-static struct dbg_info wl_info = { KBUILD_MODNAME, 0, 0 };
-struct dbg_info *DbgInfo = &wl_info;
+dbg_info_t   wl_info = { DBG_MOD_NAME, 0, 0 };
+dbg_info_t  *DbgInfo = &wl_info;
 
 #endif /* DBG */
 #ifdef USE_RTS
 
 static p_char  *useRTS = "N";
-MODULE_PARM(useRTS, "s");
-MODULE_PARM_DESC(useRTS, "Use RTS test interface (<string> N or Y) [N]");
+MODULE_PARM( useRTS, "s" );
+MODULE_PARM_DESC( useRTS, "Use RTS test interface (<string> N or Y) [N]" );
 
 #endif  /* USE_RTS */
 /*******************************************************************************
@@ -414,19 +414,22 @@ extern memimage fw_image;            // firmware image to be downloaded
 #endif /* HCF_STA */
 
 
-int wl_insert(struct net_device *dev)
+int wl_insert( struct net_device *dev )
 {
 	int                     result = 0;
 	int                     hcf_status = HCF_SUCCESS;
 	int                     i;
 	unsigned long           flags = 0;
 	struct wl_private       *lp = wl_priv(dev);
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_insert" );
+	DBG_ENTER( DbgInfo );
 
 	/* Initialize the adapter hardware. */
-	memset(&(lp->hcfCtx), 0, sizeof(IFB_STRCT));
+	memset( &( lp->hcfCtx ), 0, sizeof( IFB_STRCT ));
 
 	/* Initialize the adapter parameters. */
-	spin_lock_init(&(lp->slock));
+	spin_lock_init( &( lp->slock ));
 
 	/* Initialize states */
 	//lp->lockcount = 0; //PE1DNN
@@ -435,31 +438,31 @@ int wl_insert(struct net_device *dev)
 
 	lp->dev = dev;
 
-	DBG_PARAM(DbgInfo, "irq_mask", "0x%04x", irq_mask & 0x0FFFF);
-	DBG_PARAM(DbgInfo, "irq_list", "0x%02x 0x%02x 0x%02x 0x%02x",
+	DBG_PARAM( DbgInfo, "irq_mask", "0x%04x", irq_mask & 0x0FFFF );
+	DBG_PARAM( DbgInfo, "irq_list", "0x%02x 0x%02x 0x%02x 0x%02x",
 			   irq_list[0] & 0x0FF, irq_list[1] & 0x0FF,
-			   irq_list[2] & 0x0FF, irq_list[3] & 0x0FF);
-	DBG_PARAM(DbgInfo, PARM_NAME_DESIRED_SSID, "\"%s\"", PARM_DESIRED_SSID);
-	DBG_PARAM(DbgInfo, PARM_NAME_OWN_SSID, "\"%s\"", PARM_OWN_SSID);
-	DBG_PARAM(DbgInfo, PARM_NAME_OWN_CHANNEL, "%d", PARM_OWN_CHANNEL);
-	DBG_PARAM(DbgInfo, PARM_NAME_SYSTEM_SCALE, "%d", PARM_SYSTEM_SCALE);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_RATE, "%d", PARM_TX_RATE);
-	DBG_PARAM(DbgInfo, PARM_NAME_RTS_THRESHOLD, "%d", PARM_RTS_THRESHOLD);
-	DBG_PARAM(DbgInfo, PARM_NAME_MICROWAVE_ROBUSTNESS, "\"%s\"", PARM_MICROWAVE_ROBUSTNESS);
-	DBG_PARAM(DbgInfo, PARM_NAME_OWN_NAME, "\"%s\"", PARM_OWN_NAME);
+			   irq_list[2] & 0x0FF, irq_list[3] & 0x0FF );
+	DBG_PARAM( DbgInfo, PARM_NAME_DESIRED_SSID, "\"%s\"", PARM_DESIRED_SSID );
+	DBG_PARAM( DbgInfo, PARM_NAME_OWN_SSID, "\"%s\"", PARM_OWN_SSID );
+	DBG_PARAM( DbgInfo, PARM_NAME_OWN_CHANNEL, "%d", PARM_OWN_CHANNEL);
+	DBG_PARAM( DbgInfo, PARM_NAME_SYSTEM_SCALE, "%d", PARM_SYSTEM_SCALE );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE, "%d", PARM_TX_RATE );
+	DBG_PARAM( DbgInfo, PARM_NAME_RTS_THRESHOLD, "%d", PARM_RTS_THRESHOLD );
+	DBG_PARAM( DbgInfo, PARM_NAME_MICROWAVE_ROBUSTNESS, "\"%s\"", PARM_MICROWAVE_ROBUSTNESS );
+	DBG_PARAM( DbgInfo, PARM_NAME_OWN_NAME, "\"%s\"", PARM_OWN_NAME );
 //;?		DBG_PARAM( DbgInfo, PARM_NAME_ENABLE_ENCRYPTION, "\"%s\"", PARM_ENABLE_ENCRYPTION );
-	DBG_PARAM(DbgInfo, PARM_NAME_KEY1, "\"%s\"", PARM_KEY1);
-	DBG_PARAM(DbgInfo, PARM_NAME_KEY2, "\"%s\"", PARM_KEY2);
-	DBG_PARAM(DbgInfo, PARM_NAME_KEY3, "\"%s\"", PARM_KEY3);
-	DBG_PARAM(DbgInfo, PARM_NAME_KEY4, "\"%s\"", PARM_KEY4);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_KEY, "%d", PARM_TX_KEY);
-	DBG_PARAM(DbgInfo, PARM_NAME_MULTICAST_RATE, "%d", PARM_MULTICAST_RATE);
-	DBG_PARAM(DbgInfo, PARM_NAME_DOWNLOAD_FIRMWARE, "\"%s\"", PARM_DOWNLOAD_FIRMWARE);
-	DBG_PARAM(DbgInfo, PARM_NAME_AUTH_KEY_MGMT_SUITE, "%d", PARM_AUTH_KEY_MGMT_SUITE);
+	DBG_PARAM( DbgInfo, PARM_NAME_KEY1, "\"%s\"", PARM_KEY1 );
+	DBG_PARAM( DbgInfo, PARM_NAME_KEY2, "\"%s\"", PARM_KEY2 );
+	DBG_PARAM( DbgInfo, PARM_NAME_KEY3, "\"%s\"", PARM_KEY3 );
+	DBG_PARAM( DbgInfo, PARM_NAME_KEY4, "\"%s\"", PARM_KEY4 );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_KEY, "%d", PARM_TX_KEY );
+	DBG_PARAM( DbgInfo, PARM_NAME_MULTICAST_RATE, "%d", PARM_MULTICAST_RATE );
+	DBG_PARAM( DbgInfo, PARM_NAME_DOWNLOAD_FIRMWARE, "\"%s\"", PARM_DOWNLOAD_FIRMWARE );
+	DBG_PARAM( DbgInfo, PARM_NAME_AUTH_KEY_MGMT_SUITE, "%d", PARM_AUTH_KEY_MGMT_SUITE );
 //;?#if (HCF_TYPE) & HCF_TYPE_STA
 					//;?should we make this code conditional depending on in STA mode
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_PORT_TYPE, "%d", PARM_PORT_TYPE );
-		DBG_PARAM(DbgInfo, PARM_NAME_PM_ENABLED, "%04x", PARM_PM_ENABLED);
+		DBG_PARAM( DbgInfo, PARM_NAME_PM_ENABLED, "%04x", PARM_PM_ENABLED );
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_CREATE_IBSS, "\"%s\"", PARM_CREATE_IBSS );
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_MULTICAST_RX, "\"%s\"", PARM_MULTICAST_RX );
 //;?        DBG_PARAM( DbgInfo, PARM_NAME_MAX_SLEEP, "%d", PARM_MAX_SLEEP );
@@ -475,24 +478,24 @@ int wl_insert(struct net_device *dev)
 #if 1 //;? (HCF_TYPE) & HCF_TYPE_AP
 		//;?should we restore this to allow smaller memory footprint
 		//;?I guess: no, since this is Debug mode only
-	DBG_PARAM(DbgInfo, PARM_NAME_OWN_DTIM_PERIOD, "%d", PARM_OWN_DTIM_PERIOD);
-	DBG_PARAM(DbgInfo, PARM_NAME_REJECT_ANY, "\"%s\"", PARM_REJECT_ANY);
-	DBG_PARAM(DbgInfo, PARM_NAME_EXCLUDE_UNENCRYPTED, "\"%s\"", PARM_EXCLUDE_UNENCRYPTED);
-	DBG_PARAM(DbgInfo, PARM_NAME_MULTICAST_PM_BUFFERING, "\"%s\"", PARM_MULTICAST_PM_BUFFERING);
-	DBG_PARAM(DbgInfo, PARM_NAME_INTRA_BSS_RELAY, "\"%s\"", PARM_INTRA_BSS_RELAY);
+	DBG_PARAM( DbgInfo, PARM_NAME_OWN_DTIM_PERIOD, "%d", PARM_OWN_DTIM_PERIOD );
+	DBG_PARAM( DbgInfo, PARM_NAME_REJECT_ANY, "\"%s\"", PARM_REJECT_ANY );
+	DBG_PARAM( DbgInfo, PARM_NAME_EXCLUDE_UNENCRYPTED, "\"%s\"", PARM_EXCLUDE_UNENCRYPTED );
+	DBG_PARAM( DbgInfo, PARM_NAME_MULTICAST_PM_BUFFERING, "\"%s\"", PARM_MULTICAST_PM_BUFFERING );
+	DBG_PARAM( DbgInfo, PARM_NAME_INTRA_BSS_RELAY, "\"%s\"", PARM_INTRA_BSS_RELAY );
 #ifdef USE_WDS
-	DBG_PARAM(DbgInfo, PARM_NAME_RTS_THRESHOLD1, "%d", PARM_RTS_THRESHOLD1);
-	DBG_PARAM(DbgInfo, PARM_NAME_RTS_THRESHOLD2, "%d", PARM_RTS_THRESHOLD2);
-	DBG_PARAM(DbgInfo, PARM_NAME_RTS_THRESHOLD3, "%d", PARM_RTS_THRESHOLD3);
-	DBG_PARAM(DbgInfo, PARM_NAME_RTS_THRESHOLD4, "%d", PARM_RTS_THRESHOLD4);
-	DBG_PARAM(DbgInfo, PARM_NAME_RTS_THRESHOLD5, "%d", PARM_RTS_THRESHOLD5);
-	DBG_PARAM(DbgInfo, PARM_NAME_RTS_THRESHOLD6, "%d", PARM_RTS_THRESHOLD6);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_RATE1, "%d", PARM_TX_RATE1);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_RATE2, "%d", PARM_TX_RATE2);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_RATE3, "%d", PARM_TX_RATE3);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_RATE4, "%d", PARM_TX_RATE4);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_RATE5, "%d", PARM_TX_RATE5);
-	DBG_PARAM(DbgInfo, PARM_NAME_TX_RATE6, "%d", PARM_TX_RATE6);
+	DBG_PARAM( DbgInfo, PARM_NAME_RTS_THRESHOLD1, "%d", PARM_RTS_THRESHOLD1 );
+	DBG_PARAM( DbgInfo, PARM_NAME_RTS_THRESHOLD2, "%d", PARM_RTS_THRESHOLD2 );
+	DBG_PARAM( DbgInfo, PARM_NAME_RTS_THRESHOLD3, "%d", PARM_RTS_THRESHOLD3 );
+	DBG_PARAM( DbgInfo, PARM_NAME_RTS_THRESHOLD4, "%d", PARM_RTS_THRESHOLD4 );
+	DBG_PARAM( DbgInfo, PARM_NAME_RTS_THRESHOLD5, "%d", PARM_RTS_THRESHOLD5 );
+	DBG_PARAM( DbgInfo, PARM_NAME_RTS_THRESHOLD6, "%d", PARM_RTS_THRESHOLD6 );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE1, "%d", PARM_TX_RATE1 );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE2, "%d", PARM_TX_RATE2 );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE3, "%d", PARM_TX_RATE3 );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE4, "%d", PARM_TX_RATE4 );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE5, "%d", PARM_TX_RATE5 );
+	DBG_PARAM( DbgInfo, PARM_NAME_TX_RATE6, "%d", PARM_TX_RATE6 );
 	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS1, "\"%pM\"",
 			PARM_WDS_ADDRESS1);
 	DBG_PARAM(DbgInfo, PARM_NAME_WDS_ADDRESS2, "\"%pM\"",
@@ -508,28 +511,28 @@ int wl_insert(struct net_device *dev)
 #endif /* USE_WDS */
 #endif /* HCF_AP */
 
-	VALID_PARAM(!PARM_DESIRED_SSID || (strlen(PARM_DESIRED_SSID) <= PARM_MAX_NAME_LEN));
-	VALID_PARAM(!PARM_OWN_SSID || (strlen(PARM_OWN_SSID) <= PARM_MAX_NAME_LEN));
-	VALID_PARAM((PARM_OWN_CHANNEL <= PARM_MAX_OWN_CHANNEL));
-	VALID_PARAM((PARM_SYSTEM_SCALE >= PARM_MIN_SYSTEM_SCALE) && (PARM_SYSTEM_SCALE <= PARM_MAX_SYSTEM_SCALE));
-	VALID_PARAM((PARM_TX_RATE >= PARM_MIN_TX_RATE) && (PARM_TX_RATE <= PARM_MAX_TX_RATE));
-	VALID_PARAM((PARM_RTS_THRESHOLD <= PARM_MAX_RTS_THRESHOLD));
-	VALID_PARAM(!PARM_MICROWAVE_ROBUSTNESS || strchr("NnYy", PARM_MICROWAVE_ROBUSTNESS[0]) != NULL);
-	VALID_PARAM(!PARM_OWN_NAME || (strlen(PARM_NAME_OWN_NAME) <= PARM_MAX_NAME_LEN));
-	VALID_PARAM((PARM_ENABLE_ENCRYPTION <= PARM_MAX_ENABLE_ENCRYPTION));
-	VALID_PARAM(is_valid_key_string(PARM_KEY1));
-	VALID_PARAM(is_valid_key_string(PARM_KEY2));
-	VALID_PARAM(is_valid_key_string(PARM_KEY3));
-	VALID_PARAM(is_valid_key_string(PARM_KEY4));
-	VALID_PARAM((PARM_TX_KEY >= PARM_MIN_TX_KEY) && (PARM_TX_KEY <= PARM_MAX_TX_KEY));
+	VALID_PARAM( !PARM_DESIRED_SSID || ( strlen( PARM_DESIRED_SSID ) <= PARM_MAX_NAME_LEN ));
+	VALID_PARAM( !PARM_OWN_SSID || ( strlen( PARM_OWN_SSID ) <= PARM_MAX_NAME_LEN ));
+	VALID_PARAM(( PARM_OWN_CHANNEL <= PARM_MAX_OWN_CHANNEL ));
+	VALID_PARAM(( PARM_SYSTEM_SCALE >= PARM_MIN_SYSTEM_SCALE ) && ( PARM_SYSTEM_SCALE <= PARM_MAX_SYSTEM_SCALE ));
+	VALID_PARAM(( PARM_TX_RATE >= PARM_MIN_TX_RATE ) && ( PARM_TX_RATE <= PARM_MAX_TX_RATE ));
+	VALID_PARAM(( PARM_RTS_THRESHOLD <= PARM_MAX_RTS_THRESHOLD ));
+	VALID_PARAM( !PARM_MICROWAVE_ROBUSTNESS || strchr( "NnYy", PARM_MICROWAVE_ROBUSTNESS[0] ) != NULL );
+	VALID_PARAM( !PARM_OWN_NAME || ( strlen( PARM_NAME_OWN_NAME ) <= PARM_MAX_NAME_LEN ));
+	VALID_PARAM(( PARM_ENABLE_ENCRYPTION <= PARM_MAX_ENABLE_ENCRYPTION ));
+	VALID_PARAM( is_valid_key_string( PARM_KEY1 ));
+	VALID_PARAM( is_valid_key_string( PARM_KEY2 ));
+	VALID_PARAM( is_valid_key_string( PARM_KEY3 ));
+	VALID_PARAM( is_valid_key_string( PARM_KEY4 ));
+	VALID_PARAM(( PARM_TX_KEY >= PARM_MIN_TX_KEY ) && ( PARM_TX_KEY <= PARM_MAX_TX_KEY ));
 
-	VALID_PARAM((PARM_MULTICAST_RATE >= PARM_MIN_MULTICAST_RATE) &&
-					(PARM_MULTICAST_RATE <= PARM_MAX_MULTICAST_RATE));
+	VALID_PARAM(( PARM_MULTICAST_RATE >= PARM_MIN_MULTICAST_RATE ) &&
+					( PARM_MULTICAST_RATE <= PARM_MAX_MULTICAST_RATE ));
 
-	VALID_PARAM(!PARM_DOWNLOAD_FIRMWARE || (strlen(PARM_DOWNLOAD_FIRMWARE) <= 255 /*;?*/));
-	VALID_PARAM((PARM_AUTH_KEY_MGMT_SUITE < PARM_MAX_AUTH_KEY_MGMT_SUITE));
+	VALID_PARAM( !PARM_DOWNLOAD_FIRMWARE || ( strlen( PARM_DOWNLOAD_FIRMWARE ) <= 255 /*;?*/ ));
+	VALID_PARAM(( PARM_AUTH_KEY_MGMT_SUITE < PARM_MAX_AUTH_KEY_MGMT_SUITE ));
 
-	VALID_PARAM(!PARM_LOAD_BALANCING || strchr("NnYy", PARM_LOAD_BALANCING[0]) != NULL);
+	VALID_PARAM( !PARM_LOAD_BALANCING || strchr( "NnYy", PARM_LOAD_BALANCING[0] ) != NULL );
 	VALID_PARAM( !PARM_MEDIUM_DISTRIBUTION || strchr( "NnYy", PARM_MEDIUM_DISTRIBUTION[0] ) != NULL );
 	VALID_PARAM(( PARM_TX_POW_LEVEL <= PARM_MAX_TX_POW_LEVEL ));
 
@@ -588,25 +591,33 @@ int wl_insert(struct net_device *dev)
 	lp->MulticastRate[0]    = PARM_DEFAULT_MULTICAST_RATE_2GHZ;
 	lp->MulticastRate[1]    = PARM_DEFAULT_MULTICAST_RATE_5GHZ;
 
-	if ( strchr( "Yy", PARM_MICROWAVE_ROBUSTNESS[0] ) != NULL )
+	if ( strchr( "Yy", PARM_MICROWAVE_ROBUSTNESS[0] ) != NULL ) {
 		lp->MicrowaveRobustness = 1;
-	else
+	} else {
 		lp->MicrowaveRobustness = 0;
-	if ( PARM_DESIRED_SSID && ( strlen( PARM_DESIRED_SSID ) <= HCF_MAX_NAME_LEN ))
+	}
+	if ( PARM_DESIRED_SSID && ( strlen( PARM_DESIRED_SSID ) <= HCF_MAX_NAME_LEN )) {
 		strcpy( lp->NetworkName, PARM_DESIRED_SSID );
-	if ( PARM_OWN_SSID && ( strlen( PARM_OWN_SSID ) <= HCF_MAX_NAME_LEN ))
+	}
+	if ( PARM_OWN_SSID && ( strlen( PARM_OWN_SSID ) <= HCF_MAX_NAME_LEN )) {
 		strcpy( lp->NetworkName, PARM_OWN_SSID );
-	if ( PARM_OWN_NAME && ( strlen( PARM_OWN_NAME ) <= HCF_MAX_NAME_LEN ))
+	}
+	if ( PARM_OWN_NAME && ( strlen( PARM_OWN_NAME ) <= HCF_MAX_NAME_LEN )) {
 		strcpy( lp->StationName, PARM_OWN_NAME );
+	}
 	lp->EnableEncryption = PARM_ENABLE_ENCRYPTION;
-	if ( PARM_KEY1 && ( strlen( PARM_KEY1 ) <= MAX_KEY_LEN ))
+	if ( PARM_KEY1 && ( strlen( PARM_KEY1 ) <= MAX_KEY_LEN )) {
 		strcpy( lp->Key1, PARM_KEY1 );
-	if ( PARM_KEY2 && ( strlen( PARM_KEY2 ) <= MAX_KEY_LEN ))
+	}
+	if ( PARM_KEY2 && ( strlen( PARM_KEY2 ) <= MAX_KEY_LEN )) {
 		strcpy( lp->Key2, PARM_KEY2 );
-	if ( PARM_KEY3 && ( strlen( PARM_KEY3 ) <= MAX_KEY_LEN ))
+	}
+	if ( PARM_KEY3 && ( strlen( PARM_KEY3 ) <= MAX_KEY_LEN )) {
 		strcpy( lp->Key3, PARM_KEY3 );
-	if ( PARM_KEY4 && ( strlen( PARM_KEY4 ) <= MAX_KEY_LEN ))
+	}
+	if ( PARM_KEY4 && ( strlen( PARM_KEY4 ) <= MAX_KEY_LEN )) {
 		strcpy( lp->Key4, PARM_KEY4 );
+	}
 
 	lp->TransmitKeyID = PARM_TX_KEY;
 
@@ -618,15 +629,17 @@ int wl_insert(struct net_device *dev)
 	lp->DownloadFirmware = 1 ; //;?to be upgraded PARM_DOWNLOAD_FIRMWARE;
 	lp->AuthKeyMgmtSuite = PARM_AUTH_KEY_MGMT_SUITE;
 
-	if ( strchr( "Yy", PARM_LOAD_BALANCING[0] ) != NULL )
+	if ( strchr( "Yy", PARM_LOAD_BALANCING[0] ) != NULL ) {
 		lp->loadBalancing = 1;
-	else
+	} else {
 		lp->loadBalancing = 0;
+	}
 
-	if ( strchr( "Yy", PARM_MEDIUM_DISTRIBUTION[0] ) != NULL )
+	if ( strchr( "Yy", PARM_MEDIUM_DISTRIBUTION[0] ) != NULL ) {
 		lp->mediumDistribution = 1;
-	else
+	} else {
 		lp->mediumDistribution = 0;
+	}
 
 	lp->txPowLevel = PARM_TX_POW_LEVEL;
 
@@ -642,20 +655,24 @@ int wl_insert(struct net_device *dev)
 	lp->atimWindow          = PARM_OWN_ATIM_WINDOW;
 	lp->holdoverDuration    = PARM_PM_HOLDOVER_DURATION;
 	lp->PMEnabled           = PARM_PM_ENABLED;  //;?
-	if ( strchr( "Yy", PARM_CREATE_IBSS[0] ) != NULL )
+	if ( strchr( "Yy", PARM_CREATE_IBSS[0] ) != NULL ) {
 		lp->CreateIBSS = 1;
-	else
+	} else {
 		lp->CreateIBSS = 0;
-	if ( strchr( "Nn", PARM_MULTICAST_RX[0] ) != NULL )
+	}
+	if ( strchr( "Nn", PARM_MULTICAST_RX[0] ) != NULL ) {
 		lp->MulticastReceive = 0;
-	else
+	} else {
 		lp->MulticastReceive = 1;
-	if ( strchr( "Yy", PARM_PROMISCUOUS_MODE[0] ) != NULL )
+	}
+	if ( strchr( "Yy", PARM_PROMISCUOUS_MODE[0] ) != NULL ) {
 		lp->promiscuousMode = 1;
-	else
+	} else {
 		lp->promiscuousMode = 0;
-	for( i = 0; i < ETH_ALEN; i++ )
-		lp->MACAddress[i] = PARM_NETWORK_ADDR[i];
+	}
+	for( i = 0; i < ETH_ALEN; i++ ) {
+	   lp->MACAddress[i] = PARM_NETWORK_ADDR[i];
+	}
 
 	lp->connectionControl = PARM_CONNECTION_CONTROL;
 
@@ -664,22 +681,26 @@ int wl_insert(struct net_device *dev)
 	//;?should we restore this to allow smaller memory footprint
 	lp->DTIMPeriod = PARM_OWN_DTIM_PERIOD;
 
-	if ( strchr( "Yy", PARM_REJECT_ANY[0] ) != NULL )
+	if ( strchr( "Yy", PARM_REJECT_ANY[0] ) != NULL ) {
 		lp->RejectAny = 1;
-	else
+	} else {
 		lp->RejectAny = 0;
-	if ( strchr( "Nn", PARM_EXCLUDE_UNENCRYPTED[0] ) != NULL )
+	}
+	if ( strchr( "Nn", PARM_EXCLUDE_UNENCRYPTED[0] ) != NULL ) {
 		lp->ExcludeUnencrypted = 0;
-	else
+	} else {
 		lp->ExcludeUnencrypted = 1;
-	if ( strchr( "Yy", PARM_MULTICAST_PM_BUFFERING[0] ) != NULL )
+	}
+	if ( strchr( "Yy", PARM_MULTICAST_PM_BUFFERING[0] ) != NULL ) {
 		lp->multicastPMBuffering = 1;
-	else
+	} else {
 		lp->multicastPMBuffering = 0;
-	if ( strchr( "Yy", PARM_INTRA_BSS_RELAY[0] ) != NULL )
+	}
+	if ( strchr( "Yy", PARM_INTRA_BSS_RELAY[0] ) != NULL ) {
 		lp->intraBSSRelay = 1;
-	else
+	} else {
 		lp->intraBSSRelay = 0;
+	}
 
 	lp->ownBeaconInterval = PARM_OWN_BEACON_INTERVAL;
 	lp->coexistence       = PARM_COEXISTENCE;
@@ -719,10 +740,11 @@ int wl_insert(struct net_device *dev)
 #endif  /* USE_WDS */
 #endif  /* HCF_AP */
 #ifdef USE_RTS
-	if ( strchr( "Yy", useRTS[0] ) != NULL )
+	if ( strchr( "Yy", useRTS[0] ) != NULL ) {
 		lp->useRTS = 1;
-	else
+	} else {
 		lp->useRTS = 0;
+	}
 #endif  /* USE_RTS */
 
 
@@ -887,10 +909,12 @@ int wl_insert(struct net_device *dev)
 	}
 
 #if 0 //SCULL_USE_PROC /* don't waste space if unused */
-	proc_create_data( "wlags", 0, NULL, &scull_read_procmem_fops, dev );
+	create_proc_read_entry( "wlags", 0, NULL, scull_read_procmem, dev );
 	proc_mkdir("driver/wlags49", 0);
+	proc_write("driver/wlags49/wlags49_type", write_int, &lp->wlags49_type);
 #endif /* SCULL_USE_PROC */
 
+	DBG_LEAVE( DbgInfo );
 	return result;
 
 hcf_failed:
@@ -908,6 +932,8 @@ failed:
 
 	result = -EFAULT;
 
+
+	DBG_LEAVE( DbgInfo );
 	return result;
 } // wl_insert
 /*============================================================================*/
@@ -934,7 +960,9 @@ int wl_reset(struct net_device *dev)
 {
 	struct wl_private  *lp = wl_priv(dev);
 	int                 hcf_status = HCF_SUCCESS;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_reset" );
+	DBG_ENTER( DbgInfo );
 	DBG_PARAM( DbgInfo, "dev", "%s (0x%p)", dev->name, dev );
 	DBG_PARAM( DbgInfo, "dev->base_addr", "(%#03lx)", dev->base_addr );
 
@@ -981,6 +1009,7 @@ int wl_reset(struct net_device *dev)
 	}
 
 out:
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_reset
 /*============================================================================*/
@@ -1008,6 +1037,9 @@ int wl_go( struct wl_private *lp )
 	int  	hcf_status = HCF_SUCCESS;
 	char	*cp = NULL;			//fw_image
 	int	retries = 0;
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_go" );
+	DBG_ENTER( DbgInfo );
 
 	hcf_status = wl_disable( lp );
 	if ( hcf_status != HCF_SUCCESS ) {
@@ -1104,6 +1136,7 @@ int 			rc;
 		}
 		if ( hcf_status != HCF_SUCCESS ) {
 			DBG_ERROR( DbgInfo, "Firmware Download failed\n" );
+			DBG_LEAVE( DbgInfo );
 			return hcf_status;
 		}
 	}
@@ -1131,7 +1164,7 @@ int 			rc;
 				CNV_INT_TO_LITTLE( lp->hcfCtx.IFB_FWIdentity.version_major ),
 				CNV_INT_TO_LITTLE( lp->hcfCtx.IFB_FWIdentity.version_minor ));
 
-	/* now we will get the MAC address of the card */
+	/* now we wil get the MAC address of the card */
 	lp->ltvRecord.len = 4;
 	if ( CNV_INT_TO_LITTLE( lp->hcfCtx.IFB_FWIdentity.comp_id ) == COMP_ID_FW_AP  ) {
 		lp->ltvRecord.typ = CFG_NIC_MAC_ADDR;
@@ -1142,6 +1175,7 @@ int 			rc;
 	hcf_status = hcf_get_info( &lp->hcfCtx, (LTVP)&( lp->ltvRecord ));
 	if ( hcf_status != HCF_SUCCESS ) {
 		DBG_ERROR( DbgInfo, "Could not retrieve MAC address\n" );
+		DBG_LEAVE( DbgInfo );
 		return hcf_status;
 	}
 	memcpy( lp->MACAddress, &lp->ltvRecord.u.u8[0], ETH_ALEN );
@@ -1160,6 +1194,7 @@ int 			rc;
 #endif // USE_WDS
 		hcf_status = wl_connect( lp );
 	}
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_go
 /*============================================================================*/
@@ -1187,7 +1222,9 @@ int 			rc;
 void wl_set_wep_keys( struct wl_private *lp )
 {
 	int count = 0;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_set_wep_keys" );
+	DBG_ENTER( DbgInfo );
 	DBG_PARAM( DbgInfo, "lp", "%s (0x%p)", lp->dev->name, lp );
 	if ( lp->EnableEncryption ) {
 		/* NOTE: CFG_CNF_ENCRYPTION is set in wl_put_ltv() as it's a static
@@ -1225,6 +1262,8 @@ void wl_set_wep_keys( struct wl_private *lp )
 		DBG_NOTICE( DbgInfo, "encrypt: %d, ID: %d\n", lp->EnableEncryption, lp->TransmitKeyID );
 		DBG_NOTICE( DbgInfo, "set key: %s(%d) [%d]\n", lp->DefaultKeys.key[lp->TransmitKeyID-1].key, lp->DefaultKeys.key[lp->TransmitKeyID-1].len, lp->TransmitKeyID-1 );
 	}
+
+	DBG_LEAVE( DbgInfo );
 } // wl_set_wep_keys
 /*============================================================================*/
 
@@ -1250,7 +1289,9 @@ void wl_set_wep_keys( struct wl_private *lp )
 int wl_apply(struct wl_private *lp)
 {
 	int hcf_status = HCF_SUCCESS;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_apply" );
+	DBG_ENTER( DbgInfo );
 	DBG_ASSERT( lp != NULL);
 	DBG_PARAM( DbgInfo, "lp", "%s (0x%p)", lp->dev->name, lp );
 
@@ -1266,11 +1307,13 @@ int wl_apply(struct wl_private *lp)
 			hcf_status = wl_disconnect( lp );
 			if ( hcf_status != HCF_SUCCESS ) {
 				DBG_ERROR( DbgInfo, "Disconnect failed\n" );
+				DBG_LEAVE( DbgInfo );
 				return -1;
 			}
 			hcf_status = wl_disable( lp );
 			if ( hcf_status != HCF_SUCCESS ) {
 				DBG_ERROR( DbgInfo, "Disable failed\n" );
+				DBG_LEAVE( DbgInfo );
 				return -1;
 			} else {
 				/* Write out configuration to the device, enable, and reconnect.
@@ -1292,6 +1335,7 @@ int wl_apply(struct wl_private *lp)
 		}
 	}
 
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_apply
 /*============================================================================*/
@@ -1319,16 +1363,19 @@ int wl_put_ltv_init( struct wl_private *lp )
 	int i;
 	int hcf_status;
 	CFG_RID_LOG_STRCT *RidLog;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_put_ltv_init" );
+	DBG_ENTER( DbgInfo );
 	if ( lp == NULL ) {
 		DBG_ERROR( DbgInfo, "lp pointer is NULL\n" );
+		DBG_LEAVE( DbgInfo );
 		return -1;
 	}
 	/* DMA/IO */
 	lp->ltvRecord.len = 2;
 	lp->ltvRecord.typ = CFG_CNTL_OPT;
 
-	/* The Card Services build must ALWAYS be configured for 16-bit I/O. PCI or
+	/* The Card Services build must ALWAYS configure for 16-bit I/O. PCI or
 	   CardBus can be set to either 16/32 bit I/O, or Bus Master DMA, but only
 	   for Hermes-2.5 */
 #ifdef BUS_PCMCIA
@@ -1387,6 +1434,7 @@ int wl_put_ltv_init( struct wl_private *lp )
 	DBG_TRACE( DbgInfo, "CFG_REG_INFO_LOG\n" );
 	DBG_TRACE( DbgInfo, "CFG_REG_INFO_LOG result           : 0x%04x\n",
 			   hcf_status );
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_put_ltv_init
 /*============================================================================*/
@@ -1413,6 +1461,9 @@ int wl_put_ltv( struct wl_private *lp )
 {
 	int len;
 	int hcf_status;
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_put_ltv" );
+	DBG_ENTER( DbgInfo );
 
 	if ( lp == NULL ) {
 		DBG_ERROR( DbgInfo, "lp pointer is NULL\n" );
@@ -1528,8 +1579,7 @@ int wl_put_ltv( struct wl_private *lp )
 	hcf_status = hcf_put_info( &lp->hcfCtx, (LTVP)&( lp->ltvRecord ));
 
 	/* Own Name (Station Nickname) */
-	len = (strlen(lp->StationName) + 1) & ~0x01;
-	if (len != 0) {
+	if (( len = ( strlen( lp->StationName ) + 1 ) & ~0x01 ) != 0 ) {
 		//DBG_TRACE( DbgInfo, "CFG_CNF_OWN_NAME                  : %s\n",
 		//           lp->StationName );
 
@@ -1578,7 +1628,7 @@ int wl_put_ltv( struct wl_private *lp )
 		lp->ltvRecord.u.u16[0]  = CNV_INT_TO_LITTLE( lp->TxRateControl[0] );
 #endif  // WARP
 
-//;?skip temporarily to see whether the RID or something else is the problem hcf_status = hcf_put_info( &lp->hcfCtx, (LTVP)&( lp->ltvRecord ));
+//;?skip temporarily to see whether the RID or something else is the probelm hcf_status = hcf_put_info( &lp->hcfCtx, (LTVP)&( lp->ltvRecord ));
 
 		DBG_TRACE( DbgInfo, "CFG_TX_RATE_CNTL 2.4GHz           : 0x%04x\n",
 				   lp->TxRateControl[0] );
@@ -1943,14 +1993,13 @@ int wl_put_ltv( struct wl_private *lp )
 	lp->ltvRecord.typ       = CFG_SET_WPA_AUTH_KEY_MGMT_SUITE;
 	lp->ltvRecord.u.u16[0]  = CNV_INT_TO_LITTLE( lp->AuthKeyMgmtSuite );
 	hcf_status = hcf_put_info( &lp->hcfCtx, (LTVP)&( lp->ltvRecord ));
-
-	/* If WEP (or no) keys are being used, write (or clear) them */
-	if (lp->wext_enc != IW_ENCODE_ALG_TKIP)
-		wl_set_wep_keys(lp);
+	/* WEP Keys */
+	wl_set_wep_keys( lp );
 
 	/* Country Code */
 	/* countryInfo, ltvCountryInfo, CFG_CNF_COUNTRY_INFO */
 
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_put_ltv
 /*============================================================================*/
@@ -1979,6 +2028,7 @@ static int __init wl_module_init( void )
 	int result;
 	/*------------------------------------------------------------------------*/
 
+	DBG_FUNC( "wl_module_init" );
 
 #if DBG
 	/* Convert "standard" PCMCIA parameter pc_debug to a reasonable DebugFlag value.
@@ -2003,6 +2053,7 @@ static int __init wl_module_init( void )
 	}
 #endif /* DBG */
 
+	DBG_ENTER( DbgInfo );
 	printk(KERN_INFO "%s\n", VERSION_INFO);
     	printk(KERN_INFO "*** Modified for kernel 2.6 by Henk de Groot <pe1dnn@amsat.org>\n");
         printk(KERN_INFO "*** Based on 7.18 version by Andrey Borzenkov <arvidjaar@mail.ru> $Revision: 39 $\n");
@@ -2015,6 +2066,7 @@ static int __init wl_module_init( void )
 // #endif /* (HCF_TYPE) & HCF_TYPE_AP */
 
 	result = wl_adapter_init_module( );
+	DBG_LEAVE( DbgInfo );
 	return result;
 } // init_module
 /*============================================================================*/
@@ -2039,10 +2091,16 @@ static int __init wl_module_init( void )
  ******************************************************************************/
 static void __exit wl_module_exit( void )
 {
+	DBG_FUNC( "wl_module_exit" );
+	DBG_ENTER(DbgInfo);
+
 	wl_adapter_cleanup_module( );
 #if 0 //SCULL_USE_PROC /* don't waste space if unused */
-	remove_proc_entry( "wlags", NULL );		//;?why so a-symmetric compared to location of proc_create_data
+	remove_proc_entry( "wlags", NULL );		//;?why so a-symmetric compared to location of create_proc_read_entry
 #endif
+
+	DBG_LEAVE( DbgInfo );
+	return;
 } // cleanup_module
 /*============================================================================*/
 
@@ -2250,6 +2308,9 @@ void wl_remove( struct net_device *dev )
 {
 	struct wl_private   *lp = wl_priv(dev);
 	unsigned long   flags;
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_remove" );
+	DBG_ENTER( DbgInfo );
 
 	DBG_PARAM( DbgInfo, "dev", "%s (0x%p)", dev->name, dev );
 
@@ -2281,6 +2342,8 @@ void wl_remove( struct net_device *dev )
 #ifdef USE_RTS
 	if ( lp->useRTS == 1 ) {
 		wl_unlock( lp, &flags );
+
+		DBG_LEAVE( DbgInfo );
 		return;
 	}
 #endif  /* USE_RTS */
@@ -2289,6 +2352,9 @@ void wl_remove( struct net_device *dev )
 	hcf_connect( &lp->hcfCtx, HCF_DISCONNECT );
 
 	wl_unlock( lp, &flags );
+
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_remove
 /*============================================================================*/
 
@@ -2314,6 +2380,9 @@ void wl_suspend( struct net_device *dev )
 {
 	struct wl_private  *lp = wl_priv(dev);
 	unsigned long   flags;
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_suspend" );
+	DBG_ENTER( DbgInfo );
 
 	DBG_PARAM( DbgInfo, "dev", "%s (0x%p)", dev->name, dev );
 
@@ -2339,6 +2408,9 @@ void wl_suspend( struct net_device *dev )
 	lp->portState = WVLAN_PORT_STATE_DISABLED;
 
 	wl_unlock( lp, &flags );
+
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_suspend
 /*============================================================================*/
 
@@ -2364,6 +2436,9 @@ void wl_resume(struct net_device *dev)
 {
 	struct wl_private  *lp = wl_priv(dev);
 	unsigned long   flags;
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_resume" );
+	DBG_ENTER( DbgInfo );
 
 	DBG_PARAM( DbgInfo, "dev", "%s (0x%p)", dev->name, dev );
 
@@ -2385,6 +2460,9 @@ void wl_resume(struct net_device *dev)
 	wl_act_int_on( lp );
 
 	wl_unlock( lp, &flags );
+
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_resume
 /*============================================================================*/
 
@@ -2395,7 +2473,7 @@ void wl_resume(struct net_device *dev)
  *
  *  DESCRIPTION:
  *
- *      This function performs a check on the device and calls wl_remove() if
+ *      This function perfroms a check on the device and calls wl_remove() if
  *  necessary. This function can be used for all bus types, but exists mostly
  *  for the benefit of the Card Services driver, as there are times when
  *  wl_remove() does not get called.
@@ -2412,6 +2490,9 @@ void wl_resume(struct net_device *dev)
 void wl_release( struct net_device *dev )
 {
 	struct wl_private  *lp = wl_priv(dev);
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_release" );
+	DBG_ENTER( DbgInfo );
 
 	DBG_PARAM( DbgInfo, "dev", "%s (0x%p)", dev->name, dev );
 	/* If wl_remove() hasn't been called (i.e. when Card Services is shut
@@ -2422,6 +2503,9 @@ void wl_release( struct net_device *dev )
 
 		lp->is_registered = FALSE;
 	}
+
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_release
 /*============================================================================*/
 
@@ -2495,6 +2579,9 @@ p_s8 * wl_get_irq_list( void )
 int wl_enable( struct wl_private *lp )
 {
 	int hcf_status = HCF_SUCCESS;
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_enable" );
+	DBG_ENTER( DbgInfo );
 
 	if ( lp->portState == WVLAN_PORT_STATE_ENABLED ) {
 		DBG_TRACE( DbgInfo, "No action: Card already enabled\n" );
@@ -2508,7 +2595,7 @@ int wl_enable( struct wl_private *lp )
 			lp->portState = WVLAN_PORT_STATE_ENABLED;   //;?bad mnemonic, NIC iso PORT
 #ifdef ENABLE_DMA
 			if ( lp->use_dma ) {
-				wl_pci_dma_hcf_supply( lp );  //;?always successful?
+				wl_pci_dma_hcf_supply( lp );  //;?always succes?
 			}
 #endif
 		}
@@ -2516,6 +2603,7 @@ int wl_enable( struct wl_private *lp )
 	if ( hcf_status != HCF_SUCCESS ) {  //;?make this an assert
 		DBG_TRACE( DbgInfo, "failed: 0x%x\n", hcf_status );
 	}
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_enable
 /*============================================================================*/
@@ -2541,9 +2629,14 @@ int wl_enable( struct wl_private *lp )
  ******************************************************************************/
 void wl_enable_wds_ports( struct wl_private * lp )
 {
+
+	DBG_FUNC( "wl_enable_wds_ports" );
+	DBG_ENTER( DbgInfo );
 	if ( CNV_INT_TO_LITTLE( lp->hcfCtx.IFB_FWIdentity.comp_id ) == COMP_ID_FW_AP  ){
 		DBG_ERROR( DbgInfo, "!!!!;? someone misunderstood something !!!!!\n" );
 	}
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_enable_wds_ports
 #endif  /* USE_WDS */
 /*============================================================================*/
@@ -2569,15 +2662,21 @@ void wl_enable_wds_ports( struct wl_private * lp )
 int wl_connect( struct wl_private *lp )
 {
 	int hcf_status;
+	/*------------------------------------------------------------------------*/
+
+	DBG_FUNC( "wl_connect" );
+	DBG_ENTER( DbgInfo );
 
 	if ( lp->portState != WVLAN_PORT_STATE_ENABLED ) {
 		DBG_TRACE( DbgInfo, "No action: Not in enabled state\n" );
+		DBG_LEAVE( DbgInfo );
 		return HCF_SUCCESS;
 	}
 	hcf_status = hcf_cntl( &lp->hcfCtx, HCF_CNTL_CONNECT );
 	if ( hcf_status == HCF_SUCCESS ) {
 		lp->portState = WVLAN_PORT_STATE_CONNECTED;
 	}
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_connect
 /*============================================================================*/
@@ -2603,15 +2702,21 @@ int wl_connect( struct wl_private *lp )
 int wl_disconnect( struct wl_private *lp )
 {
 	int hcf_status;
+	/*------------------------------------------------------------------------*/
+
+	DBG_FUNC( "wl_disconnect" );
+	DBG_ENTER( DbgInfo );
 
 	if ( lp->portState != WVLAN_PORT_STATE_CONNECTED ) {
 		DBG_TRACE( DbgInfo, "No action: Not in connected state\n" );
+		DBG_LEAVE( DbgInfo );
 		return HCF_SUCCESS;
 	}
 	hcf_status = hcf_cntl( &lp->hcfCtx, HCF_CNTL_DISCONNECT );
 	if ( hcf_status == HCF_SUCCESS ) {
 		lp->portState = WVLAN_PORT_STATE_ENABLED;
 	}
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_disconnect
 /*============================================================================*/
@@ -2638,6 +2743,9 @@ int wl_disconnect( struct wl_private *lp )
 int wl_disable( struct wl_private *lp )
 {
 	int hcf_status = HCF_SUCCESS;
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_disable" );
+	DBG_ENTER( DbgInfo );
 
 	if ( lp->portState == WVLAN_PORT_STATE_DISABLED ) {
 		DBG_TRACE( DbgInfo, "No action: Port state is disabled\n" );
@@ -2657,6 +2765,7 @@ int wl_disable( struct wl_private *lp )
 	if ( hcf_status != HCF_SUCCESS ) {
 		DBG_TRACE( DbgInfo, "failed: 0x%x\n", hcf_status );
 	}
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_disable
 /*============================================================================*/
@@ -2682,6 +2791,10 @@ int wl_disable( struct wl_private *lp )
  ******************************************************************************/
 void wl_disable_wds_ports( struct wl_private * lp )
 {
+
+	DBG_FUNC( "wl_disable_wds_ports" );
+	DBG_ENTER( DbgInfo );
+
 	if ( CNV_INT_TO_LITTLE( lp->hcfCtx.IFB_FWIdentity.comp_id ) == COMP_ID_FW_AP  ){
 		DBG_ERROR( DbgInfo, "!!!!;? someone misunderstood something !!!!!\n" );
 	}
@@ -2693,6 +2806,7 @@ void wl_disable_wds_ports( struct wl_private * lp )
 // 		wl_disable( lp, HCF_PORT_5 );
 // 		wl_disable( lp, HCF_PORT_6 );
 // 	}
+	DBG_LEAVE( DbgInfo );
 	return;
 } // wl_disable_wds_ports
 #endif // USE_WDS
@@ -2720,7 +2834,9 @@ void wl_disable_wds_ports( struct wl_private * lp )
 int wl_mbx( struct wl_private *lp )
 {
 	int hcf_status = HCF_SUCCESS;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_mbx" );
+	DBG_ENTER( DbgInfo );
 	DBG_TRACE( DbgInfo, "Mailbox Info: IFB_MBInfoLen: %d\n",
 			   lp->hcfCtx.IFB_MBInfoLen );
 
@@ -2732,15 +2848,19 @@ int wl_mbx( struct wl_private *lp )
 
 	if ( hcf_status != HCF_SUCCESS ) {
 		DBG_ERROR( DbgInfo, "hcf_get_info returned 0x%x\n", hcf_status );
+
+		DBG_LEAVE( DbgInfo );
 		return hcf_status;
 	}
 
-	if ( lp->ltvRecord.typ == CFG_MB_INFO )
+	if ( lp->ltvRecord.typ == CFG_MB_INFO ) {
+		DBG_LEAVE( DbgInfo );
 		return hcf_status;
-
+	}
 	/* Endian translate the mailbox data, then process the message */
 	wl_endian_translate_mailbox( &( lp->ltvRecord ));
 	wl_process_mailbox( lp );
+	DBG_LEAVE( DbgInfo );
 	return hcf_status;
 } // wl_mbx
 /*============================================================================*/
@@ -2753,7 +2873,7 @@ int wl_mbx( struct wl_private *lp )
  *  DESCRIPTION:
  *
  *      This function will perform the tedious task of endian translating all
- *  fields within a mailbox message which need translating.
+ *  fields withtin a mailbox message which need translating.
  *
  *  PARAMETERS:
  *
@@ -2766,6 +2886,9 @@ int wl_mbx( struct wl_private *lp )
  ******************************************************************************/
 void wl_endian_translate_mailbox( ltv_t *ltv )
 {
+
+	DBG_FUNC( "wl_endian_translate_mailbox" );
+	DBG_ENTER( DbgInfo );
 	switch( ltv->typ ) {
 	  case CFG_TALLIES:
 		break;
@@ -2853,6 +2976,9 @@ void wl_endian_translate_mailbox( ltv_t *ltv )
 	default:
 		break;
 	}
+
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_endian_translate_mailbox
 /*============================================================================*/
 
@@ -2862,7 +2988,7 @@ void wl_endian_translate_mailbox( ltv_t *ltv )
  *
  *  DESCRIPTION:
  *
- *      This function processes the mailbox data.
+ *      This function will process the mailbox data.
  *
  *  PARAMETERS:
  *
@@ -2877,7 +3003,9 @@ void wl_process_mailbox( struct wl_private *lp )
 {
 	ltv_t   *ltv;
 	hcf_16  ltv_val = 0xFFFF;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_process_mailbox" );
+	DBG_ENTER( DbgInfo );
 	ltv = &( lp->ltvRecord );
 
 	switch( ltv->typ ) {
@@ -3029,9 +3157,7 @@ void wl_process_mailbox( struct wl_private *lp )
 
 					memset( ssid, 0, sizeof( ssid ));
 					strncpy( ssid, &probe_rsp->rawData[2],
-						 min_t(u8,
-							probe_rsp->rawData[1],
-							HCF_MAX_NAME_LEN - 1));
+							 probe_rsp->rawData[1] );
 
 					DBG_TRACE( DbgInfo, "(%s) SSID        : %s\n",
 							   lp->dev->name, ssid );
@@ -3306,6 +3432,8 @@ void wl_process_mailbox( struct wl_private *lp )
 		DBG_TRACE( DbgInfo, "UNKNOWN MESSAGE: 0x%04x\n", ltv->typ );
 		break;
 	}
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_process_mailbox
 /*============================================================================*/
 #endif  /* ifndef USE_MBOX_SYNC */
@@ -3333,7 +3461,9 @@ void wl_process_mailbox( struct wl_private *lp )
 void wl_wds_netdev_register( struct wl_private *lp )
 {
 	int count;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_wds_netdev_register" );
+	DBG_ENTER( DbgInfo );
 	//;?why is there no USE_WDS clause like in wl_enable_wds_ports
 	if ( CNV_INT_TO_LITTLE( lp->hcfCtx.IFB_FWIdentity.comp_id ) == COMP_ID_FW_AP  ) {
 		for( count = 0; count < NUM_WDS_PORTS; count++ ) {
@@ -3350,6 +3480,8 @@ void wl_wds_netdev_register( struct wl_private *lp )
 			}
 		}
 	}
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_wds_netdev_register
 /*============================================================================*/
 
@@ -3376,7 +3508,9 @@ void wl_wds_netdev_register( struct wl_private *lp )
 void wl_wds_netdev_deregister( struct wl_private *lp )
 {
 	int count;
-
+	/*------------------------------------------------------------------------*/
+	DBG_FUNC( "wl_wds_netdev_deregister" );
+	DBG_ENTER( DbgInfo );
 	if ( CNV_INT_TO_LITTLE( lp->hcfCtx.IFB_FWIdentity.comp_id ) == COMP_ID_FW_AP  ) {
 		for( count = 0; count < NUM_WDS_PORTS; count++ ) {
 			if ( WVLAN_VALID_MAC_ADDRESS( lp->wds_port[count].wdsAddress )) {
@@ -3385,6 +3519,8 @@ void wl_wds_netdev_deregister( struct wl_private *lp )
 			lp->wds_port[count].is_registered = FALSE;
 		}
 	}
+	DBG_LEAVE( DbgInfo );
+	return;
 } // wl_wds_netdev_deregister
 /*============================================================================*/
 #endif  /* USE_WDS */
@@ -3394,215 +3530,229 @@ void wl_wds_netdev_deregister( struct wl_private *lp )
 /*
  * The proc filesystem: function to read and entry
  */
-static void printf_hcf_16(struct seq_file *m, const char *s, hcf_16 *p, int n)
-{
-	int i, len;
+int printf_hcf_16( char *s, char *buf, hcf_16* p, int n );
+int printf_hcf_16( char *s, char *buf, hcf_16* p, int n ) {
 
-	seq_printf(m, "%-20.20s: ", s);
-	len = 22;
+int i, len;
 
-	for (i = 0; i < n; i++) {
-		if (len % 80 > 75)
-			seq_putc(m, '\n');
-		seq_printf(m, "%04X ", p[i]);
+	len = sprintf(buf, "%s", s );
+	while ( len < 20 ) len += sprintf(buf+len, " " );
+	len += sprintf(buf+len,": " );
+	for ( i = 0; i < n; i++ ) {
+		if ( len % 80 > 75 ) {
+			len += sprintf(buf+len,"\n" );
+		}
+		len += sprintf(buf+len,"%04X ", p[i] );
 	}
-	seq_putc(m, '\n');
-}
+	len += sprintf(buf+len,"\n" );
+	return len;
+} // printf_hcf_16
 
-static void printf_hcf_8(struct seq_file *m, const char *s, hcf_8 *p, int n)
-{
-	int i, len;
+int printf_hcf_8( char *s, char *buf, hcf_8* p, int n );
+int printf_hcf_8( char *s, char *buf, hcf_8* p, int n ) {
 
-	seq_printf(m, "%-20.20s: ", s);
-	len = 22;
+int i, len;
 
-	for (i = 0; i <= n; i++) {
-		if (len % 80 > 77)
-			seq_putc(m, '\n');
-		seq_printf(m, "%02X ", p[i]);
+	len = sprintf(buf, "%s", s );
+	while ( len < 20 ) len += sprintf(buf+len, " " );
+	len += sprintf(buf+len,": " );
+	for ( i = 0; i <= n; i++ ) {
+		if ( len % 80 > 77 ) {
+			len += sprintf(buf+len,"\n" );
+		}
+		len += sprintf(buf+len,"%02X ", p[i] );
 	}
-	seq_putc(m, '\n');
-}
+	len += sprintf(buf+len,"\n" );
+	return len;
+} // printf_hcf8
 
-static void printf_strct(struct seq_file *m, const char *s, hcf_16 *p)
-{
-	int i, len;
+int printf_strct( char *s, char *buf, hcf_16* p );
+int printf_strct( char *s, char *buf, hcf_16* p ) {
 
-	seq_printf(m, "%-20.20s: ", s);
-	len = 22;
+int i, len;
 
+	len = sprintf(buf, "%s", s );
+	while ( len < 20 ) len += sprintf(buf+len, " " );
+	len += sprintf(buf+len,": " );
 	for ( i = 0; i <= *p; i++ ) {
-		if (len % 80 > 75)
-			seq_putc(m, '\n');
-		seq_printf(m,"%04X ", p[i]);
+		if ( len % 80 > 75 ) {
+			len += sprintf(buf+len,"\n" );
+		}
+		len += sprintf(buf+len,"%04X ", p[i] );
 	}
-	seq_putc(m, '\n');
-}
+	len += sprintf(buf+len,"\n" );
+	return len;
+} // printf_strct
 
-int scull_read_procmem(struct seq_file *m, void *v)
+int scull_read_procmem(char *buf, char **start, off_t offset, int len, int *eof, void *data )
 {
-	struct wl_private	*lp = m->private;
+	struct wl_private	*lp = NULL;
 	IFBP				ifbp;
    	CFG_HERMES_TALLIES_STRCT *p;
 
+    #define LIMIT (PAGE_SIZE-80) /* don't print any more after this size */
+
+    len=0;
+
+	lp = ((struct net_device *)data)->priv;
 	if (lp == NULL) {
-		seq_puts(m, "No wl_private in scull_read_procmem\n" );
+        len += sprintf(buf+len,"No wl_private in scull_read_procmem\n" );
 	} else if ( lp->wlags49_type == 0 ){
-		ifbp = &lp->hcfCtx;
-		seq_printf(m, "Magic:               0x%04X\n", ifbp->IFB_Magic );
-		seq_printf(m, "IOBase:              0x%04X\n", ifbp->IFB_IOBase );
-		seq_printf(m, "LinkStat:            0x%04X\n", ifbp->IFB_LinkStat );
-		seq_printf(m, "DSLinkStat:          0x%04X\n", ifbp->IFB_DSLinkStat );
-		seq_printf(m, "TickIni:         0x%08lX\n", ifbp->IFB_TickIni );
-		seq_printf(m, "TickCnt:             0x%04X\n", ifbp->IFB_TickCnt );
-		seq_printf(m, "IntOffCnt:           0x%04X\n", ifbp->IFB_IntOffCnt );
-		printf_hcf_16(m, "IFB_FWIdentity",
-			      &ifbp->IFB_FWIdentity.len, ifbp->IFB_FWIdentity.len + 1 );
+   	    ifbp = &lp->hcfCtx;
+   	    len += sprintf(buf+len,"Magic:               0x%04X\n", ifbp->IFB_Magic );
+   	    len += sprintf(buf+len,"IOBase:              0x%04X\n", ifbp->IFB_IOBase );
+   	    len += sprintf(buf+len,"LinkStat:            0x%04X\n", ifbp->IFB_LinkStat );
+   	    len += sprintf(buf+len,"DSLinkStat:          0x%04X\n", ifbp->IFB_DSLinkStat );
+   	    len += sprintf(buf+len,"TickIni:         0x%08lX\n", ifbp->IFB_TickIni );
+   	    len += sprintf(buf+len,"TickCnt:             0x%04X\n", ifbp->IFB_TickCnt );
+   	    len += sprintf(buf+len,"IntOffCnt:           0x%04X\n", ifbp->IFB_IntOffCnt );
+		len += printf_hcf_16( "IFB_FWIdentity", &buf[len],
+							  &ifbp->IFB_FWIdentity.len, ifbp->IFB_FWIdentity.len + 1 );
 	} else if ( lp->wlags49_type == 1 ) {
-		seq_printf(m, "Channel:              0x%04X\n", lp->Channel );
-/****** seq_printf(m, "slock:                  %d\n", lp->slock );		*/
+   	    len += sprintf(buf+len,"Channel:              0x%04X\n", lp->Channel );
+/****** len += sprintf(buf+len,"slock:                  %d\n", lp->slock );		*/
 //x		struct tq_struct            "task:               0x%04X\n", lp->task );
 //x		struct net_device_stats     "stats:              0x%04X\n", lp->stats );
 #ifdef WIRELESS_EXT
 //x		struct iw_statistics        "wstats:             0x%04X\n", lp->wstats );
-//x   	    seq_printf(m, "spy_number:           0x%04X\n", lp->spy_number );
+//x   	    len += sprintf(buf+len,"spy_number:           0x%04X\n", lp->spy_number );
 //x		u_char                      spy_address[IW_MAX_SPY][ETH_ALEN];
 //x		struct iw_quality           spy_stat[IW_MAX_SPY];
 #endif // WIRELESS_EXT
-		seq_printf(m, "IFB:                  0x%p\n", &lp->hcfCtx );
-		seq_printf(m, "flags:                %#.8lX\n", lp->flags );  //;?use this format from now on
-		seq_printf(m, "DebugFlag(wl_private) 0x%04X\n", lp->DebugFlag );
+   	    len += sprintf(buf+len,"IFB:                  0x%p\n", &lp->hcfCtx );
+   	    len += sprintf(buf+len,"flags:                %#.8lX\n", lp->flags );  //;?use this format from now on
+   	    len += sprintf(buf+len,"DebugFlag(wl_private) 0x%04X\n", lp->DebugFlag );
 #if DBG
-		seq_printf(m, "DebugFlag (DbgInfo):   0x%08lX\n", DbgInfo->DebugFlag );
+   	    len += sprintf(buf+len,"DebugFlag (DbgInfo):   0x%08lX\n", DbgInfo->DebugFlag );
 #endif // DBG
-		seq_printf(m, "is_registered:        0x%04X\n", lp->is_registered );
+   	    len += sprintf(buf+len,"is_registered:        0x%04X\n", lp->is_registered );
 //x		CFG_DRV_INFO_STRCT          "driverInfo:         0x%04X\n", lp->driverInfo );
-		printf_strct( m, "driverInfo", (hcf_16*)&lp->driverInfo );
+		len += printf_strct( "driverInfo", &buf[len], (hcf_16*)&lp->driverInfo );
 //x		CFG_IDENTITY_STRCT          "driverIdentity:     0x%04X\n", lp->driverIdentity );
-		printf_strct( m, "driverIdentity", (hcf_16*)&lp->driverIdentity );
+		len += printf_strct( "driverIdentity", &buf[len], (hcf_16*)&lp->driverIdentity );
 //x		CFG_FW_IDENTITY_STRCT       "StationIdentity:    0x%04X\n", lp->StationIdentity );
-		printf_strct( m, "StationIdentity", (hcf_16*)&lp->StationIdentity );
+		len += printf_strct( "StationIdentity", &buf[len], (hcf_16*)&lp->StationIdentity );
 //x		CFG_PRI_IDENTITY_STRCT      "PrimaryIdentity:    0x%04X\n", lp->PrimaryIdentity );
-		printf_strct( m, "PrimaryIdentity", (hcf_16*)&lp->hcfCtx.IFB_PRIIdentity );
-		printf_strct( m, "PrimarySupplier", (hcf_16*)&lp->hcfCtx.IFB_PRISup );
+		len += printf_strct( "PrimaryIdentity", &buf[len], (hcf_16*)&lp->hcfCtx.IFB_PRIIdentity );
+		len += printf_strct( "PrimarySupplier", &buf[len], (hcf_16*)&lp->hcfCtx.IFB_PRISup );
 //x		CFG_PRI_IDENTITY_STRCT      "NICIdentity:        0x%04X\n", lp->NICIdentity );
-		printf_strct( m, "NICIdentity", (hcf_16*)&lp->NICIdentity );
+		len += printf_strct( "NICIdentity", &buf[len], (hcf_16*)&lp->NICIdentity );
 //x		ltv_t                       "ltvRecord:          0x%04X\n", lp->ltvRecord );
-		seq_printf(m, "txBytes:              0x%08lX\n", lp->txBytes );
-		seq_printf(m, "maxPort:              0x%04X\n", lp->maxPort );        /* 0 for STA, 6 for AP */
-		/* Elements used for async notification from hardware */
+   	    len += sprintf(buf+len,"txBytes:              0x%08lX\n", lp->txBytes );
+   	    len += sprintf(buf+len,"maxPort:              0x%04X\n", lp->maxPort );        /* 0 for STA, 6 for AP */
+	/* Elements used for async notification from hardware */
 //x		RID_LOG_STRCT				RidList[10];
 //x		ltv_t                       "updatedRecord:      0x%04X\n", lp->updatedRecord );
 //x		PROBE_RESP				    "ProbeResp:                    0x%04X\n", lp->ProbeResp );
 //x		ASSOC_STATUS_STRCT          "assoc_stat:         0x%04X\n", lp->assoc_stat );
 //x		SECURITY_STATUS_STRCT       "sec_stat:           0x%04X\n", lp->sec_stat );
 //x		u_char                      lookAheadBuf[WVLAN_MAX_LOOKAHEAD];
-		seq_printf(m, "PortType:             0x%04X\n", lp->PortType );           // 1 - 3 (1 [Normal] | 3 [AdHoc])
-		seq_printf(m, "Channel:              0x%04X\n", lp->Channel );            // 0 - 14 (0)
+   	    len += sprintf(buf+len,"PortType:             0x%04X\n", lp->PortType );           // 1 - 3 (1 [Normal] | 3 [AdHoc])
+   	    len += sprintf(buf+len,"Channel:              0x%04X\n", lp->Channel );            // 0 - 14 (0)
 //x		hcf_16                      TxRateControl[2];
-		seq_printf(m, "TxRateControl[2]:     0x%04X 0x%04X\n",
-			       lp->TxRateControl[0], lp->TxRateControl[1] );
-		seq_printf(m, "DistanceBetweenAPs:   0x%04X\n", lp->DistanceBetweenAPs ); // 1 - 3 (1)
-		seq_printf(m, "RTSThreshold:         0x%04X\n", lp->RTSThreshold );       // 0 - 2347 (2347)
-		seq_printf(m, "PMEnabled:            0x%04X\n", lp->PMEnabled );          // 0 - 2, 8001 - 8002 (0)
-		seq_printf(m, "MicrowaveRobustness:  0x%04X\n", lp->MicrowaveRobustness );// 0 - 1 (0)
-		seq_printf(m, "CreateIBSS:           0x%04X\n", lp->CreateIBSS );         // 0 - 1 (0)
-		seq_printf(m, "MulticastReceive:     0x%04X\n", lp->MulticastReceive );   // 0 - 1 (1)
-		seq_printf(m, "MaxSleepDuration:     0x%04X\n", lp->MaxSleepDuration );   // 0 - 65535 (100)
+   	    len += sprintf(buf+len,"TxRateControl[2]:     0x%04X 0x%04X\n",
+						lp->TxRateControl[0], lp->TxRateControl[1] );
+   	    len += sprintf(buf+len,"DistanceBetweenAPs:   0x%04X\n", lp->DistanceBetweenAPs ); // 1 - 3 (1)
+   	    len += sprintf(buf+len,"RTSThreshold:         0x%04X\n", lp->RTSThreshold );       // 0 - 2347 (2347)
+   	    len += sprintf(buf+len,"PMEnabled:            0x%04X\n", lp->PMEnabled );          // 0 - 2, 8001 - 8002 (0)
+   	    len += sprintf(buf+len,"MicrowaveRobustness:  0x%04X\n", lp->MicrowaveRobustness );// 0 - 1 (0)
+   	    len += sprintf(buf+len,"CreateIBSS:           0x%04X\n", lp->CreateIBSS );         // 0 - 1 (0)
+   	    len += sprintf(buf+len,"MulticastReceive:     0x%04X\n", lp->MulticastReceive );   // 0 - 1 (1)
+   	    len += sprintf(buf+len,"MaxSleepDuration:     0x%04X\n", lp->MaxSleepDuration );   // 0 - 65535 (100)
 //x		hcf_8                       MACAddress[ETH_ALEN];
-		printf_hcf_8(m, "MACAddress", lp->MACAddress, ETH_ALEN );
+		len += printf_hcf_8( "MACAddress", &buf[len], lp->MACAddress, ETH_ALEN );
 //x		char                        NetworkName[HCF_MAX_NAME_LEN+1];
-		seq_printf(m, "NetworkName:          %.32s\n", lp->NetworkName );
+   	    len += sprintf(buf+len,"NetworkName:          %.32s\n", lp->NetworkName );
 //x		char                        StationName[HCF_MAX_NAME_LEN+1];
-		seq_printf(m, "EnableEncryption:     0x%04X\n", lp->EnableEncryption );   // 0 - 1 (0)
+   	    len += sprintf(buf+len,"EnableEncryption:     0x%04X\n", lp->EnableEncryption );   // 0 - 1 (0)
 //x		char                        Key1[MAX_KEY_LEN+1];
-		printf_hcf_8( m, "Key1", lp->Key1, MAX_KEY_LEN );
+		len += printf_hcf_8( "Key1", &buf[len], lp->Key1, MAX_KEY_LEN );
 //x		char                        Key2[MAX_KEY_LEN+1];
 //x		char                        Key3[MAX_KEY_LEN+1];
 //x		char                        Key4[MAX_KEY_LEN+1];
-		seq_printf(m, "TransmitKeyID:        0x%04X\n", lp->TransmitKeyID );      // 1 - 4 (1)
+   	    len += sprintf(buf+len,"TransmitKeyID:        0x%04X\n", lp->TransmitKeyID );      // 1 - 4 (1)
 //x		CFG_DEFAULT_KEYS_STRCT	    "DefaultKeys:         0x%04X\n", lp->DefaultKeys );
 //x		u_char                      mailbox[MB_SIZE];
 //x		char                        szEncryption[MAX_ENC_LEN];
-		seq_printf(m, "driverEnable:         0x%04X\n", lp->driverEnable );
-		seq_printf(m, "wolasEnable:          0x%04X\n", lp->wolasEnable );
-		seq_printf(m, "atimWindow:           0x%04X\n", lp->atimWindow );
-		seq_printf(m, "holdoverDuration:     0x%04X\n", lp->holdoverDuration );
+   	    len += sprintf(buf+len,"driverEnable:         0x%04X\n", lp->driverEnable );
+   	    len += sprintf(buf+len,"wolasEnable:          0x%04X\n", lp->wolasEnable );
+   	    len += sprintf(buf+len,"atimWindow:           0x%04X\n", lp->atimWindow );
+   	    len += sprintf(buf+len,"holdoverDuration:     0x%04X\n", lp->holdoverDuration );
 //x		hcf_16                      MulticastRate[2];
-		seq_printf(m, "authentication:       0x%04X\n", lp->authentication ); // is this AP specific?
-		seq_printf(m, "promiscuousMode:      0x%04X\n", lp->promiscuousMode );
-		seq_printf(m, "DownloadFirmware:     0x%04X\n", lp->DownloadFirmware );   // 0 - 2 (0 [None] | 1 [STA] | 2 [AP])
-		seq_printf(m, "AuthKeyMgmtSuite:     0x%04X\n", lp->AuthKeyMgmtSuite );
-		seq_printf(m, "loadBalancing:        0x%04X\n", lp->loadBalancing );
-		seq_printf(m, "mediumDistribution:   0x%04X\n", lp->mediumDistribution );
-		seq_printf(m, "txPowLevel:           0x%04X\n", lp->txPowLevel );
-//   	    seq_printf(m, "shortRetryLimit:    0x%04X\n", lp->shortRetryLimit );
-//   	    seq_printf(m, "longRetryLimit:     0x%04X\n", lp->longRetryLimit );
+   	    len += sprintf(buf+len,"authentication:       0x%04X\n", lp->authentication ); // is this AP specific?
+   	    len += sprintf(buf+len,"promiscuousMode:      0x%04X\n", lp->promiscuousMode );
+   	    len += sprintf(buf+len,"DownloadFirmware:     0x%04X\n", lp->DownloadFirmware );   // 0 - 2 (0 [None] | 1 [STA] | 2 [AP])
+   	    len += sprintf(buf+len,"AuthKeyMgmtSuite:     0x%04X\n", lp->AuthKeyMgmtSuite );
+   	    len += sprintf(buf+len,"loadBalancing:        0x%04X\n", lp->loadBalancing );
+   	    len += sprintf(buf+len,"mediumDistribution:   0x%04X\n", lp->mediumDistribution );
+   	    len += sprintf(buf+len,"txPowLevel:           0x%04X\n", lp->txPowLevel );
+//   	    len += sprintf(buf+len,"shortRetryLimit:    0x%04X\n", lp->shortRetryLimit );
+//   	    len += sprintf(buf+len,"longRetryLimit:     0x%04X\n", lp->longRetryLimit );
 //x		hcf_16                      srsc[2];
 //x		hcf_16                      brsc[2];
-		seq_printf(m, "connectionControl:    0x%04X\n", lp->connectionControl );
+   	    len += sprintf(buf+len,"connectionControl:    0x%04X\n", lp->connectionControl );
 //x		//hcf_16                      probeDataRates[2];
-		seq_printf(m, "ownBeaconInterval:    0x%04X\n", lp->ownBeaconInterval );
-		seq_printf(m, "coexistence:          0x%04X\n", lp->coexistence );
+   	    len += sprintf(buf+len,"ownBeaconInterval:    0x%04X\n", lp->ownBeaconInterval );
+   	    len += sprintf(buf+len,"coexistence:          0x%04X\n", lp->coexistence );
 //x		WVLAN_FRAME                 "txF:                0x%04X\n", lp->txF );
 //x		WVLAN_LFRAME                txList[DEFAULT_NUM_TX_FRAMES];
 //x		struct list_head            "txFree:             0x%04X\n", lp->txFree );
 //x		struct list_head            txQ[WVLAN_MAX_TX_QUEUES];
-		seq_printf(m, "netif_queue_on:       0x%04X\n", lp->netif_queue_on );
-		seq_printf(m, "txQ_count:            0x%04X\n", lp->txQ_count );
+   	    len += sprintf(buf+len,"netif_queue_on:       0x%04X\n", lp->netif_queue_on );
+   	    len += sprintf(buf+len,"txQ_count:            0x%04X\n", lp->txQ_count );
 //x		DESC_STRCT                  "desc_rx:            0x%04X\n", lp->desc_rx );
 //x		DESC_STRCT                  "desc_tx:            0x%04X\n", lp->desc_tx );
 //x		WVLAN_PORT_STATE            "portState:          0x%04X\n", lp->portState );
 //x		ScanResult                  "scan_results:       0x%04X\n", lp->scan_results );
 //x		ProbeResult                 "probe_results:      0x%04X\n", lp->probe_results );
-		seq_printf(m, "probe_num_aps:        0x%04X\n", lp->probe_num_aps );
-		seq_printf(m, "use_dma:              0x%04X\n", lp->use_dma );
+   	    len += sprintf(buf+len,"probe_num_aps:        0x%04X\n", lp->probe_num_aps );
+   	    len += sprintf(buf+len,"use_dma:              0x%04X\n", lp->use_dma );
 //x		DMA_STRCT                   "dma:                0x%04X\n", lp->dma );
 #ifdef USE_RTS
-		seq_printf(m, "useRTS:               0x%04X\n", lp->useRTS );
+   	    len += sprintf(buf+len,"useRTS:               0x%04X\n", lp->useRTS );
 #endif  // USE_RTS
 #if 1 //;? (HCF_TYPE) & HCF_TYPE_AP
 		//;?should we restore this to allow smaller memory footprint
 		//;?I guess not. This should be brought under Debug mode only
-		seq_printf(m, "DTIMPeriod:           0x%04X\n", lp->DTIMPeriod );         // 1 - 255 (1)
-		seq_printf(m, "multicastPMBuffering: 0x%04X\n", lp->multicastPMBuffering );
-		seq_printf(m, "RejectAny:            0x%04X\n", lp->RejectAny );          // 0 - 1 (0)
-		seq_printf(m, "ExcludeUnencrypted:   0x%04X\n", lp->ExcludeUnencrypted ); // 0 - 1 (1)
-		seq_printf(m, "intraBSSRelay:        0x%04X\n", lp->intraBSSRelay );
-		seq_printf(m, "wlags49_type:             0x%08lX\n", lp->wlags49_type );
+   	    len += sprintf(buf+len,"DTIMPeriod:           0x%04X\n", lp->DTIMPeriod );         // 1 - 255 (1)
+   	    len += sprintf(buf+len,"multicastPMBuffering: 0x%04X\n", lp->multicastPMBuffering );
+   	    len += sprintf(buf+len,"RejectAny:            0x%04X\n", lp->RejectAny );          // 0 - 1 (0)
+   	    len += sprintf(buf+len,"ExcludeUnencrypted:   0x%04X\n", lp->ExcludeUnencrypted ); // 0 - 1 (1)
+   	    len += sprintf(buf+len,"intraBSSRelay:        0x%04X\n", lp->intraBSSRelay );
+   	    len += sprintf(buf+len,"wlags49_type:             0x%08lX\n", lp->wlags49_type );
 #ifdef USE_WDS
 //x		WVLAN_WDS_IF                wds_port[NUM_WDS_PORTS];
 #endif // USE_WDS
 #endif // HCF_AP
 	} else if ( lp->wlags49_type == 2 ){
-		seq_printf(m, "tallies to be added\n" );
+        len += sprintf(buf+len,"tallies to be added\n" );
 //Hermes Tallies (IFB substructure) {
-		p = &lp->hcfCtx.IFB_NIC_Tallies;
-		seq_printf(m, "TxUnicastFrames:          %08lX\n", p->TxUnicastFrames );
-		seq_printf(m, "TxMulticastFrames:        %08lX\n", p->TxMulticastFrames );
-		seq_printf(m, "TxFragments:              %08lX\n", p->TxFragments );
-		seq_printf(m, "TxUnicastOctets:          %08lX\n", p->TxUnicastOctets );
-		seq_printf(m, "TxMulticastOctets:        %08lX\n", p->TxMulticastOctets );
-		seq_printf(m, "TxDeferredTransmissions:  %08lX\n", p->TxDeferredTransmissions );
-		seq_printf(m, "TxSingleRetryFrames:      %08lX\n", p->TxSingleRetryFrames );
-		seq_printf(m, "TxMultipleRetryFrames:    %08lX\n", p->TxMultipleRetryFrames );
-		seq_printf(m, "TxRetryLimitExceeded:     %08lX\n", p->TxRetryLimitExceeded );
-		seq_printf(m, "TxDiscards:               %08lX\n", p->TxDiscards );
-		seq_printf(m, "RxUnicastFrames:          %08lX\n", p->RxUnicastFrames );
-		seq_printf(m, "RxMulticastFrames:        %08lX\n", p->RxMulticastFrames );
-		seq_printf(m, "RxFragments:              %08lX\n", p->RxFragments );
-		seq_printf(m, "RxUnicastOctets:          %08lX\n", p->RxUnicastOctets );
-		seq_printf(m, "RxMulticastOctets:        %08lX\n", p->RxMulticastOctets );
-		seq_printf(m, "RxFCSErrors:              %08lX\n", p->RxFCSErrors );
-		seq_printf(m, "RxDiscardsNoBuffer:       %08lX\n", p->RxDiscardsNoBuffer );
-		seq_printf(m, "TxDiscardsWrongSA:        %08lX\n", p->TxDiscardsWrongSA );
-		seq_printf(m, "RxWEPUndecryptable:       %08lX\n", p->RxWEPUndecryptable );
-		seq_printf(m, "RxMsgInMsgFragments:      %08lX\n", p->RxMsgInMsgFragments );
-		seq_printf(m, "RxMsgInBadMsgFragments:   %08lX\n", p->RxMsgInBadMsgFragments );
-		seq_printf(m, "RxDiscardsWEPICVError:    %08lX\n", p->RxDiscardsWEPICVError );
-		seq_printf(m, "RxDiscardsWEPExcluded:    %08lX\n", p->RxDiscardsWEPExcluded );
+   	    p = &lp->hcfCtx.IFB_NIC_Tallies;
+        len += sprintf(buf+len,"TxUnicastFrames:          %08lX\n", p->TxUnicastFrames );
+        len += sprintf(buf+len,"TxMulticastFrames:        %08lX\n", p->TxMulticastFrames );
+        len += sprintf(buf+len,"TxFragments:              %08lX\n", p->TxFragments );
+        len += sprintf(buf+len,"TxUnicastOctets:          %08lX\n", p->TxUnicastOctets );
+        len += sprintf(buf+len,"TxMulticastOctets:        %08lX\n", p->TxMulticastOctets );
+        len += sprintf(buf+len,"TxDeferredTransmissions:  %08lX\n", p->TxDeferredTransmissions );
+        len += sprintf(buf+len,"TxSingleRetryFrames:      %08lX\n", p->TxSingleRetryFrames );
+        len += sprintf(buf+len,"TxMultipleRetryFrames:    %08lX\n", p->TxMultipleRetryFrames );
+        len += sprintf(buf+len,"TxRetryLimitExceeded:     %08lX\n", p->TxRetryLimitExceeded );
+        len += sprintf(buf+len,"TxDiscards:               %08lX\n", p->TxDiscards );
+        len += sprintf(buf+len,"RxUnicastFrames:          %08lX\n", p->RxUnicastFrames );
+        len += sprintf(buf+len,"RxMulticastFrames:        %08lX\n", p->RxMulticastFrames );
+        len += sprintf(buf+len,"RxFragments:              %08lX\n", p->RxFragments );
+        len += sprintf(buf+len,"RxUnicastOctets:          %08lX\n", p->RxUnicastOctets );
+        len += sprintf(buf+len,"RxMulticastOctets:        %08lX\n", p->RxMulticastOctets );
+        len += sprintf(buf+len,"RxFCSErrors:              %08lX\n", p->RxFCSErrors );
+        len += sprintf(buf+len,"RxDiscardsNoBuffer:       %08lX\n", p->RxDiscardsNoBuffer );
+        len += sprintf(buf+len,"TxDiscardsWrongSA:        %08lX\n", p->TxDiscardsWrongSA );
+        len += sprintf(buf+len,"RxWEPUndecryptable:       %08lX\n", p->RxWEPUndecryptable );
+        len += sprintf(buf+len,"RxMsgInMsgFragments:      %08lX\n", p->RxMsgInMsgFragments );
+        len += sprintf(buf+len,"RxMsgInBadMsgFragments:   %08lX\n", p->RxMsgInBadMsgFragments );
+        len += sprintf(buf+len,"RxDiscardsWEPICVError:    %08lX\n", p->RxDiscardsWEPICVError );
+        len += sprintf(buf+len,"RxDiscardsWEPExcluded:    %08lX\n", p->RxDiscardsWEPExcluded );
 #if (HCF_EXT) & HCF_EXT_TALLIES_FW
-		//to be added ;?
+        //to be added ;?
 #endif // HCF_EXT_TALLIES_FW
 	} else if ( lp->wlags49_type & 0x8000 ) {	//;?kludgy but it is unclear to me were else to place this
 #if DBG
@@ -3610,23 +3760,34 @@ int scull_read_procmem(struct seq_file *m, void *v)
 #endif // DBG
 		lp->wlags49_type = 0;				//default to IFB again ;?
 	} else {
-		seq_printf(m, "unknown value for wlags49_type: 0x%08lX\n", lp->wlags49_type );
-		seq_puts(m,
-			 "0x0000 - IFB\n"
-			 "0x0001 - wl_private\n"
-			 "0x0002 - Tallies\n"
-			 "0x8xxx - Change debufflag\n"
-			 "ERROR    0001\nWARNING  0002\nNOTICE   0004\nTRACE    0008\n"
-			 "VERBOSE  0010\nPARAM    0020\nBREAK    0040\nRX       0100\n"
-			 "TX       0200\nDS       0400\n");
+        len += sprintf(buf+len,"unknown value for wlags49_type: 0x%08lX\n", lp->wlags49_type );
+        len += sprintf(buf+len,"0x0000 - IFB\n" );
+        len += sprintf(buf+len,"0x0001 - wl_private\n" );
+        len += sprintf(buf+len,"0x0002 - Tallies\n" );
+        len += sprintf(buf+len,"0x8xxx - Change debufflag\n" );
+        len += sprintf(buf+len,"ERROR    0001\nWARNING  0002\nNOTICE   0004\nTRACE    0008\n" );
+        len += sprintf(buf+len,"VERBOSE  0010\nPARAM    0020\nBREAK    0040\nRX       0100\n" );
+        len += sprintf(buf+len,"TX       0200\nDS       0400\n" );
 	}
-	return 0;
+    return len;
 } // scull_read_procmem
+
+static void proc_write(const char *name, write_proc_t *w, void *data)
+{
+	struct proc_dir_entry * entry = create_proc_entry(name, S_IFREG | S_IWUSR, NULL);
+	if (entry) {
+		entry->write_proc = w;
+		entry->data = data;
+	}
+} // proc_write
 
 static int write_int(struct file *file, const char *buffer, unsigned long count, void *data)
 {
 	static char		proc_number[11];
 	unsigned int	nr = 0;
+
+	DBG_FUNC( "write_int" );
+	DBG_ENTER( DbgInfo );
 
 	if (count > 9) {
 		count = -EINVAL;
@@ -3644,6 +3805,7 @@ static int write_int(struct file *file, const char *buffer, unsigned long count,
 		}
 	}
 	DBG_PRINT( "value: %08X\n", nr );
+	DBG_LEAVE( DbgInfo );
 	return count;
 } // write_int
 
@@ -3659,7 +3821,7 @@ static int write_int(struct file *file, const char *buffer, unsigned long count,
 		lp->timer_oor.data = (unsigned long)lp;
 		lp->timer_oor.expires = RUN_AT( 3 * HZ );
 		add_timer( &lp->timer_oor );
-		printk(KERN_NOTICE "wl_enable: %ld\n", jiffies );		//;?remove me 1 day
+		printk( "<5>wl_enable: %ld\n", jiffies );		//;?remove me 1 day
 #endif //DN554
 #ifdef DN554
 /*******************************************************************************
@@ -3683,9 +3845,13 @@ void timer_oor( u_long arg )
 {
 	struct wl_private       *lp = (struct wl_private *)arg;
 
+    /*------------------------------------------------------------------------*/
+
+    DBG_FUNC( "timer_oor" );
+    DBG_ENTER( DbgInfo );
     DBG_PARAM( DbgInfo, "arg", "0x%08lx", arg );
 
-	printk(KERN_NOTICE "timer_oor: %ld 0x%04X\n", jiffies, lp->timer_oor_cnt );		//;?remove me 1 day
+	printk( "<5>timer_oor: %ld 0x%04X\n", jiffies, lp->timer_oor_cnt );		//;?remove me 1 day
 	lp->timer_oor_cnt += 10;
     if ( (lp->timer_oor_cnt & ~DS_OOR) > 300 ) {
 		lp->timer_oor_cnt = 300;
@@ -3696,6 +3862,8 @@ void timer_oor( u_long arg )
 	lp->timer_oor.data = (unsigned long)lp;
 	lp->timer_oor.expires = RUN_AT( (lp->timer_oor_cnt & ~DS_OOR) * HZ );
 	add_timer( &lp->timer_oor );
+
+    DBG_LEAVE( DbgInfo );
 } // timer_oor
 #endif //DN554
 

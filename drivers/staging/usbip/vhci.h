@@ -8,9 +8,6 @@
  *
  */
 
-#ifndef __USBIP_VHCI_H
-#define __USBIP_VHCI_H
-
 #include <linux/device.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
@@ -71,7 +68,12 @@ struct vhci_unlink {
 	unsigned long unlink_seqnum;
 };
 
-/* Number of supported ports. Value has an upperbound of USB_MAXCHILDREN */
+/*
+ * The number of ports is less than 16 ?
+ * USB_MAXCHILDREN is statically defined to 16 in usb.h.  Its maximum value
+ * would be 31 because the event_bits[1] of struct usb_hub is defined as
+ * unsigned long in hub.h
+ */
 #define VHCI_NPORTS 8
 
 /* for usb_bus.hcpriv */
@@ -95,9 +97,11 @@ struct vhci_hcd {
 
 extern struct vhci_hcd *the_controller;
 extern const struct attribute_group dev_attr_group;
+#define hardware (&the_controller->pdev.dev)
 
 /* vhci_hcd.c */
 void rh_port_connect(int rhport, enum usb_device_speed speed);
+void rh_port_disconnect(int rhport);
 
 /* vhci_rx.c */
 struct urb *pickup_urb_and_free_priv(struct vhci_device *vdev, __u32 seqnum);
@@ -125,5 +129,3 @@ static inline struct device *vhci_dev(struct vhci_hcd *vhci)
 {
 	return vhci_to_hcd(vhci)->self.controller;
 }
-
-#endif /* __USBIP_VHCI_H */

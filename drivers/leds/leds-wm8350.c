@@ -10,13 +10,13 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/leds.h>
 #include <linux/err.h>
 #include <linux/mfd/wm8350/pmic.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
-#include <linux/module.h>
 
 /* Microamps */
 static const int isink_cur[] = {
@@ -128,10 +128,7 @@ static void wm8350_led_disable(struct wm8350_led *led)
 	ret = regulator_disable(led->isink);
 	if (ret != 0) {
 		dev_err(led->cdev.dev, "Failed to disable ISINK: %d\n", ret);
-		ret = regulator_enable(led->dcdc);
-		if (ret != 0)
-			dev_err(led->cdev.dev, "Failed to reenable DCDC: %d\n",
-				ret);
+		regulator_enable(led->dcdc);
 		return;
 	}
 
@@ -202,8 +199,8 @@ static int wm8350_led_probe(struct platform_device *pdev)
 {
 	struct regulator *isink, *dcdc;
 	struct wm8350_led *led;
-	struct wm8350_led_platform_data *pdata = dev_get_platdata(&pdev->dev);
-	int i;
+	struct wm8350_led_platform_data *pdata = pdev->dev.platform_data;
+	int ret, i;
 
 	if (pdata == NULL) {
 		dev_err(&pdev->dev, "no platform data\n");
@@ -216,21 +213,24 @@ static int wm8350_led_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	isink = devm_regulator_get(&pdev->dev, "led_isink");
+	isink = regulator_get(&pdev->dev, "led_isink");
 	if (IS_ERR(isink)) {
-		dev_err(&pdev->dev, "%s: can't get ISINK\n", __func__);
+		printk(KERN_ERR "%s: can't get ISINK\n", __func__);
 		return PTR_ERR(isink);
 	}
 
-	dcdc = devm_regulator_get(&pdev->dev, "led_vcc");
+	dcdc = regulator_get(&pdev->dev, "led_vcc");
 	if (IS_ERR(dcdc)) {
-		dev_err(&pdev->dev, "%s: can't get DCDC\n", __func__);
-		return PTR_ERR(dcdc);
+		printk(KERN_ERR "%s: can't get DCDC\n", __func__);
+		ret = PTR_ERR(dcdc);
+		goto err_isink;
 	}
 
-	led = devm_kzalloc(&pdev->dev, sizeof(*led), GFP_KERNEL);
-	if (led == NULL)
-		return -ENOMEM;
+	led = kzalloc(sizeof(*led), GFP_KERNEL);
+	if (led == NULL) {
+		ret = -ENOMEM;
+		goto err_dcdc;
+	}
 
 	led->cdev.brightness_set = wm8350_led_set;
 	led->cdev.default_trigger = pdata->default_trigger;
@@ -256,7 +256,19 @@ static int wm8350_led_probe(struct platform_device *pdev)
 	led->value = LED_OFF;
 	platform_set_drvdata(pdev, led);
 
-	return led_classdev_register(&pdev->dev, &led->cdev);
+	ret = led_classdev_register(&pdev->dev, &led->cdev);
+	if (ret < 0)
+		goto err_led;
+
+	return 0;
+
+ err_led:
+	kfree(led);
+ err_dcdc:
+	regulator_put(dcdc);
+ err_isink:
+	regulator_put(isink);
+	return ret;
 }
 
 static int wm8350_led_remove(struct platform_device *pdev)
@@ -264,8 +276,11 @@ static int wm8350_led_remove(struct platform_device *pdev)
 	struct wm8350_led *led = platform_get_drvdata(pdev);
 
 	led_classdev_unregister(&led->cdev);
-	flush_work(&led->work);
+	flush_work_sync(&led->work);
 	wm8350_led_disable(led);
+	regulator_put(led->dcdc);
+	regulator_put(led->isink);
+	kfree(led);
 	return 0;
 }
 
@@ -279,7 +294,17 @@ static struct platform_driver wm8350_led_driver = {
 	.shutdown = wm8350_led_shutdown,
 };
 
-module_platform_driver(wm8350_led_driver);
+static int __devinit wm8350_led_init(void)
+{
+	return platform_driver_register(&wm8350_led_driver);
+}
+module_init(wm8350_led_init);
+
+static void wm8350_led_exit(void)
+{
+	platform_driver_unregister(&wm8350_led_driver);
+}
+module_exit(wm8350_led_exit);
 
 MODULE_AUTHOR("Mark Brown");
 MODULE_DESCRIPTION("WM8350 LED driver");

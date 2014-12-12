@@ -35,8 +35,6 @@
 #include <linux/lockd/lockd.h>
 #include <linux/nfs.h>
 
-#include "netns.h"
-
 #define NLMDBG_FACILITY		NLMDBG_SVC
 #define LOCKD_BUFSIZE		(1024 + NLMSVC_XDRSIZE)
 #define ALLOWED_SIGS		(sigmask(SIGKILL))
@@ -51,8 +49,6 @@ static unsigned int		nlmsvc_users;
 static struct task_struct	*nlmsvc_task;
 static struct svc_rqst		*nlmsvc_rqst;
 unsigned long			nlmsvc_timeout;
-
-int lockd_net_id;
 
 /*
  * These can be set at insmod time (useful for NFS as root filesystem),
@@ -87,36 +83,32 @@ static unsigned long get_lockd_grace_period(void)
 		return nlm_timeout * 5 * HZ;
 }
 
-static void grace_ender(struct work_struct *grace)
-{
-	struct delayed_work *dwork = container_of(grace, struct delayed_work,
-						  work);
-	struct lockd_net *ln = container_of(dwork, struct lockd_net,
-					    grace_period_end);
+static struct lock_manager lockd_manager = {
+};
 
-	locks_end_grace(&ln->lockd_manager);
+static void grace_ender(struct work_struct *not_used)
+{
+	locks_end_grace(&lockd_manager);
 }
 
-static void set_grace_period(struct net *net)
+static DECLARE_DELAYED_WORK(grace_period_end, grace_ender);
+
+static void set_grace_period(void)
 {
 	unsigned long grace_period = get_lockd_grace_period();
-	struct lockd_net *ln = net_generic(net, lockd_net_id);
 
-	locks_start_grace(net, &ln->lockd_manager);
-	cancel_delayed_work_sync(&ln->grace_period_end);
-	schedule_delayed_work(&ln->grace_period_end, grace_period);
+	locks_start_grace(&lockd_manager);
+	cancel_delayed_work_sync(&grace_period_end);
+	schedule_delayed_work(&grace_period_end, grace_period);
 }
 
 static void restart_grace(void)
 {
 	if (nlmsvc_ops) {
-		struct net *net = &init_net;
-		struct lockd_net *ln = net_generic(net, lockd_net_id);
-
-		cancel_delayed_work_sync(&ln->grace_period_end);
-		locks_end_grace(&ln->lockd_manager);
+		cancel_delayed_work_sync(&grace_period_end);
+		locks_end_grace(&lockd_manager);
 		nlmsvc_invalidate_all();
-		set_grace_period(net);
+		set_grace_period();
 	}
 }
 
@@ -126,7 +118,7 @@ static void restart_grace(void)
 static int
 lockd(void *vrqstp)
 {
-	int		err = 0;
+	int		err = 0, preverr = 0;
 	struct svc_rqst *rqstp = vrqstp;
 
 	/* try_to_freeze() is called from svc_recv() */
@@ -140,6 +132,8 @@ lockd(void *vrqstp)
 	if (!nlm_timeout)
 		nlm_timeout = LOCKD_DFLT_TIMEO;
 	nlmsvc_timeout = nlm_timeout * HZ;
+
+	set_grace_period();
 
 	/*
 	 * The main request loop. We don't terminate until the last
@@ -165,14 +159,29 @@ lockd(void *vrqstp)
 		 * recvfrom routine.
 		 */
 		err = svc_recv(rqstp, timeout);
-		if (err == -EAGAIN || err == -EINTR)
+		if (err == -EAGAIN || err == -EINTR) {
+			preverr = err;
 			continue;
+		}
+		if (err < 0) {
+			if (err != preverr) {
+				printk(KERN_WARNING "%s: unexpected error "
+					"from svc_recv (%d)\n", __func__, err);
+				preverr = err;
+			}
+			schedule_timeout_interruptible(HZ);
+			continue;
+		}
+		preverr = err;
+
 		dprintk("lockd: request from %s\n",
 				svc_print_addr(rqstp, buf, sizeof(buf)));
 
 		svc_process(rqstp);
 	}
 	flush_signals(current);
+	cancel_delayed_work_sync(&grace_period_end);
+	locks_end_grace(&lockd_manager);
 	if (nlmsvc_ops)
 		nlmsvc_invalidate_all();
 	nlm_shutdown_hosts();
@@ -180,29 +189,27 @@ lockd(void *vrqstp)
 }
 
 static int create_lockd_listener(struct svc_serv *serv, const char *name,
-				 struct net *net, const int family,
-				 const unsigned short port)
+				 const int family, const unsigned short port)
 {
 	struct svc_xprt *xprt;
 
-	xprt = svc_find_xprt(serv, name, net, family, 0);
+	xprt = svc_find_xprt(serv, name, family, 0);
 	if (xprt == NULL)
-		return svc_create_xprt(serv, name, net, family, port,
+		return svc_create_xprt(serv, name, &init_net, family, port,
 						SVC_SOCK_DEFAULTS);
 	svc_xprt_put(xprt);
 	return 0;
 }
 
-static int create_lockd_family(struct svc_serv *serv, struct net *net,
-			       const int family)
+static int create_lockd_family(struct svc_serv *serv, const int family)
 {
 	int err;
 
-	err = create_lockd_listener(serv, "udp", net, family, nlm_udpport);
+	err = create_lockd_listener(serv, "udp", family, nlm_udpport);
 	if (err < 0)
 		return err;
 
-	return create_lockd_listener(serv, "tcp", net, family, nlm_tcpport);
+	return create_lockd_listener(serv, "tcp", family, nlm_tcpport);
 }
 
 /*
@@ -215,16 +222,16 @@ static int create_lockd_family(struct svc_serv *serv, struct net *net,
  * Returns zero if all listeners are available; otherwise a
  * negative errno value is returned.
  */
-static int make_socks(struct svc_serv *serv, struct net *net)
+static int make_socks(struct svc_serv *serv)
 {
 	static int warned;
 	int err;
 
-	err = create_lockd_family(serv, net, PF_INET);
+	err = create_lockd_family(serv, PF_INET);
 	if (err < 0)
 		goto out_err;
 
-	err = create_lockd_family(serv, net, PF_INET6);
+	err = create_lockd_family(serv, PF_INET6);
 	if (err < 0 && err != -EAFNOSUPPORT)
 		goto out_err;
 
@@ -235,110 +242,23 @@ out_err:
 	if (warned++ == 0)
 		printk(KERN_WARNING
 			"lockd_up: makesock failed, error=%d\n", err);
-	svc_shutdown_net(serv, net);
 	return err;
 }
 
-static int lockd_up_net(struct svc_serv *serv, struct net *net)
-{
-	struct lockd_net *ln = net_generic(net, lockd_net_id);
-	int error;
-
-	if (ln->nlmsvc_users++)
-		return 0;
-
-	error = svc_bind(serv, net);
-	if (error)
-		goto err_bind;
-
-	error = make_socks(serv, net);
-	if (error < 0)
-		goto err_socks;
-	set_grace_period(net);
-	dprintk("lockd_up_net: per-net data created; net=%p\n", net);
-	return 0;
-
-err_socks:
-	svc_rpcb_cleanup(serv, net);
-err_bind:
-	ln->nlmsvc_users--;
-	return error;
-}
-
-static void lockd_down_net(struct svc_serv *serv, struct net *net)
-{
-	struct lockd_net *ln = net_generic(net, lockd_net_id);
-
-	if (ln->nlmsvc_users) {
-		if (--ln->nlmsvc_users == 0) {
-			nlm_shutdown_hosts_net(net);
-			cancel_delayed_work_sync(&ln->grace_period_end);
-			locks_end_grace(&ln->lockd_manager);
-			svc_shutdown_net(serv, net);
-			dprintk("lockd_down_net: per-net data destroyed; net=%p\n", net);
-		}
-	} else {
-		printk(KERN_ERR "lockd_down_net: no users! task=%p, net=%p\n",
-				nlmsvc_task, net);
-		BUG();
-	}
-}
-
-static int lockd_start_svc(struct svc_serv *serv)
-{
-	int error;
-
-	if (nlmsvc_rqst)
-		return 0;
-
-	/*
-	 * Create the kernel thread and wait for it to start.
-	 */
-	nlmsvc_rqst = svc_prepare_thread(serv, &serv->sv_pools[0], NUMA_NO_NODE);
-	if (IS_ERR(nlmsvc_rqst)) {
-		error = PTR_ERR(nlmsvc_rqst);
-		printk(KERN_WARNING
-			"lockd_up: svc_rqst allocation failed, error=%d\n",
-			error);
-		goto out_rqst;
-	}
-
-	svc_sock_update_bufs(serv);
-	serv->sv_maxconn = nlm_max_connections;
-
-	nlmsvc_task = kthread_run(lockd, nlmsvc_rqst, "%s", serv->sv_name);
-	if (IS_ERR(nlmsvc_task)) {
-		error = PTR_ERR(nlmsvc_task);
-		printk(KERN_WARNING
-			"lockd_up: kthread_run failed, error=%d\n", error);
-		goto out_task;
-	}
-	dprintk("lockd_up: service started\n");
-	return 0;
-
-out_task:
-	svc_exit_thread(nlmsvc_rqst);
-	nlmsvc_task = NULL;
-out_rqst:
-	nlmsvc_rqst = NULL;
-	return error;
-}
-
-static struct svc_serv *lockd_create_svc(void)
+/*
+ * Bring up the lockd process if it's not already up.
+ */
+int lockd_up(void)
 {
 	struct svc_serv *serv;
+	int		error = 0;
 
+	mutex_lock(&nlmsvc_mutex);
 	/*
 	 * Check whether we're already up and running.
 	 */
-	if (nlmsvc_rqst) {
-		/*
-		 * Note: increase service usage, because later in case of error
-		 * svc_destroy() will be called.
-		 */
-		svc_get(nlmsvc_rqst->rq_server);
-		return nlmsvc_rqst->rq_server;
-	}
+	if (nlmsvc_rqst)
+		goto out;
 
 	/*
 	 * Sanity check: if there's no pid,
@@ -348,53 +268,55 @@ static struct svc_serv *lockd_create_svc(void)
 		printk(KERN_WARNING
 			"lockd_up: no pid, %d users??\n", nlmsvc_users);
 
+	error = -ENOMEM;
 	serv = svc_create(&nlmsvc_program, LOCKD_BUFSIZE, NULL);
 	if (!serv) {
 		printk(KERN_WARNING "lockd_up: create service failed\n");
-		return ERR_PTR(-ENOMEM);
-	}
-	dprintk("lockd_up: service created\n");
-	return serv;
-}
-
-/*
- * Bring up the lockd process if it's not already up.
- */
-int lockd_up(struct net *net)
-{
-	struct svc_serv *serv;
-	int error;
-
-	mutex_lock(&nlmsvc_mutex);
-
-	serv = lockd_create_svc();
-	if (IS_ERR(serv)) {
-		error = PTR_ERR(serv);
-		goto err_create;
+		goto out;
 	}
 
-	error = lockd_up_net(serv, net);
+	error = make_socks(serv);
 	if (error < 0)
-		goto err_net;
+		goto destroy_and_out;
 
-	error = lockd_start_svc(serv);
-	if (error < 0)
-		goto err_start;
+	/*
+	 * Create the kernel thread and wait for it to start.
+	 */
+	nlmsvc_rqst = svc_prepare_thread(serv, &serv->sv_pools[0]);
+	if (IS_ERR(nlmsvc_rqst)) {
+		error = PTR_ERR(nlmsvc_rqst);
+		nlmsvc_rqst = NULL;
+		printk(KERN_WARNING
+			"lockd_up: svc_rqst allocation failed, error=%d\n",
+			error);
+		goto destroy_and_out;
+	}
 
-	nlmsvc_users++;
+	svc_sock_update_bufs(serv);
+	serv->sv_maxconn = nlm_max_connections;
+
+	nlmsvc_task = kthread_run(lockd, nlmsvc_rqst, serv->sv_name);
+	if (IS_ERR(nlmsvc_task)) {
+		error = PTR_ERR(nlmsvc_task);
+		svc_exit_thread(nlmsvc_rqst);
+		nlmsvc_task = NULL;
+		nlmsvc_rqst = NULL;
+		printk(KERN_WARNING
+			"lockd_up: kthread_run failed, error=%d\n", error);
+		goto destroy_and_out;
+	}
+
 	/*
 	 * Note: svc_serv structures have an initial use count of 1,
 	 * so we exit through here on both success and failure.
 	 */
-err_net:
+destroy_and_out:
 	svc_destroy(serv);
-err_create:
+out:
+	if (!error)
+		nlmsvc_users++;
 	mutex_unlock(&nlmsvc_mutex);
 	return error;
-
-err_start:
-	lockd_down_net(serv, net);
-	goto err_net;
 }
 EXPORT_SYMBOL_GPL(lockd_up);
 
@@ -402,10 +324,9 @@ EXPORT_SYMBOL_GPL(lockd_up);
  * Decrement the user count and bring down lockd if we're the last.
  */
 void
-lockd_down(struct net *net)
+lockd_down(void)
 {
 	mutex_lock(&nlmsvc_mutex);
-	lockd_down_net(nlmsvc_rqst->rq_server, net);
 	if (nlmsvc_users) {
 		if (--nlmsvc_users)
 			goto out;
@@ -420,9 +341,7 @@ lockd_down(struct net *net)
 		BUG();
 	}
 	kthread_stop(nlmsvc_task);
-	dprintk("lockd_down: service stopped\n");
 	svc_exit_thread(nlmsvc_rqst);
-	dprintk("lockd_down: service destroyed\n");
 	nlmsvc_task = NULL;
 	nlmsvc_rqst = NULL;
 out:
@@ -436,7 +355,7 @@ EXPORT_SYMBOL_GPL(lockd_down);
  * Sysctl parameters (same as module parameters, different interface).
  */
 
-static struct ctl_table nlm_sysctls[] = {
+static ctl_table nlm_sysctls[] = {
 	{
 		.procname	= "nlm_grace_period",
 		.data		= &nlm_grace_period,
@@ -490,7 +409,7 @@ static struct ctl_table nlm_sysctls[] = {
 	{ }
 };
 
-static struct ctl_table nlm_sysctl_dir[] = {
+static ctl_table nlm_sysctl_dir[] = {
 	{
 		.procname	= "nfs",
 		.mode		= 0555,
@@ -499,7 +418,7 @@ static struct ctl_table nlm_sysctl_dir[] = {
 	{ }
 };
 
-static struct ctl_table nlm_sysctl_root[] = {
+static ctl_table nlm_sysctl_root[] = {
 	{
 		.procname	= "fs",
 		.mode		= 0555,
@@ -521,7 +440,7 @@ static int param_set_##name(const char *val, struct kernel_param *kp)	\
 	__typeof__(type) num = which_strtol(val, &endp, 0);		\
 	if (endp == val || *endp || num < (min) || num > (max))		\
 		return -EINVAL;						\
-	*((type *) kp->arg) = num;					\
+	*((int *) kp->arg) = num;					\
 	return 0;							\
 }
 
@@ -578,60 +497,24 @@ module_param_call(nlm_tcpport, param_set_port, param_get_int,
 module_param(nsm_use_hostnames, bool, 0644);
 module_param(nlm_max_connections, uint, 0644);
 
-static int lockd_init_net(struct net *net)
-{
-	struct lockd_net *ln = net_generic(net, lockd_net_id);
-
-	INIT_DELAYED_WORK(&ln->grace_period_end, grace_ender);
-	INIT_LIST_HEAD(&ln->grace_list);
-	spin_lock_init(&ln->nsm_clnt_lock);
-	return 0;
-}
-
-static void lockd_exit_net(struct net *net)
-{
-}
-
-static struct pernet_operations lockd_net_ops = {
-	.init = lockd_init_net,
-	.exit = lockd_exit_net,
-	.id = &lockd_net_id,
-	.size = sizeof(struct lockd_net),
-};
-
-
 /*
  * Initialising and terminating the module.
  */
 
 static int __init init_nlm(void)
 {
-	int err;
-
 #ifdef CONFIG_SYSCTL
-	err = -ENOMEM;
 	nlm_sysctl_table = register_sysctl_table(nlm_sysctl_root);
-	if (nlm_sysctl_table == NULL)
-		goto err_sysctl;
-#endif
-	err = register_pernet_subsys(&lockd_net_ops);
-	if (err)
-		goto err_pernet;
+	return nlm_sysctl_table ? 0 : -ENOMEM;
+#else
 	return 0;
-
-err_pernet:
-#ifdef CONFIG_SYSCTL
-	unregister_sysctl_table(nlm_sysctl_table);
-err_sysctl:
 #endif
-	return err;
 }
 
 static void __exit exit_nlm(void)
 {
 	/* FIXME: delete all NLM clients */
 	nlm_shutdown_hosts();
-	unregister_pernet_subsys(&lockd_net_ops);
 #ifdef CONFIG_SYSCTL
 	unregister_sysctl_table(nlm_sysctl_table);
 #endif

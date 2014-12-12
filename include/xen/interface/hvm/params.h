@@ -21,7 +21,7 @@
 #ifndef __XEN_PUBLIC_HVM_PARAMS_H__
 #define __XEN_PUBLIC_HVM_PARAMS_H__
 
-#include <xen/interface/hvm/hvm_op.h>
+#include "hvm_op.h"
 
 /*
  * Parameter space for HVMOP_{set,get}_param.
@@ -90,10 +90,6 @@
 /* Boolean: Enable aligning all periodic vpts to reduce interrupts */
 #define HVM_PARAM_VPT_ALIGN    16
 
-/* Console debug shared memory ring and event channel */
-#define HVM_PARAM_CONSOLE_PFN    17
-#define HVM_PARAM_CONSOLE_EVTCHN 18
-
-#define HVM_NR_PARAMS          19
+#define HVM_NR_PARAMS          17
 
 #endif /* __XEN_PUBLIC_HVM_PARAMS_H__ */

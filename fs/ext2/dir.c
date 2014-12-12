@@ -279,7 +279,7 @@ static unsigned char ext2_type_by_mode[S_IFMT >> S_SHIFT] = {
 
 static inline void ext2_set_de_type(ext2_dirent *de, struct inode *inode)
 {
-	umode_t mode = inode->i_mode;
+	mode_t mode = inode->i_mode;
 	if (EXT2_HAS_INCOMPAT_FEATURE(inode->i_sb, EXT2_FEATURE_INCOMPAT_FILETYPE))
 		de->file_type = ext2_type_by_mode[(mode & S_IFMT)>>S_SHIFT];
 	else
@@ -287,17 +287,17 @@ static inline void ext2_set_de_type(ext2_dirent *de, struct inode *inode)
 }
 
 static int
-ext2_readdir(struct file *file, struct dir_context *ctx)
+ext2_readdir (struct file * filp, void * dirent, filldir_t filldir)
 {
-	loff_t pos = ctx->pos;
-	struct inode *inode = file_inode(file);
+	loff_t pos = filp->f_pos;
+	struct inode *inode = filp->f_path.dentry->d_inode;
 	struct super_block *sb = inode->i_sb;
 	unsigned int offset = pos & ~PAGE_CACHE_MASK;
 	unsigned long n = pos >> PAGE_CACHE_SHIFT;
 	unsigned long npages = dir_pages(inode);
 	unsigned chunk_mask = ~(ext2_chunk_size(inode)-1);
 	unsigned char *types = NULL;
-	int need_revalidate = file->f_version != inode->i_version;
+	int need_revalidate = filp->f_version != inode->i_version;
 
 	if (pos > inode->i_size - EXT2_DIR_REC_LEN(1))
 		return 0;
@@ -314,16 +314,16 @@ ext2_readdir(struct file *file, struct dir_context *ctx)
 			ext2_error(sb, __func__,
 				   "bad page in #%lu",
 				   inode->i_ino);
-			ctx->pos += PAGE_CACHE_SIZE - offset;
+			filp->f_pos += PAGE_CACHE_SIZE - offset;
 			return PTR_ERR(page);
 		}
 		kaddr = page_address(page);
 		if (unlikely(need_revalidate)) {
 			if (offset) {
 				offset = ext2_validate_entry(kaddr, offset, chunk_mask);
-				ctx->pos = (n<<PAGE_CACHE_SHIFT) + offset;
+				filp->f_pos = (n<<PAGE_CACHE_SHIFT) + offset;
 			}
-			file->f_version = inode->i_version;
+			filp->f_version = inode->i_version;
 			need_revalidate = 0;
 		}
 		de = (ext2_dirent *)(kaddr+offset);
@@ -336,19 +336,22 @@ ext2_readdir(struct file *file, struct dir_context *ctx)
 				return -EIO;
 			}
 			if (de->inode) {
+				int over;
 				unsigned char d_type = DT_UNKNOWN;
 
 				if (types && de->file_type < EXT2_FT_MAX)
 					d_type = types[de->file_type];
 
-				if (!dir_emit(ctx, de->name, de->name_len,
-						le32_to_cpu(de->inode),
-						d_type)) {
+				offset = (char *)de - kaddr;
+				over = filldir(dirent, de->name, de->name_len,
+						(n<<PAGE_CACHE_SHIFT) | offset,
+						le32_to_cpu(de->inode), d_type);
+				if (over) {
 					ext2_put_page(page);
 					return 0;
 				}
 			}
-			ctx->pos += ext2_rec_len_from_disk(de->rec_len);
+			filp->f_pos += ext2_rec_len_from_disk(de->rec_len);
 		}
 		ext2_put_page(page);
 	}
@@ -642,7 +645,7 @@ int ext2_make_empty(struct inode *inode, struct inode *parent)
 		unlock_page(page);
 		goto fail;
 	}
-	kaddr = kmap_atomic(page);
+	kaddr = kmap_atomic(page, KM_USER0);
 	memset(kaddr, 0, chunk_size);
 	de = (struct ext2_dir_entry_2 *)kaddr;
 	de->name_len = 1;
@@ -657,7 +660,7 @@ int ext2_make_empty(struct inode *inode, struct inode *parent)
 	de->inode = cpu_to_le32(parent->i_ino);
 	memcpy (de->name, "..\0", 4);
 	ext2_set_de_type (de, inode);
-	kunmap_atomic(kaddr);
+	kunmap_atomic(kaddr, KM_USER0);
 	err = ext2_commit_chunk(page, 0, chunk_size);
 fail:
 	page_cache_release(page);
@@ -721,7 +724,7 @@ not_empty:
 const struct file_operations ext2_dir_operations = {
 	.llseek		= generic_file_llseek,
 	.read		= generic_read_dir,
-	.iterate	= ext2_readdir,
+	.readdir	= ext2_readdir,
 	.unlocked_ioctl = ext2_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= ext2_compat_ioctl,

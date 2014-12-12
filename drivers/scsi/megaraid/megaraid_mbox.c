@@ -67,11 +67,10 @@
  *
  * NEC	MegaRAID PCI Express ROMB	1000	0408	1033	8287
  *
- * For history of changes, see Documentation/scsi/ChangeLog.megaraid
+ * For history of changes, see Documentation/ChangeLog.megaraid
  */
 
 #include <linux/slab.h>
-#include <linux/module.h>
 #include "megaraid_mbox.h"
 
 static int megaraid_init(void);
@@ -305,7 +304,7 @@ static struct pci_driver megaraid_pci_driver = {
 	.name		= "megaraid",
 	.id_table	= pci_id_table_g,
 	.probe		= megaraid_probe_one,
-	.remove		= megaraid_detach_one,
+	.remove		= __devexit_p(megaraid_detach_one),
 	.shutdown	= megaraid_mbox_shutdown,
 };
 
@@ -367,7 +366,6 @@ static struct scsi_host_template megaraid_template_g = {
 	.eh_host_reset_handler		= megaraid_reset_handler,
 	.change_queue_depth		= megaraid_change_queue_depth,
 	.use_clustering			= ENABLE_CLUSTERING,
-	.no_write_same			= 1,
 	.sdev_attrs			= megaraid_sdev_attrs,
 	.shost_attrs			= megaraid_shost_attrs,
 };
@@ -435,7 +433,7 @@ megaraid_exit(void)
  * This routine should be called whenever a new adapter is detected by the
  * PCI hotplug susbsystem.
  */
-static int
+static int __devinit
 megaraid_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	adapter_t	*adapter;
@@ -535,6 +533,7 @@ megaraid_probe_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	return 0;
 
 out_cmm_unreg:
+	pci_set_drvdata(pdev, NULL);
 	megaraid_cmm_unregister(adapter);
 out_fini_mbox:
 	megaraid_fini_mbox(adapter);
@@ -549,7 +548,7 @@ out_probe_one:
 
 /**
  * megaraid_detach_one - release framework resources and call LLD release routine
- * @pdev	: handle for our PCI configuration space
+ * @pdev	: handle for our PCI cofiguration space
  *
  * This routine is called during driver unload. We free all the allocated
  * resources and call the corresponding LLD so that it can also release all
@@ -593,6 +592,11 @@ megaraid_detach_one(struct pci_dev *pdev)
 
 	// detach from the IO sub-system
 	megaraid_io_detach(adapter);
+
+	// reset the device state in the PCI structure. We check this
+	// condition when we enter here. If the device state is NULL,
+	// that would mean the device has already been removed
+	pci_set_drvdata(pdev, NULL);
 
 	// Unregister from common management module
 	//
@@ -730,7 +734,7 @@ megaraid_io_detach(adapter_t *adapter)
  * - Allocate memory required for all the commands
  * - Use internal library of FW routines, build up complete soft state
  */
-static int
+static int __devinit
 megaraid_init_mbox(adapter_t *adapter)
 {
 	struct pci_dev		*pdev;
@@ -974,7 +978,7 @@ megaraid_fini_mbox(adapter_t *adapter)
  * @adapter		: soft state of the raid controller
  *
  * Allocate and align the shared mailbox. This maibox is used to issue
- * all the commands. For IO based controllers, the mailbox is also registered
+ * all the commands. For IO based controllers, the mailbox is also regsitered
  * with the FW. Allocate memory for all commands as well.
  * This is our big allocator.
  */
@@ -2022,7 +2026,7 @@ megaraid_mbox_prepare_pthru(adapter_t *adapter, scb_t *scb,
  * @scb		: scsi control block
  * @scp		: scsi command from the mid-layer
  *
- * Prepare a command for the scsi physical devices. This routine prepares
+ * Prepare a command for the scsi physical devices. This rountine prepares
  * commands for devices which can take extended CDBs (>10 bytes).
  */
 static void
@@ -2581,7 +2585,7 @@ megaraid_abort_handler(struct scsi_cmnd *scp)
 }
 
 /**
- * megaraid_reset_handler - device reset handler for mailbox based driver
+ * megaraid_reset_handler - device reset hadler for mailbox based driver
  * @scp		: reference command
  *
  * Reset handler for the mailbox based controller. First try to find out if
@@ -2726,7 +2730,7 @@ megaraid_reset_handler(struct scsi_cmnd *scp)
 	}
 
  out:
-	spin_unlock(&adapter->lock);
+	spin_unlock_irq(&adapter->lock);
 	return rval;
 }
 
@@ -3441,7 +3445,7 @@ megaraid_mbox_display_scb(adapter_t *adapter, scb_t *scb)
  * megaraid_mbox_setup_device_map - manage device ids
  * @adapter	: Driver's soft state
  *
- * Manage the device ids to have an appropriate mapping between the kernel
+ * Manange the device ids to have an appropriate mapping between the kernel
  * scsi addresses and megaraid scsi and logical drive addresses. We export
  * scsi devices on their actual addresses, whereas the logical drives are
  * exported on a virtual scsi channel.

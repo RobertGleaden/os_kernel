@@ -62,26 +62,22 @@ void hpfs_error(struct super_block *s, const char *fmt, ...)
 	vsnprintf(err_buf, sizeof(err_buf), fmt, args);
 	va_end(args);
 
-	pr_err("filesystem error: %s", err_buf);
+	printk("HPFS: filesystem error: %s", err_buf);
 	if (!hpfs_sb(s)->sb_was_error) {
 		if (hpfs_sb(s)->sb_err == 2) {
-			pr_cont("; crashing the system because you wanted it\n");
+			printk("; crashing the system because you wanted it\n");
 			mark_dirty(s, 0);
 			panic("HPFS panic");
 		} else if (hpfs_sb(s)->sb_err == 1) {
-			if (s->s_flags & MS_RDONLY)
-				pr_cont("; already mounted read-only\n");
+			if (s->s_flags & MS_RDONLY) printk("; already mounted read-only\n");
 			else {
-				pr_cont("; remounting read-only\n");
+				printk("; remounting read-only\n");
 				mark_dirty(s, 0);
 				s->s_flags |= MS_RDONLY;
 			}
-		} else if (s->s_flags & MS_RDONLY)
-				pr_cont("; going on - but anything won't be destroyed because it's read-only\n");
-		else
-			pr_cont("; corrupted filesystem mounted read/write - your computer will explode within 20 seconds ... but you wanted it so!\n");
-	} else
-		pr_cont("\n");
+		} else if (s->s_flags & MS_RDONLY) printk("; going on - but anything won't be destroyed because it's read-only\n");
+		else printk("; corrupted filesystem mounted read/write - your computer will explode within 20 seconds ... but you wanted it so!\n");
+	} else printk("\n");
 	hpfs_sb(s)->sb_was_error = 1;
 }
 
@@ -105,35 +101,29 @@ int hpfs_stop_cycles(struct super_block *s, int key, int *c1, int *c2,
 	return 0;
 }
 
-static void free_sbi(struct hpfs_sb_info *sbi)
-{
-	kfree(sbi->sb_cp_table);
-	kfree(sbi->sb_bmp_dir);
-	kfree(sbi);
-}
-
-static void lazy_free_sbi(struct rcu_head *rcu)
-{
-	free_sbi(container_of(rcu, struct hpfs_sb_info, rcu));
-}
-
 static void hpfs_put_super(struct super_block *s)
 {
+	struct hpfs_sb_info *sbi = hpfs_sb(s);
+
 	hpfs_lock(s);
 	unmark_dirty(s);
 	hpfs_unlock(s);
-	call_rcu(&hpfs_sb(s)->rcu, lazy_free_sbi);
+
+	kfree(sbi->sb_cp_table);
+	kfree(sbi->sb_bmp_dir);
+	s->s_fs_info = NULL;
+	kfree(sbi);
 }
 
-static unsigned hpfs_count_one_bitmap(struct super_block *s, secno secno)
+unsigned hpfs_count_one_bitmap(struct super_block *s, secno secno)
 {
 	struct quad_buffer_head qbh;
 	unsigned long *bits;
 	unsigned count;
 
-	bits = hpfs_map_4sectors(s, secno, &qbh, 0);
+	bits = hpfs_map_4sectors(s, secno, &qbh, 4);
 	if (!bits)
-		return (unsigned)-1;
+		return 0;
 	count = bitmap_weight(bits, 2048 * BITS_PER_BYTE);
 	hpfs_brelse4(&qbh);
 	return count;
@@ -144,29 +134,9 @@ static unsigned count_bitmaps(struct super_block *s)
 	unsigned n, count, n_bands;
 	n_bands = (hpfs_sb(s)->sb_fs_size + 0x3fff) >> 14;
 	count = 0;
-	for (n = 0; n < COUNT_RD_AHEAD; n++) {
-		hpfs_prefetch_bitmap(s, n);
-	}
-	for (n = 0; n < n_bands; n++) {
-		unsigned c;
-		hpfs_prefetch_bitmap(s, n + COUNT_RD_AHEAD);
-		c = hpfs_count_one_bitmap(s, le32_to_cpu(hpfs_sb(s)->sb_bmp_dir[n]));
-		if (c != (unsigned)-1)
-			count += c;
-	}
+	for (n = 0; n < n_bands; n++)
+		count += hpfs_count_one_bitmap(s, le32_to_cpu(hpfs_sb(s)->sb_bmp_dir[n]));
 	return count;
-}
-
-unsigned hpfs_get_free_dnodes(struct super_block *s)
-{
-	struct hpfs_sb_info *sbi = hpfs_sb(s);
-	if (sbi->sb_n_free_dnodes == (unsigned)-1) {
-		unsigned c = hpfs_count_one_bitmap(s, sbi->sb_dmap);
-		if (c == (unsigned)-1)
-			return 0;
-		sbi->sb_n_free_dnodes = c;
-	}
-	return sbi->sb_n_free_dnodes;
 }
 
 static int hpfs_statfs(struct dentry *dentry, struct kstatfs *buf)
@@ -174,19 +144,19 @@ static int hpfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	struct super_block *s = dentry->d_sb;
 	struct hpfs_sb_info *sbi = hpfs_sb(s);
 	u64 id = huge_encode_dev(s->s_bdev->bd_dev);
-
 	hpfs_lock(s);
 
-	if (sbi->sb_n_free == (unsigned)-1)
+	/*if (sbi->sb_n_free == -1) {*/
 		sbi->sb_n_free = count_bitmaps(s);
-
+		sbi->sb_n_free_dnodes = hpfs_count_one_bitmap(s, sbi->sb_dmap);
+	/*}*/
 	buf->f_type = s->s_magic;
 	buf->f_bsize = 512;
 	buf->f_blocks = sbi->sb_fs_size;
 	buf->f_bfree = sbi->sb_n_free;
 	buf->f_bavail = sbi->sb_n_free;
 	buf->f_files = sbi->sb_dirband_size / 4;
-	buf->f_ffree = hpfs_get_free_dnodes(s);
+	buf->f_ffree = sbi->sb_n_free_dnodes;
 	buf->f_fsid.val[0] = (u32)id;
 	buf->f_fsid.val[1] = (u32)(id >> 32);
 	buf->f_namelen = 254;
@@ -211,6 +181,7 @@ static struct inode *hpfs_alloc_inode(struct super_block *sb)
 static void hpfs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
+	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(hpfs_inode_cachep, hpfs_i(inode));
 }
 
@@ -240,11 +211,6 @@ static int init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	/*
-	 * Make sure all delayed rcu free inodes are flushed before we
-	 * destroy cache.
-	 */
-	rcu_barrier();
 	kmem_cache_destroy(hpfs_inode_cachep);
 }
 
@@ -286,7 +252,7 @@ static const match_table_t tokens = {
 	{Opt_err, NULL},
 };
 
-static int parse_opts(char *opts, kuid_t *uid, kgid_t *gid, umode_t *umask,
+static int parse_opts(char *opts, uid_t *uid, gid_t *gid, umode_t *umask,
 		      int *lowercase, int *eas, int *chk, int *errs,
 		      int *chkdsk, int *timeshift)
 {
@@ -296,7 +262,7 @@ static int parse_opts(char *opts, kuid_t *uid, kgid_t *gid, umode_t *umask,
 	if (!opts)
 		return 1;
 
-	/*pr_info("Parsing opts: '%s'\n",opts);*/
+	/*printk("Parsing opts: '%s'\n",opts);*/
 
 	while ((p = strsep(&opts, ",")) != NULL) {
 		substring_t args[MAX_OPT_ARGS];
@@ -311,16 +277,12 @@ static int parse_opts(char *opts, kuid_t *uid, kgid_t *gid, umode_t *umask,
 		case Opt_uid:
 			if (match_int(args, &option))
 				return 0;
-			*uid = make_kuid(current_user_ns(), option);
-			if (!uid_valid(*uid))
-				return 0;
+			*uid = option;
 			break;
 		case Opt_gid:
 			if (match_int(args, &option))
 				return 0;
-			*gid = make_kgid(current_user_ns(), option);
-			if (!gid_valid(*gid))
-				return 0;
+			*gid = option;
 			break;
 		case Opt_umask:
 			if (match_octal(args, &option))
@@ -391,7 +353,7 @@ static int parse_opts(char *opts, kuid_t *uid, kgid_t *gid, umode_t *umask,
 
 static inline void hpfs_help(void)
 {
-	pr_info("\n\
+	printk("\n\
 HPFS filesystem options:\n\
       help              do not mount and display this text\n\
       uid=xxx           set uid of files that don't have uid specified in eas\n\
@@ -417,19 +379,18 @@ HPFS filesystem options:\n\
 
 static int hpfs_remount_fs(struct super_block *s, int *flags, char *data)
 {
-	kuid_t uid;
-	kgid_t gid;
+	uid_t uid;
+	gid_t gid;
 	umode_t umask;
 	int lowercase, eas, chk, errs, chkdsk, timeshift;
 	int o;
 	struct hpfs_sb_info *sbi = hpfs_sb(s);
 	char *new_opts = kstrdup(data, GFP_KERNEL);
 	
-	sync_filesystem(s);
-
 	*flags |= MS_NOATIME;
 	
 	hpfs_lock(s);
+	lock_super(s);
 	uid = sbi->sb_uid; gid = sbi->sb_gid;
 	umask = 0777 & ~sbi->sb_mode;
 	lowercase = sbi->sb_lowercase;
@@ -438,7 +399,7 @@ static int hpfs_remount_fs(struct super_block *s, int *flags, char *data)
 
 	if (!(o = parse_opts(data, &uid, &gid, &umask, &lowercase,
 	    &eas, &chk, &errs, &chkdsk, &timeshift))) {
-		pr_err("bad mount options.\n");
+		printk("HPFS: bad mount options.\n");
 		goto out_err;
 	}
 	if (o == 2) {
@@ -446,7 +407,7 @@ static int hpfs_remount_fs(struct super_block *s, int *flags, char *data)
 		goto out_err;
 	}
 	if (timeshift != sbi->sb_timeshift) {
-		pr_err("timeshift can't be changed using remount.\n");
+		printk("HPFS: timeshift can't be changed using remount.\n");
 		goto out_err;
 	}
 
@@ -462,10 +423,12 @@ static int hpfs_remount_fs(struct super_block *s, int *flags, char *data)
 
 	replace_mount_options(s, new_opts);
 
+	unlock_super(s);
 	hpfs_unlock(s);
 	return 0;
 
 out_err:
+	unlock_super(s);
 	hpfs_unlock(s);
 	kfree(new_opts);
 	return -EINVAL;
@@ -493,8 +456,8 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	struct hpfs_sb_info *sbi;
 	struct inode *root;
 
-	kuid_t uid;
-	kgid_t gid;
+	uid_t uid;
+	gid_t gid;
 	umode_t umask;
 	int lowercase, eas, chk, errs, chkdsk, timeshift;
 
@@ -512,6 +475,9 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	}
 	s->s_fs_info = sbi;
 
+	sbi->sb_bmp_dir = NULL;
+	sbi->sb_cp_table = NULL;
+
 	mutex_init(&sbi->hpfs_mutex);
 	hpfs_lock(s);
 
@@ -527,7 +493,7 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 
 	if (!(o = parse_opts(options, &uid, &gid, &umask, &lowercase,
 	    &eas, &chk, &errs, &chkdsk, &timeshift))) {
-		pr_err("bad mount options.\n");
+		printk("HPFS: bad mount options.\n");
 		goto bail0;
 	}
 	if (o==2) {
@@ -546,17 +512,16 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	if (/*le16_to_cpu(bootblock->magic) != BB_MAGIC
 	    ||*/ le32_to_cpu(superblock->magic) != SB_MAGIC
 	    || le32_to_cpu(spareblock->magic) != SP_MAGIC) {
-		if (!silent)
-			pr_err("Bad magic ... probably not HPFS\n");
+		if (!silent) printk("HPFS: Bad magic ... probably not HPFS\n");
 		goto bail4;
 	}
 
 	/* Check version */
 	if (!(s->s_flags & MS_RDONLY) &&
 	      superblock->funcversion != 2 && superblock->funcversion != 3) {
-		pr_err("Bad version %d,%d. Mount readonly to go around\n",
+		printk("HPFS: Bad version %d,%d. Mount readonly to go around\n",
 			(int)superblock->version, (int)superblock->funcversion);
-		pr_err("please try recent version of HPFS driver at http://artax.karlin.mff.cuni.cz/~mikulas/vyplody/hpfs/index-e.cgi and if it still can't understand this format, contact author - mikulas@artax.karlin.mff.cuni.cz\n");
+		printk("HPFS: please try recent version of HPFS driver at http://artax.karlin.mff.cuni.cz/~mikulas/vyplody/hpfs/index-e.cgi and if it still can't understand this format, contact author - mikulas@artax.karlin.mff.cuni.cz\n");
 		goto bail4;
 	}
 
@@ -588,13 +553,7 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	sbi->sb_cp_table = NULL;
 	sbi->sb_c_bitmap = -1;
 	sbi->sb_max_fwd_alloc = 0xffffff;
-
-	if (sbi->sb_fs_size >= 0x80000000) {
-		hpfs_error(s, "invalid size in superblock: %08x",
-			(unsigned)sbi->sb_fs_size);
-		goto bail4;
-	}
-
+	
 	/* Load bitmap directory */
 	if (!(sbi->sb_bmp_dir = hpfs_load_bitmap_directory(s, le32_to_cpu(superblock->bitmaps))))
 		goto bail4;
@@ -602,7 +561,7 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	/* Check for general fs errors*/
 	if (spareblock->dirty && !spareblock->old_wrote) {
 		if (errs == 2) {
-			pr_err("Improperly stopped, not mounted\n");
+			printk("HPFS: Improperly stopped, not mounted\n");
 			goto bail4;
 		}
 		hpfs_error(s, "improperly stopped");
@@ -614,27 +573,24 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 		mark_buffer_dirty(bh2);
 	}
 
-	if (spareblock->hotfixes_used || spareblock->n_spares_used) {
+	if (le32_to_cpu(spareblock->hotfixes_used) || le32_to_cpu(spareblock->n_spares_used)) {
 		if (errs >= 2) {
-			pr_err("Hotfixes not supported here, try chkdsk\n");
+			printk("HPFS: Hotfixes not supported here, try chkdsk\n");
 			mark_dirty(s, 0);
 			goto bail4;
 		}
 		hpfs_error(s, "hotfixes not supported here, try chkdsk");
-		if (errs == 0)
-			pr_err("Proceeding, but your filesystem will be probably corrupted by this driver...\n");
-		else
-			pr_err("This driver may read bad files or crash when operating on disk with hotfixes.\n");
+		if (errs == 0) printk("HPFS: Proceeding, but your filesystem will be probably corrupted by this driver...\n");
+		else printk("HPFS: This driver may read bad files or crash when operating on disk with hotfixes.\n");
 	}
 	if (le32_to_cpu(spareblock->n_dnode_spares) != le32_to_cpu(spareblock->n_dnode_spares_free)) {
 		if (errs >= 2) {
-			pr_err("Spare dnodes used, try chkdsk\n");
+			printk("HPFS: Spare dnodes used, try chkdsk\n");
 			mark_dirty(s, 0);
 			goto bail4;
 		}
 		hpfs_error(s, "warning: spare dnodes used, try chkdsk");
-		if (errs == 0)
-			pr_err("Proceeding, but your filesystem could be corrupted if you delete files or directories\n");
+		if (errs == 0) printk("HPFS: Proceeding, but your filesystem could be corrupted if you delete files or directories\n");
 	}
 	if (chk) {
 		unsigned a;
@@ -653,13 +609,12 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 			goto bail4;
 		}
 		sbi->sb_dirband_size = a;
-	} else
-		pr_err("You really don't want any checks? You are crazy...\n");
+	} else printk("HPFS: You really don't want any checks? You are crazy...\n");
 
 	/* Load code page table */
 	if (le32_to_cpu(spareblock->n_code_pages))
 		if (!(sbi->sb_cp_table = hpfs_load_code_page(s, le32_to_cpu(spareblock->code_page_dir))))
-			pr_err("code page support is disabled\n");
+			printk("HPFS: Warning: code page support is disabled\n");
 
 	brelse(bh2);
 	brelse(bh1);
@@ -671,9 +626,11 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 	hpfs_init_inode(root);
 	hpfs_read_inode(root);
 	unlock_new_inode(root);
-	s->s_root = d_make_root(root);
-	if (!s->s_root)
+	s->s_root = d_alloc_root(root);
+	if (!s->s_root) {
+		iput(root);
 		goto bail0;
+	}
 
 	/*
 	 * find the root directory's . pointer & finish filling in the inode
@@ -691,7 +648,7 @@ static int hpfs_fill_super(struct super_block *s, void *options, int silent)
 		root->i_mtime.tv_nsec = 0;
 		root->i_ctime.tv_sec = local_to_gmt(s, le32_to_cpu(de->creation_date));
 		root->i_ctime.tv_nsec = 0;
-		hpfs_i(root)->i_ea_size = le32_to_cpu(de->ea_size);
+		hpfs_i(root)->i_ea_size = le16_to_cpu(de->ea_size);
 		hpfs_i(root)->i_parent_dir = root->i_ino;
 		if (root->i_size == -1)
 			root->i_size = 2048;
@@ -708,7 +665,10 @@ bail2:	brelse(bh0);
 bail1:
 bail0:
 	hpfs_unlock(s);
-	free_sbi(sbi);
+	kfree(sbi->sb_bmp_dir);
+	kfree(sbi->sb_cp_table);
+	s->s_fs_info = NULL;
+	kfree(sbi);
 	return -EINVAL;
 }
 
@@ -725,7 +685,6 @@ static struct file_system_type hpfs_fs_type = {
 	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
-MODULE_ALIAS_FS("hpfs");
 
 static int __init init_hpfs_fs(void)
 {

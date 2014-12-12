@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/input.h>
 #include <linux/gameport.h>
+#include <linux/init.h>
 #include <linux/jiffies.h>
 
 #define DRIVER_DESC	"Logitech ADI joystick family driver"
@@ -556,6 +557,10 @@ static void adi_disconnect(struct gameport *gameport)
 	kfree(port);
 }
 
+/*
+ * The gameport device structure.
+ */
+
 static struct gameport_driver adi_drv = {
 	.driver		= {
 		.name	= "adi",
@@ -565,4 +570,15 @@ static struct gameport_driver adi_drv = {
 	.disconnect	= adi_disconnect,
 };
 
-module_gameport_driver(adi_drv);
+static int __init adi_init(void)
+{
+	return gameport_register_driver(&adi_drv);
+}
+
+static void __exit adi_exit(void)
+{
+	gameport_unregister_driver(&adi_drv);
+}
+
+module_init(adi_init);
+module_exit(adi_exit);

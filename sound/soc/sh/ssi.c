@@ -332,7 +332,7 @@ static int ssi_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	 SNDRV_PCM_FMTBIT_S24_3LE | SNDRV_PCM_FMTBIT_U24_3LE |	\
 	 SNDRV_PCM_FMTBIT_S32_LE  | SNDRV_PCM_FMTBIT_U32_LE)
 
-static const struct snd_soc_dai_ops ssi_dai_ops = {
+static struct snd_soc_dai_ops ssi_dai_ops = {
 	.startup	= ssi_startup,
 	.shutdown	= ssi_shutdown,
 	.trigger	= ssi_trigger,
@@ -342,7 +342,7 @@ static const struct snd_soc_dai_ops ssi_dai_ops = {
 	.set_fmt	= ssi_set_fmt,
 };
 
-static struct snd_soc_dai_driver sh4_ssi_dai[] = {
+struct snd_soc_dai_driver sh4_ssi_dai[] = {
 {
 	.name			= "ssi-dai.0",
 	.playback = {
@@ -379,19 +379,15 @@ static struct snd_soc_dai_driver sh4_ssi_dai[] = {
 #endif
 };
 
-static const struct snd_soc_component_driver sh4_ssi_component = {
-	.name		= "sh4-ssi",
-};
-
-static int sh4_soc_dai_probe(struct platform_device *pdev)
+static int __devinit sh4_soc_dai_probe(struct platform_device *pdev)
 {
-	return snd_soc_register_component(&pdev->dev, &sh4_ssi_component,
-					  sh4_ssi_dai, ARRAY_SIZE(sh4_ssi_dai));
+	return snd_soc_register_dais(&pdev->dev, sh4_ssi_dai,
+			ARRAY_SIZE(sh4_ssi_dai));
 }
 
-static int sh4_soc_dai_remove(struct platform_device *pdev)
+static int __devexit sh4_soc_dai_remove(struct platform_device *pdev)
 {
-	snd_soc_unregister_component(&pdev->dev);
+	snd_soc_unregister_dais(&pdev->dev, ARRAY_SIZE(sh4_ssi_dai));
 	return 0;
 }
 
@@ -402,10 +398,20 @@ static struct platform_driver sh4_ssi_driver = {
 	},
 
 	.probe = sh4_soc_dai_probe,
-	.remove = sh4_soc_dai_remove,
+	.remove = __devexit_p(sh4_soc_dai_remove),
 };
 
-module_platform_driver(sh4_ssi_driver);
+static int __init snd_sh4_ssi_init(void)
+{
+	return platform_driver_register(&sh4_ssi_driver);
+}
+module_init(snd_sh4_ssi_init);
+
+static void __exit snd_sh4_ssi_exit(void)
+{
+	platform_driver_unregister(&sh4_ssi_driver);
+}
+module_exit(snd_sh4_ssi_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("SuperH onchip SSI (I2S) audio driver");

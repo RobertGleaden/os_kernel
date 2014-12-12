@@ -19,7 +19,6 @@
 
 #include <linux/mm.h>
 #include <linux/fs.h>
-#include <linux/posix_acl.h>
 #include <linux/quotaops.h>
 #include "jfs_incore.h"
 #include "jfs_inode.h"
@@ -109,8 +108,8 @@ int jfs_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	if (is_quota_modification(inode, iattr))
 		dquot_initialize(inode);
-	if ((iattr->ia_valid & ATTR_UID && !uid_eq(iattr->ia_uid, inode->i_uid)) ||
-	    (iattr->ia_valid & ATTR_GID && !gid_eq(iattr->ia_gid, inode->i_gid))) {
+	if ((iattr->ia_valid & ATTR_UID && iattr->ia_uid != inode->i_uid) ||
+	    (iattr->ia_valid & ATTR_GID && iattr->ia_gid != inode->i_gid)) {
 		rc = dquot_transfer(inode, iattr);
 		if (rc)
 			return rc;
@@ -120,23 +119,21 @@ int jfs_setattr(struct dentry *dentry, struct iattr *iattr)
 	    iattr->ia_size != i_size_read(inode)) {
 		inode_dio_wait(inode);
 
-		rc = inode_newsize_ok(inode, iattr->ia_size);
+		rc = vmtruncate(inode, iattr->ia_size);
 		if (rc)
 			return rc;
-
-		truncate_setsize(inode, iattr->ia_size);
-		jfs_truncate(inode);
 	}
 
 	setattr_copy(inode, iattr);
 	mark_inode_dirty(inode);
 
 	if (iattr->ia_valid & ATTR_MODE)
-		rc = posix_acl_chmod(inode, inode->i_mode);
+		rc = jfs_acl_chmod(inode);
 	return rc;
 }
 
 const struct inode_operations jfs_file_inode_operations = {
+	.truncate	= jfs_truncate,
 	.setxattr	= jfs_setxattr,
 	.getxattr	= jfs_getxattr,
 	.listxattr	= jfs_listxattr,
@@ -144,20 +141,19 @@ const struct inode_operations jfs_file_inode_operations = {
 	.setattr	= jfs_setattr,
 #ifdef CONFIG_JFS_POSIX_ACL
 	.get_acl	= jfs_get_acl,
-	.set_acl	= jfs_set_acl,
 #endif
 };
 
 const struct file_operations jfs_file_operations = {
 	.open		= jfs_open,
 	.llseek		= generic_file_llseek,
-	.write		= new_sync_write,
-	.read		= new_sync_read,
-	.read_iter	= generic_file_read_iter,
-	.write_iter	= generic_file_write_iter,
+	.write		= do_sync_write,
+	.read		= do_sync_read,
+	.aio_read	= generic_file_aio_read,
+	.aio_write	= generic_file_aio_write,
 	.mmap		= generic_file_mmap,
 	.splice_read	= generic_file_splice_read,
-	.splice_write	= iter_file_splice_write,
+	.splice_write	= generic_file_splice_write,
 	.fsync		= jfs_fsync,
 	.release	= jfs_release,
 	.unlocked_ioctl = jfs_ioctl,

@@ -160,23 +160,18 @@ static __init int dccpprobe_init(void)
 	spin_lock_init(&dccpw.lock);
 	if (kfifo_alloc(&dccpw.fifo, bufsize, GFP_KERNEL))
 		return ret;
-	if (!proc_create(procname, S_IRUSR, init_net.proc_net, &dccpprobe_fops))
+	if (!proc_net_fops_create(&init_net, procname, S_IRUSR, &dccpprobe_fops))
 		goto err0;
 
-	ret = register_jprobe(&dccp_send_probe);
-	if (ret) {
-		ret = request_module("dccp");
-		if (!ret)
-			ret = register_jprobe(&dccp_send_probe);
-	}
-
+	try_then_request_module((ret = register_jprobe(&dccp_send_probe)) == 0,
+				"dccp");
 	if (ret)
 		goto err1;
 
 	pr_info("DCCP watch registered (port=%d)\n", port);
 	return 0;
 err1:
-	remove_proc_entry(procname, init_net.proc_net);
+	proc_net_remove(&init_net, procname);
 err0:
 	kfifo_free(&dccpw.fifo);
 	return ret;
@@ -186,7 +181,7 @@ module_init(dccpprobe_init);
 static __exit void dccpprobe_exit(void)
 {
 	kfifo_free(&dccpw.fifo);
-	remove_proc_entry(procname, init_net.proc_net);
+	proc_net_remove(&init_net, procname);
 	unregister_jprobe(&dccp_send_probe);
 
 }

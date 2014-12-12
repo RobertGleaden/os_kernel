@@ -1,8 +1,7 @@
 #ifndef _FS_CEPH_MDSMAP_H
 #define _FS_CEPH_MDSMAP_H
 
-#include <linux/bug.h>
-#include <linux/ceph/types.h>
+#include "types.h"
 
 /*
  * mds map - describe servers in the mds cluster.
@@ -29,8 +28,8 @@ struct ceph_mdsmap {
 
 	/* which object pools file data can be stored in */
 	int m_num_data_pg_pools;
-	u64 *m_data_pg_pools;
-	u64 m_cas_pg_pool;
+	u32 *m_data_pg_pools;
+	u32 m_cas_pg_pool;
 };
 
 static inline struct ceph_entity_addr *

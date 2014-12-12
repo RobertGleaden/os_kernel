@@ -24,7 +24,6 @@
 #include <linux/platform_device.h>
 #include <linux/spinlock.h>
 #include <linux/types.h>
-#include <linux/export.h>
 
 #define LED_WEB		0x04
 #define LED_POWER_OFF	0x08
@@ -76,7 +75,7 @@ static struct led_classdev raq_power_off_led = {
 	.default_trigger	= "power-off",
 };
 
-static int cobalt_raq_led_probe(struct platform_device *pdev)
+static int __devinit cobalt_raq_led_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	int retval;
@@ -85,13 +84,13 @@ static int cobalt_raq_led_probe(struct platform_device *pdev)
 	if (!res)
 		return -EBUSY;
 
-	led_port = devm_ioremap(&pdev->dev, res->start, resource_size(res));
+	led_port = ioremap(res->start, resource_size(res));
 	if (!led_port)
 		return -ENOMEM;
 
 	retval = led_classdev_register(&pdev->dev, &raq_power_off_led);
 	if (retval)
-		goto err_null;
+		goto err_iounmap;
 
 	retval = led_classdev_register(&pdev->dev, &raq_web_led);
 	if (retval)
@@ -102,26 +101,29 @@ static int cobalt_raq_led_probe(struct platform_device *pdev)
 err_unregister:
 	led_classdev_unregister(&raq_power_off_led);
 
-err_null:
+err_iounmap:
+	iounmap(led_port);
 	led_port = NULL;
 
 	return retval;
 }
 
-static int cobalt_raq_led_remove(struct platform_device *pdev)
+static int __devexit cobalt_raq_led_remove(struct platform_device *pdev)
 {
 	led_classdev_unregister(&raq_power_off_led);
 	led_classdev_unregister(&raq_web_led);
 
-	if (led_port)
+	if (led_port) {
+		iounmap(led_port);
 		led_port = NULL;
+	}
 
 	return 0;
 }
 
 static struct platform_driver cobalt_raq_led_driver = {
 	.probe	= cobalt_raq_led_probe,
-	.remove	= cobalt_raq_led_remove,
+	.remove	= __devexit_p(cobalt_raq_led_remove),
 	.driver = {
 		.name	= "cobalt-raq-leds",
 		.owner	= THIS_MODULE,

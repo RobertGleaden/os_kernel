@@ -293,7 +293,6 @@ rate_control_pid_get_rate(void *priv, struct ieee80211_sta *sta,
 
 static void
 rate_control_pid_rate_init(void *priv, struct ieee80211_supported_band *sband,
-			   struct cfg80211_chan_def *chandef,
 			   struct ieee80211_sta *sta, void *priv_sta)
 {
 	struct rc_pid_sta_info *spinfo = priv_sta;
@@ -319,7 +318,7 @@ rate_control_pid_rate_init(void *priv, struct ieee80211_supported_band *sband,
 			rinfo[i].diff = i * pinfo->norm_offset;
 	}
 	for (i = 1; i < sband->n_bitrates; i++) {
-		s = false;
+		s = 0;
 		for (j = 0; j < sband->n_bitrates - i; j++)
 			if (unlikely(sband->bitrates[rinfo[j].index].bitrate >
 				     sband->bitrates[rinfo[j + 1].index].bitrate)) {
@@ -328,7 +327,7 @@ rate_control_pid_rate_init(void *priv, struct ieee80211_supported_band *sband,
 				rinfo[j + 1].index = tmp;
 				rinfo[rinfo[j].index].rev_index = j;
 				rinfo[rinfo[j + 1].index].rev_index = j + 1;
-				s = true;
+				s = 1;
 			}
 		if (!s)
 			break;
@@ -452,7 +451,7 @@ static void rate_control_pid_free_sta(void *priv, struct ieee80211_sta *sta,
 	kfree(priv_sta);
 }
 
-static const struct rate_control_ops mac80211_rcpid = {
+static struct rate_control_ops mac80211_rcpid = {
 	.name = "pid",
 	.tx_status = rate_control_pid_tx_status,
 	.get_rate = rate_control_pid_get_rate,

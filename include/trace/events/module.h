@@ -1,6 +1,6 @@
 /*
  * Because linux/module.h has tracepoints in the header, and ftrace.h
- * used to include this file, define_trace.h includes linux/module.h
+ * eventually includes this file, define_trace.h includes linux/module.h
  * But we do not want the module.h to override the TRACE_SYSTEM macro
  * variable that define_trace.h is processing, so we only set it
  * when module events are being processed, which would happen when
@@ -22,10 +22,8 @@ struct module;
 
 #define show_module_flags(flags) __print_flags(flags, "",	\
 	{ (1UL << TAINT_PROPRIETARY_MODULE),	"P" },		\
-	{ (1UL << TAINT_OOT_MODULE),		"O" },		\
 	{ (1UL << TAINT_FORCED_MODULE),		"F" },		\
-	{ (1UL << TAINT_CRAP),			"C" },		\
-	{ (1UL << TAINT_UNSIGNED_MODULE),	"E" })
+	{ (1UL << TAINT_CRAP),			"C" })
 
 TRACE_EVENT(module_load,
 
@@ -80,7 +78,7 @@ DECLARE_EVENT_CLASS(module_refcnt,
 
 	TP_fast_assign(
 		__entry->ip	= ip;
-		__entry->refcnt	= __this_cpu_read(mod->refptr->incs) - __this_cpu_read(mod->refptr->decs);
+		__entry->refcnt	= __this_cpu_read(mod->refptr->incs) + __this_cpu_read(mod->refptr->decs);
 		__assign_str(name, mod->name);
 	),
 

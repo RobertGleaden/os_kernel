@@ -4,20 +4,29 @@
  * Copyright (C) 2008 David Brownell
  * Copyright (C) 2008 Nokia Corporation
  * Copyright (C) 2009 Samsung Electronics
- * Author: Michal Nazarewicz (mina86@mina86.com)
+ * Author: Michal Nazarewicz (m.nazarewicz@samsung.com)
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 
 #include <linux/kernel.h>
+#include <linux/utsname.h>
 #include <linux/module.h>
-#include <linux/netdevice.h>
 
-#include "u_serial.h"
+
 #if defined USB_ETH_RNDIS
 #  undef USB_ETH_RNDIS
 #endif
@@ -33,18 +42,35 @@ MODULE_AUTHOR("Michal Nazarewicz");
 MODULE_LICENSE("GPL");
 
 
-#include "f_mass_storage.h"
+/***************************** All the files... *****************************/
 
-#include "u_ecm.h"
+/*
+ * kbuild is not very cooperative with respect to linking separately
+ * compiled library objects into one module.  So for now we won't use
+ * separate compilation ... ensuring init/exit sections work to shrink
+ * the runtime footprint, and giving us at least some parts of what
+ * a "gcc --combine ... part1.c part2.c part3.c ... " build would.
+ */
+
+#include "composite.c"
+#include "usbstring.c"
+#include "config.c"
+#include "epautoconf.c"
+
+#include "f_mass_storage.c"
+
+#include "u_serial.c"
+#include "f_acm.c"
+
+#include "f_ecm.c"
+#include "f_subset.c"
 #ifdef USB_ETH_RNDIS
-#  include "u_rndis.h"
-#  include "rndis.h"
+#  include "f_rndis.c"
+#  include "rndis.c"
 #endif
-#include "u_ether.h"
+#include "u_ether.c"
 
-USB_GADGET_COMPOSITE_OPTIONS();
 
-USB_ETHERNET_MODULE_PARAMETERS();
 
 /***************************** Device Descriptor ****************************/
 
@@ -95,16 +121,21 @@ static const struct usb_descriptor_header *otg_desc[] = {
 
 
 enum {
-	MULTI_STRING_RNDIS_CONFIG_IDX = USB_GADGET_FIRST_AVAIL_IDX,
+#ifdef CONFIG_USB_G_MULTI_RNDIS
+	MULTI_STRING_RNDIS_CONFIG_IDX,
+#endif
+#ifdef CONFIG_USB_G_MULTI_CDC
 	MULTI_STRING_CDC_CONFIG_IDX,
+#endif
 };
 
 static struct usb_string strings_dev[] = {
-	[USB_GADGET_MANUFACTURER_IDX].s = "",
-	[USB_GADGET_PRODUCT_IDX].s = DRIVER_DESC,
-	[USB_GADGET_SERIAL_IDX].s = "",
+#ifdef CONFIG_USB_G_MULTI_RNDIS
 	[MULTI_STRING_RNDIS_CONFIG_IDX].s = "Multifunction with RNDIS",
+#endif
+#ifdef CONFIG_USB_G_MULTI_CDC
 	[MULTI_STRING_CDC_CONFIG_IDX].s   = "Multifunction with CDC ECM",
+#endif
 	{  } /* end of list */
 };
 
@@ -122,36 +153,19 @@ static struct usb_gadget_strings *dev_strings[] = {
 /****************************** Configurations ******************************/
 
 static struct fsg_module_parameters fsg_mod_data = { .stall = 1 };
-#ifdef CONFIG_USB_GADGET_DEBUG_FILES
-
-static unsigned int fsg_num_buffers = CONFIG_USB_GADGET_STORAGE_NUM_BUFFERS;
-
-#else
-
-/*
- * Number of buffers we will use.
- * 2 is usually enough for good buffering pipeline
- */
-#define fsg_num_buffers	CONFIG_USB_GADGET_STORAGE_NUM_BUFFERS
-
-#endif /* CONFIG_USB_GADGET_DEBUG_FILES */
-
 FSG_MODULE_PARAMETERS(/* no prefix */, fsg_mod_data);
 
-static struct usb_function_instance *fi_acm;
-static struct usb_function_instance *fi_msg;
+static struct fsg_common fsg_common;
+
+static u8 hostaddr[ETH_ALEN];
+
 
 /********** RNDIS **********/
 
 #ifdef USB_ETH_RNDIS
-static struct usb_function_instance *fi_rndis;
-static struct usb_function *f_acm_rndis;
-static struct usb_function *f_rndis;
-static struct usb_function *f_msg_rndis;
 
 static __init int rndis_do_config(struct usb_configuration *c)
 {
-	struct fsg_opts *fsg_opts;
 	int ret;
 
 	if (gadget_is_otg(c->cdev->gadget)) {
@@ -159,54 +173,22 @@ static __init int rndis_do_config(struct usb_configuration *c)
 		c->bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 	}
 
-	f_rndis = usb_get_function(fi_rndis);
-	if (IS_ERR(f_rndis))
-		return PTR_ERR(f_rndis);
-
-	ret = usb_add_function(c, f_rndis);
+	ret = rndis_bind_config(c, hostaddr);
 	if (ret < 0)
-		goto err_func_rndis;
+		return ret;
 
-	f_acm_rndis = usb_get_function(fi_acm);
-	if (IS_ERR(f_acm_rndis)) {
-		ret = PTR_ERR(f_acm_rndis);
-		goto err_func_acm;
-	}
+	ret = acm_bind_config(c, 0);
+	if (ret < 0)
+		return ret;
 
-	ret = usb_add_function(c, f_acm_rndis);
-	if (ret)
-		goto err_conf;
-
-	f_msg_rndis = usb_get_function(fi_msg);
-	if (IS_ERR(f_msg_rndis)) {
-		ret = PTR_ERR(f_msg_rndis);
-		goto err_fsg;
-	}
-
-	fsg_opts = fsg_opts_from_func_inst(fi_msg);
-	ret = fsg_common_run_thread(fsg_opts->common);
-	if (ret)
-		goto err_run;
-
-	ret = usb_add_function(c, f_msg_rndis);
-	if (ret)
-		goto err_run;
+	ret = fsg_bind_config(c->cdev, c, &fsg_common);
+	if (ret < 0)
+		return ret;
 
 	return 0;
-err_run:
-	usb_put_function(f_msg_rndis);
-err_fsg:
-	usb_remove_function(c, f_acm_rndis);
-err_conf:
-	usb_put_function(f_acm_rndis);
-err_func_acm:
-	usb_remove_function(c, f_rndis);
-err_func_rndis:
-	usb_put_function(f_rndis);
-	return ret;
 }
 
-static __ref int rndis_config_register(struct usb_composite_dev *cdev)
+static int rndis_config_register(struct usb_composite_dev *cdev)
 {
 	static struct usb_configuration config = {
 		.bConfigurationValue	= MULTI_RNDIS_CONFIG_NUM,
@@ -221,7 +203,7 @@ static __ref int rndis_config_register(struct usb_composite_dev *cdev)
 
 #else
 
-static __ref int rndis_config_register(struct usb_composite_dev *cdev)
+static int rndis_config_register(struct usb_composite_dev *cdev)
 {
 	return 0;
 }
@@ -232,14 +214,9 @@ static __ref int rndis_config_register(struct usb_composite_dev *cdev)
 /********** CDC ECM **********/
 
 #ifdef CONFIG_USB_G_MULTI_CDC
-static struct usb_function_instance *fi_ecm;
-static struct usb_function *f_acm_multi;
-static struct usb_function *f_ecm;
-static struct usb_function *f_msg_multi;
 
 static __init int cdc_do_config(struct usb_configuration *c)
 {
-	struct fsg_opts *fsg_opts;
 	int ret;
 
 	if (gadget_is_otg(c->cdev->gadget)) {
@@ -247,55 +224,22 @@ static __init int cdc_do_config(struct usb_configuration *c)
 		c->bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 	}
 
-	f_ecm = usb_get_function(fi_ecm);
-	if (IS_ERR(f_ecm))
-		return PTR_ERR(f_ecm);
-
-	ret = usb_add_function(c, f_ecm);
+	ret = ecm_bind_config(c, hostaddr);
 	if (ret < 0)
-		goto err_func_ecm;
+		return ret;
 
-	/* implicit port_num is zero */
-	f_acm_multi = usb_get_function(fi_acm);
-	if (IS_ERR(f_acm_multi)) {
-		ret = PTR_ERR(f_acm_multi);
-		goto err_func_acm;
-	}
+	ret = acm_bind_config(c, 0);
+	if (ret < 0)
+		return ret;
 
-	ret = usb_add_function(c, f_acm_multi);
-	if (ret)
-		goto err_conf;
-
-	f_msg_multi = usb_get_function(fi_msg);
-	if (IS_ERR(f_msg_multi)) {
-		ret = PTR_ERR(f_msg_multi);
-		goto err_fsg;
-	}
-
-	fsg_opts = fsg_opts_from_func_inst(fi_msg);
-	ret = fsg_common_run_thread(fsg_opts->common);
-	if (ret)
-		goto err_run;
-
-	ret = usb_add_function(c, f_msg_multi);
-	if (ret)
-		goto err_run;
+	ret = fsg_bind_config(c->cdev, c, &fsg_common);
+	if (ret < 0)
+		return ret;
 
 	return 0;
-err_run:
-	usb_put_function(f_msg_multi);
-err_fsg:
-	usb_remove_function(c, f_acm_multi);
-err_conf:
-	usb_put_function(f_acm_multi);
-err_func_acm:
-	usb_remove_function(c, f_ecm);
-err_func_ecm:
-	usb_put_function(f_ecm);
-	return ret;
 }
 
-static __ref int cdc_config_register(struct usb_composite_dev *cdev)
+static int cdc_config_register(struct usb_composite_dev *cdev)
 {
 	static struct usb_configuration config = {
 		.bConfigurationValue	= MULTI_CDC_CONFIG_NUM,
@@ -310,7 +254,7 @@ static __ref int cdc_config_register(struct usb_composite_dev *cdev)
 
 #else
 
-static __ref int cdc_config_register(struct usb_composite_dev *cdev)
+static int cdc_config_register(struct usb_composite_dev *cdev)
 {
 	return 0;
 }
@@ -321,175 +265,81 @@ static __ref int cdc_config_register(struct usb_composite_dev *cdev)
 
 /****************************** Gadget Bind ******************************/
 
+
 static int __ref multi_bind(struct usb_composite_dev *cdev)
 {
 	struct usb_gadget *gadget = cdev->gadget;
-#ifdef CONFIG_USB_G_MULTI_CDC
-	struct f_ecm_opts *ecm_opts;
-#endif
-#ifdef USB_ETH_RNDIS
-	struct f_rndis_opts *rndis_opts;
-#endif
-	struct fsg_opts *fsg_opts;
-	struct fsg_config config;
-	int status;
+	int status, gcnum;
 
 	if (!can_support_ecm(cdev->gadget)) {
 		dev_err(&gadget->dev, "controller '%s' not usable\n",
-			gadget->name);
+		        gadget->name);
 		return -EINVAL;
 	}
 
-#ifdef CONFIG_USB_G_MULTI_CDC
-	fi_ecm = usb_get_function_instance("ecm");
-	if (IS_ERR(fi_ecm))
-		return PTR_ERR(fi_ecm);
-
-	ecm_opts = container_of(fi_ecm, struct f_ecm_opts, func_inst);
-
-	gether_set_qmult(ecm_opts->net, qmult);
-	if (!gether_set_host_addr(ecm_opts->net, host_addr))
-		pr_info("using host ethernet address: %s", host_addr);
-	if (!gether_set_dev_addr(ecm_opts->net, dev_addr))
-		pr_info("using self ethernet address: %s", dev_addr);
-#endif
-
-#ifdef USB_ETH_RNDIS
-	fi_rndis = usb_get_function_instance("rndis");
-	if (IS_ERR(fi_rndis)) {
-		status = PTR_ERR(fi_rndis);
-		goto fail;
-	}
-
-	rndis_opts = container_of(fi_rndis, struct f_rndis_opts, func_inst);
-
-	gether_set_qmult(rndis_opts->net, qmult);
-	if (!gether_set_host_addr(rndis_opts->net, host_addr))
-		pr_info("using host ethernet address: %s", host_addr);
-	if (!gether_set_dev_addr(rndis_opts->net, dev_addr))
-		pr_info("using self ethernet address: %s", dev_addr);
-#endif
-
-#if (defined CONFIG_USB_G_MULTI_CDC && defined USB_ETH_RNDIS)
-	/*
-	 * If both ecm and rndis are selected then:
-	 *	1) rndis borrows the net interface from ecm
-	 *	2) since the interface is shared it must not be bound
-	 *	twice - in ecm's _and_ rndis' binds, so do it here.
-	 */
-	gether_set_gadget(ecm_opts->net, cdev->gadget);
-	status = gether_register_netdev(ecm_opts->net);
-	if (status)
-		goto fail0;
-
-	rndis_borrow_net(fi_rndis, ecm_opts->net);
-	ecm_opts->bound = true;
-#endif
+	/* set up network link layer */
+	status = gether_setup(cdev->gadget, hostaddr);
+	if (status < 0)
+		return status;
 
 	/* set up serial link layer */
-	fi_acm = usb_get_function_instance("acm");
-	if (IS_ERR(fi_acm)) {
-		status = PTR_ERR(fi_acm);
+	status = gserial_setup(cdev->gadget, 1);
+	if (status < 0)
 		goto fail0;
-	}
 
 	/* set up mass storage function */
-	fi_msg = usb_get_function_instance("mass_storage");
-	if (IS_ERR(fi_msg)) {
-		status = PTR_ERR(fi_msg);
-		goto fail1;
+	{
+		void *retp;
+		retp = fsg_common_from_params(&fsg_common, cdev, &fsg_mod_data);
+		if (IS_ERR(retp)) {
+			status = PTR_ERR(retp);
+			goto fail1;
+		}
 	}
-	fsg_config_from_params(&config, &fsg_mod_data, fsg_num_buffers);
-	fsg_opts = fsg_opts_from_func_inst(fi_msg);
 
-	fsg_opts->no_configfs = true;
-	status = fsg_common_set_num_buffers(fsg_opts->common, fsg_num_buffers);
-	if (status)
-		goto fail2;
-
-	status = fsg_common_set_nluns(fsg_opts->common, config.nluns);
-	if (status)
-		goto fail_set_nluns;
-
-	status = fsg_common_set_cdev(fsg_opts->common, cdev, config.can_stall);
-	if (status)
-		goto fail_set_cdev;
-
-	fsg_common_set_sysfs(fsg_opts->common, true);
-	status = fsg_common_create_luns(fsg_opts->common, &config);
-	if (status)
-		goto fail_set_cdev;
-
-	fsg_common_set_inquiry_string(fsg_opts->common, config.vendor_name,
-				      config.product_name);
+	/* set bcdDevice */
+	gcnum = usb_gadget_controller_number(gadget);
+	if (gcnum >= 0) {
+		device_desc.bcdDevice = cpu_to_le16(0x0300 | gcnum);
+	} else {
+		WARNING(cdev, "controller '%s' not recognized\n", gadget->name);
+		device_desc.bcdDevice = cpu_to_le16(0x0300 | 0x0099);
+	}
 
 	/* allocate string IDs */
 	status = usb_string_ids_tab(cdev, strings_dev);
 	if (unlikely(status < 0))
-		goto fail_string_ids;
-	device_desc.iProduct = strings_dev[USB_GADGET_PRODUCT_IDX].id;
+		goto fail2;
 
 	/* register configurations */
 	status = rndis_config_register(cdev);
 	if (unlikely(status < 0))
-		goto fail_string_ids;
+		goto fail2;
 
 	status = cdc_config_register(cdev);
 	if (unlikely(status < 0))
-		goto fail_string_ids;
-	usb_composite_overwrite_options(cdev, &coverwrite);
+		goto fail2;
 
 	/* we're done */
 	dev_info(&gadget->dev, DRIVER_DESC "\n");
+	fsg_common_put(&fsg_common);
 	return 0;
 
 
 	/* error recovery */
-fail_string_ids:
-	fsg_common_remove_luns(fsg_opts->common);
-fail_set_cdev:
-	fsg_common_free_luns(fsg_opts->common);
-fail_set_nluns:
-	fsg_common_free_buffers(fsg_opts->common);
 fail2:
-	usb_put_function_instance(fi_msg);
+	fsg_common_put(&fsg_common);
 fail1:
-	usb_put_function_instance(fi_acm);
+	gserial_cleanup();
 fail0:
-#ifdef USB_ETH_RNDIS
-	usb_put_function_instance(fi_rndis);
-fail:
-#endif
-#ifdef CONFIG_USB_G_MULTI_CDC
-	usb_put_function_instance(fi_ecm);
-#endif
+	gether_cleanup();
 	return status;
 }
 
 static int __exit multi_unbind(struct usb_composite_dev *cdev)
 {
-#ifdef CONFIG_USB_G_MULTI_CDC
-	usb_put_function(f_msg_multi);
-#endif
-#ifdef USB_ETH_RNDIS
-	usb_put_function(f_msg_rndis);
-#endif
-	usb_put_function_instance(fi_msg);
-#ifdef CONFIG_USB_G_MULTI_CDC
-	usb_put_function(f_acm_multi);
-#endif
-#ifdef USB_ETH_RNDIS
-	usb_put_function(f_acm_rndis);
-#endif
-	usb_put_function_instance(fi_acm);
-#ifdef USB_ETH_RNDIS
-	usb_put_function(f_rndis);
-	usb_put_function_instance(fi_rndis);
-#endif
-#ifdef CONFIG_USB_G_MULTI_CDC
-	usb_put_function(f_ecm);
-	usb_put_function_instance(fi_ecm);
-#endif
+	gserial_cleanup();
+	gether_cleanup();
 	return 0;
 }
 
@@ -497,20 +347,20 @@ static int __exit multi_unbind(struct usb_composite_dev *cdev)
 /****************************** Some noise ******************************/
 
 
-static __refdata struct usb_composite_driver multi_driver = {
+static struct usb_composite_driver multi_driver = {
 	.name		= "g_multi",
 	.dev		= &device_desc,
 	.strings	= dev_strings,
 	.max_speed	= USB_SPEED_HIGH,
-	.bind		= multi_bind,
 	.unbind		= __exit_p(multi_unbind),
+	.iProduct	= DRIVER_DESC,
 	.needs_serial	= 1,
 };
 
 
 static int __init multi_init(void)
 {
-	return usb_composite_probe(&multi_driver);
+	return usb_composite_probe(&multi_driver, multi_bind);
 }
 module_init(multi_init);
 

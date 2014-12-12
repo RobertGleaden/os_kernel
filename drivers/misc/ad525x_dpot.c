@@ -64,7 +64,7 @@
  * Author: Chris Verges <chrisv@cyberswitching.com>
  *
  * derived from ad5252.c
- * Copyright (c) 2006-2011 Michael Hennerich <hennerich@blackfin.uclinux.org>
+ * Copyright (c) 2006 Michael Hennerich <hennerich@blackfin.uclinux.org>
  *
  * Licensed under the GPL-2 or later.
  */
@@ -72,8 +72,11 @@
 #include <linux/module.h>
 #include <linux/device.h>
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
+
+#define DRIVER_VERSION			"0.2"
 
 #include "ad525x_dpot.h"
 
@@ -469,7 +472,7 @@ static ssize_t sysfs_set_reg(struct device *dev,
 		!test_bit(DPOT_RDAC_MASK & reg, data->otp_en_mask))
 		return -EPERM;
 
-	err = kstrtoul(buf, 10, &value);
+	err = strict_strtoul(buf, 10, &value);
 	if (err)
 		return err;
 
@@ -640,7 +643,7 @@ static const struct attribute_group ad525x_group_commands = {
 	.attrs = ad525x_attributes_commands,
 };
 
-static int ad_dpot_add_files(struct device *dev,
+__devinit int ad_dpot_add_files(struct device *dev,
 		unsigned features, unsigned rdac)
 {
 	int err = sysfs_create_file(&dev->kobj,
@@ -665,7 +668,7 @@ static int ad_dpot_add_files(struct device *dev,
 	return err;
 }
 
-static inline void ad_dpot_remove_files(struct device *dev,
+inline void ad_dpot_remove_files(struct device *dev,
 		unsigned features, unsigned rdac)
 {
 	sysfs_remove_file(&dev->kobj,
@@ -684,9 +687,8 @@ static inline void ad_dpot_remove_files(struct device *dev,
 	}
 }
 
-int ad_dpot_probe(struct device *dev,
-		struct ad_dpot_bus_data *bdata, unsigned long devid,
-			    const char *name)
+__devinit int ad_dpot_probe(struct device *dev,
+		struct ad_dpot_bus_data *bdata, const struct ad_dpot_id *id)
 {
 
 	struct dpot_data *data;
@@ -702,13 +704,13 @@ int ad_dpot_probe(struct device *dev,
 	mutex_init(&data->update_lock);
 
 	data->bdata = *bdata;
-	data->devid = devid;
+	data->devid = id->devid;
 
-	data->max_pos = 1 << DPOT_MAX_POS(devid);
+	data->max_pos = 1 << DPOT_MAX_POS(data->devid);
 	data->rdac_mask = data->max_pos - 1;
-	data->feat = DPOT_FEAT(devid);
-	data->uid = DPOT_UID(devid);
-	data->wipers = DPOT_WIPERS(devid);
+	data->feat = DPOT_FEAT(data->devid);
+	data->uid = DPOT_UID(data->devid);
+	data->wipers = DPOT_WIPERS(data->devid);
 
 	for (i = DPOT_RDAC0; i < MAX_RDACS; i++)
 		if (data->wipers & (1 << i)) {
@@ -729,7 +731,7 @@ int ad_dpot_probe(struct device *dev,
 	}
 
 	dev_info(dev, "%s %d-Position Digital Potentiometer registered\n",
-		 name, data->max_pos);
+		 id->name, data->max_pos);
 
 	return 0;
 
@@ -743,12 +745,12 @@ exit_free:
 	dev_set_drvdata(dev, NULL);
 exit:
 	dev_err(dev, "failed to create client for %s ID 0x%lX\n",
-		name, devid);
+			id->name, id->devid);
 	return err;
 }
 EXPORT_SYMBOL(ad_dpot_probe);
 
-int ad_dpot_remove(struct device *dev)
+__devexit int ad_dpot_remove(struct device *dev)
 {
 	struct dpot_data *data = dev_get_drvdata(dev);
 	int i;
@@ -768,3 +770,4 @@ MODULE_AUTHOR("Chris Verges <chrisv@cyberswitching.com>, "
 	      "Michael Hennerich <hennerich@blackfin.uclinux.org>");
 MODULE_DESCRIPTION("Digital potentiometer driver");
 MODULE_LICENSE("GPL");
+MODULE_VERSION(DRIVER_VERSION);

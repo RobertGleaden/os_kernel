@@ -26,8 +26,7 @@
 #include <linux/interrupt.h>
 
 #include <asm/bootinfo.h>
-#include <asm/bootinfo-vme.h>
-#include <asm/byteorder.h>
+#include <asm/system.h>
 #include <asm/pgtable.h>
 #include <asm/setup.h>
 #include <asm/irq.h>
@@ -39,7 +38,7 @@
 
 static void mvme147_get_model(char *model);
 extern void mvme147_sched_init(irq_handler_t handler);
-extern u32 mvme147_gettimeoffset(void);
+extern unsigned long mvme147_gettimeoffset (void);
 extern int mvme147_hwclk (int, struct rtc_time *);
 extern int mvme147_set_clock_mmss (unsigned long);
 extern void mvme147_reset (void);
@@ -53,10 +52,9 @@ static int bcd2int (unsigned char b);
 irq_handler_t tick_handler;
 
 
-int __init mvme147_parse_bootinfo(const struct bi_record *bi)
+int mvme147_parse_bootinfo(const struct bi_record *bi)
 {
-	uint16_t tag = be16_to_cpu(bi->tag);
-	if (tag == BI_VME_TYPE || tag == BI_VME_BRDINFO)
+	if (bi->tag == BI_VME_TYPE || bi->tag == BI_VME_BRDINFO)
 		return 0;
 	else
 		return 1;
@@ -83,7 +81,7 @@ static void mvme147_get_model(char *model)
 
 void __init mvme147_init_IRQ(void)
 {
-	m68k_setup_user_interrupt(VEC_USER, 192);
+	m68k_setup_user_interrupt(VEC_USER, 192, NULL);
 }
 
 void __init config_mvme147(void)
@@ -91,7 +89,7 @@ void __init config_mvme147(void)
 	mach_max_dma_address	= 0x01000000;
 	mach_sched_init		= mvme147_sched_init;
 	mach_init_IRQ		= mvme147_init_IRQ;
-	arch_gettimeoffset	= mvme147_gettimeoffset;
+	mach_gettimeoffset	= mvme147_gettimeoffset;
 	mach_hwclk		= mvme147_hwclk;
 	mach_set_clock_mmss	= mvme147_set_clock_mmss;
 	mach_reset		= mvme147_reset;
@@ -116,7 +114,8 @@ static irqreturn_t mvme147_timer_int (int irq, void *dev_id)
 void mvme147_sched_init (irq_handler_t timer_routine)
 {
 	tick_handler = timer_routine;
-	if (request_irq(PCC_IRQ_TIMER1, mvme147_timer_int, 0, "timer 1", NULL))
+	if (request_irq(PCC_IRQ_TIMER1, mvme147_timer_int, IRQ_FLG_REPLACE,
+			"timer 1", NULL))
 		pr_err("Couldn't register timer interrupt\n");
 
 	/* Init the clock with a value */
@@ -130,7 +129,7 @@ void mvme147_sched_init (irq_handler_t timer_routine)
 
 /* This is always executed with interrupts disabled.  */
 /* XXX There are race hazards in this code XXX */
-u32 mvme147_gettimeoffset(void)
+unsigned long mvme147_gettimeoffset (void)
 {
 	volatile unsigned short *cp = (volatile unsigned short *)0xfffe1012;
 	unsigned short n;
@@ -140,7 +139,7 @@ u32 mvme147_gettimeoffset(void)
 		n = *cp;
 
 	n -= PCC_TIMER_PRELOAD;
-	return ((unsigned long)n * 25 / 4) * 1000;
+	return (unsigned long)n * 25 / 4;
 }
 
 static int bcd2int (unsigned char b)

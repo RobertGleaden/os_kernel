@@ -22,7 +22,6 @@
 #include <linux/bootmem.h>
 #include <linux/nodemask.h>
 #include <linux/notifier.h>
-#include <linux/export.h>
 #include <asm/mmzone.h>
 #include <asm/numa.h>
 #include <asm/cpu.h>
@@ -135,11 +134,11 @@ struct cpu_cache_info {
 	struct kobject kobj;
 };
 
-static struct cpu_cache_info	all_cpu_cache_info[NR_CPUS];
+static struct cpu_cache_info	all_cpu_cache_info[NR_CPUS] __cpuinitdata;
 #define LEAF_KOBJECT_PTR(x,y)    (&all_cpu_cache_info[x].cache_leaves[y])
 
 #ifdef CONFIG_SMP
-static void cache_shared_cpu_map_setup(unsigned int cpu,
+static void __cpuinit cache_shared_cpu_map_setup( unsigned int cpu,
 		struct cache_info * this_leaf)
 {
 	pal_cache_shared_info_t	csi;
@@ -174,7 +173,7 @@ static void cache_shared_cpu_map_setup(unsigned int cpu,
 				&csi) == PAL_STATUS_SUCCESS);
 }
 #else
-static void cache_shared_cpu_map_setup(unsigned int cpu,
+static void __cpuinit cache_shared_cpu_map_setup(unsigned int cpu,
 		struct cache_info * this_leaf)
 {
 	cpu_set(cpu, this_leaf->shared_cpu_map);
@@ -220,8 +219,7 @@ static ssize_t show_shared_cpu_map(struct cache_info *this_leaf, char *buf)
 	ssize_t	len;
 	cpumask_t shared_cpu_map;
 
-	cpumask_and(&shared_cpu_map,
-				&this_leaf->shared_cpu_map, cpu_online_mask);
+	cpus_and(shared_cpu_map, this_leaf->shared_cpu_map, cpu_online_map);
 	len = cpumask_scnprintf(buf, NR_CPUS+1, &shared_cpu_map);
 	len += sprintf(buf+len, "\n");
 	return len;
@@ -275,7 +273,7 @@ static struct attribute * cache_default_attrs[] = {
 #define to_object(k) container_of(k, struct cache_info, kobj)
 #define to_attr(a) container_of(a, struct cache_attr, attr)
 
-static ssize_t ia64_cache_show(struct kobject * kobj, struct attribute * attr, char * buf)
+static ssize_t cache_show(struct kobject * kobj, struct attribute * attr, char * buf)
 {
 	struct cache_attr *fattr = to_attr(attr);
 	struct cache_info *this_leaf = to_object(kobj);
@@ -286,7 +284,7 @@ static ssize_t ia64_cache_show(struct kobject * kobj, struct attribute * attr, c
 }
 
 static const struct sysfs_ops cache_sysfs_ops = {
-	.show   = ia64_cache_show
+	.show   = cache_show
 };
 
 static struct kobj_type cache_ktype = {
@@ -298,7 +296,7 @@ static struct kobj_type cache_ktype_percpu_entry = {
 	.sysfs_ops	= &cache_sysfs_ops,
 };
 
-static void cpu_cache_sysfs_exit(unsigned int cpu)
+static void __cpuinit cpu_cache_sysfs_exit(unsigned int cpu)
 {
 	kfree(all_cpu_cache_info[cpu].cache_leaves);
 	all_cpu_cache_info[cpu].cache_leaves = NULL;
@@ -307,7 +305,7 @@ static void cpu_cache_sysfs_exit(unsigned int cpu)
 	return;
 }
 
-static int cpu_cache_sysfs_init(unsigned int cpu)
+static int __cpuinit cpu_cache_sysfs_init(unsigned int cpu)
 {
 	unsigned long i, levels, unique_caches;
 	pal_cache_config_info_t cci;
@@ -351,7 +349,7 @@ static int cpu_cache_sysfs_init(unsigned int cpu)
 }
 
 /* Add cache interface for CPU device */
-static int cache_add_dev(struct device *sys_dev)
+static int __cpuinit cache_add_dev(struct sys_device * sys_dev)
 {
 	unsigned int cpu = sys_dev->id;
 	unsigned long i, j;
@@ -401,7 +399,7 @@ static int cache_add_dev(struct device *sys_dev)
 }
 
 /* Remove cache interface for CPU device */
-static int cache_remove_dev(struct device *sys_dev)
+static int __cpuinit cache_remove_dev(struct sys_device * sys_dev)
 {
 	unsigned int cpu = sys_dev->id;
 	unsigned long i;
@@ -425,13 +423,13 @@ static int cache_remove_dev(struct device *sys_dev)
  * When a cpu is hot-plugged, do a check and initiate
  * cache kobject if necessary
  */
-static int cache_cpu_callback(struct notifier_block *nfb,
+static int __cpuinit cache_cpu_callback(struct notifier_block *nfb,
 		unsigned long action, void *hcpu)
 {
 	unsigned int cpu = (unsigned long)hcpu;
-	struct device *sys_dev;
+	struct sys_device *sys_dev;
 
-	sys_dev = get_cpu_device(cpu);
+	sys_dev = get_cpu_sysdev(cpu);
 	switch (action) {
 	case CPU_ONLINE:
 	case CPU_ONLINE_FROZEN:
@@ -445,7 +443,7 @@ static int cache_cpu_callback(struct notifier_block *nfb,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block cache_cpu_notifier =
+static struct notifier_block __cpuinitdata cache_cpu_notifier =
 {
 	.notifier_call = cache_cpu_callback
 };
@@ -454,16 +452,12 @@ static int __init cache_sysfs_init(void)
 {
 	int i;
 
-	cpu_notifier_register_begin();
-
 	for_each_online_cpu(i) {
-		struct device *sys_dev = get_cpu_device((unsigned int)i);
+		struct sys_device *sys_dev = get_cpu_sysdev((unsigned int)i);
 		cache_add_dev(sys_dev);
 	}
 
-	__register_hotcpu_notifier(&cache_cpu_notifier);
-
-	cpu_notifier_register_done();
+	register_hotcpu_notifier(&cache_cpu_notifier);
 
 	return 0;
 }

@@ -31,37 +31,33 @@ struct urb *pickup_urb_and_free_priv(struct vhci_device *vdev, __u32 seqnum)
 	int status;
 
 	list_for_each_entry_safe(priv, tmp, &vdev->priv_rx, list) {
-		if (priv->seqnum != seqnum)
-			continue;
+		if (priv->seqnum == seqnum) {
+			urb = priv->urb;
+			status = urb->status;
 
-		urb = priv->urb;
-		status = urb->status;
+			usbip_dbg_vhci_rx("find urb %p vurb %p seqnum %u\n",
+					  urb, priv, seqnum);
 
-		usbip_dbg_vhci_rx("find urb %p vurb %p seqnum %u\n",
-				urb, priv, seqnum);
+			/* TODO: fix logic here to improve indent situtation */
+			if (status != -EINPROGRESS) {
+				if (status == -ENOENT ||
+				    status == -ECONNRESET)
+					dev_info(&urb->dev->dev,
+						 "urb %p was unlinked "
+						 "%ssynchronuously.\n", urb,
+						 status == -ENOENT ? "" : "a");
+				else
+					dev_info(&urb->dev->dev,
+						 "urb %p may be in a error, "
+						 "status %d\n", urb, status);
+			}
 
-		switch (status) {
-		case -ENOENT:
-			/* fall through */
-		case -ECONNRESET:
-			dev_info(&urb->dev->dev,
-				 "urb %p was unlinked %ssynchronuously.\n", urb,
-				 status == -ENOENT ? "" : "a");
+			list_del(&priv->list);
+			kfree(priv);
+			urb->hcpriv = NULL;
+
 			break;
-		case -EINPROGRESS:
-			/* no info output */
-			break;
-		default:
-			dev_info(&urb->dev->dev,
-				 "urb %p may be in a error, status %d\n", urb,
-				 status);
 		}
-
-		list_del(&priv->list);
-		kfree(priv);
-		urb->hcpriv = NULL;
-
-		break;
 	}
 
 	return urb;
@@ -97,7 +93,8 @@ static void vhci_recv_ret_submit(struct vhci_device *vdev,
 		return;
 
 	/* restore the padding in iso packets */
-	usbip_pad_iso(ud, urb);
+	if (usbip_pad_iso(ud, urb) < 0)
+		return;
 
 	if (usbip_dbg_flag_vhci_rx)
 		usbip_dump_urb(urb);
@@ -164,12 +161,12 @@ static void vhci_recv_ret_unlink(struct vhci_device *vdev,
 		 * already received the result of its submit result and gave
 		 * back the URB.
 		 */
-		pr_info("the urb (seqnum %d) was already given back\n",
+		pr_info("the urb (seqnum %d) was already given backed\n",
 			pdu->base.seqnum);
 	} else {
 		usbip_dbg_vhci_rx("now giveback urb %p\n", urb);
 
-		/* If unlink is successful, status is -ECONNRESET */
+		/* If unlink is succeed, status is -ECONNRESET */
 		urb->status = pdu->u.ret_unlink.status;
 		pr_info("urb->status %d\n", urb->status);
 
@@ -206,8 +203,8 @@ static void vhci_rx_pdu(struct usbip_device *ud)
 
 	memset(&pdu, 0, sizeof(pdu));
 
-	/* receive a pdu header */
-	ret = usbip_recv(ud->tcp_socket, &pdu, sizeof(pdu));
+	/* 1. receive a pdu header */
+	ret = usbip_xmit(0, ud->tcp_socket, (char *) &pdu, sizeof(pdu), 0);
 	if (ret < 0) {
 		if (ret == -ECONNRESET)
 			pr_info("connection reset by peer\n");

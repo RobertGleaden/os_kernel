@@ -49,6 +49,7 @@
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/hdlc.h>
+#include <linux/init.h>
 #include <linux/in.h>
 #include <linux/if_arp.h>
 #include <linux/netdevice.h>
@@ -496,6 +497,7 @@ int lmc_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd) /*fold00*/
 
                     data = kmalloc(xc.len, GFP_KERNEL);
                     if (!data) {
+                            printk(KERN_WARNING "%s: Failed to allocate memory for copy\n", dev->name);
                             ret = -ENOMEM;
                             break;
                     }
@@ -815,7 +817,8 @@ static const struct net_device_ops lmc_ops = {
 	.ndo_get_stats  = lmc_get_stats,
 };
 
-static int lmc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
+static int __devinit lmc_init_one(struct pci_dev *pdev,
+				  const struct pci_device_id *ent)
 {
 	lmc_softc_t *sc;
 	struct net_device *dev;
@@ -972,6 +975,7 @@ static int lmc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
     return 0;
 
 err_hdlcdev:
+	pci_set_drvdata(pdev, NULL);
 	kfree(sc);
 err_kzalloc:
 	pci_release_regions(pdev);
@@ -983,7 +987,7 @@ err_req_io:
 /*
  * Called from pci when removing module.
  */
-static void lmc_remove_one(struct pci_dev *pdev)
+static void __devexit lmc_remove_one(struct pci_dev *pdev)
 {
 	struct net_device *dev = pci_get_drvdata(pdev);
 
@@ -993,6 +997,7 @@ static void lmc_remove_one(struct pci_dev *pdev)
 		free_netdev(dev);
 		pci_release_regions(pdev);
 		pci_disable_device(pdev);
+		pci_set_drvdata(pdev, NULL);
 	}
 }
 
@@ -1116,7 +1121,7 @@ static void lmc_running_reset (struct net_device *dev) /*fold00*/
 {
     lmc_softc_t *sc = dev_to_sc(dev);
 
-    lmc_trace(dev, "lmc_running_reset in");
+    lmc_trace(dev, "lmc_runnig_reset in");
 
     /* stop interrupts */
     /* Clear the interrupt mask */
@@ -1729,10 +1734,21 @@ static struct pci_driver lmc_driver = {
 	.name		= "lmc",
 	.id_table	= lmc_pci_tbl,
 	.probe		= lmc_init_one,
-	.remove		= lmc_remove_one,
+	.remove		= __devexit_p(lmc_remove_one),
 };
 
-module_pci_driver(lmc_driver);
+static int __init init_lmc(void)
+{
+    return pci_register_driver(&lmc_driver);
+}
+
+static void __exit exit_lmc(void)
+{
+    pci_unregister_driver(&lmc_driver);
+}
+
+module_init(init_lmc);
+module_exit(exit_lmc);
 
 unsigned lmc_mii_readreg (lmc_softc_t * const sc, unsigned devaddr, unsigned regno) /*fold00*/
 {
@@ -2123,7 +2139,7 @@ bug_out:
 
     spin_unlock_irqrestore(&sc->lmc_lock, flags);
 
-    lmc_trace(dev, "lmc_driver_timeout out");
+    lmc_trace(dev, "lmc_driver_timout out");
 
 
 }

@@ -10,6 +10,7 @@
  * Copyright (C) 2002  Ralf Baechle
  * Copyright (C) 2002  Maciej W. Rozycki
  */
+#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
@@ -18,7 +19,7 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
-#include <asm/tlbmisc.h>
+#include <asm/system.h>
 #include <asm/isadep.h>
 #include <asm/io.h>
 #include <asm/bootinfo.h>
@@ -222,8 +223,8 @@ void __update_tlb(struct vm_area_struct *vma, unsigned long address, pte_t pte)
 	local_irq_restore(flags);
 }
 
-void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
-		     unsigned long entryhi, unsigned long pagemask)
+void __init add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
+			    unsigned long entryhi, unsigned long pagemask)
 {
 	unsigned long flags;
 	unsigned long old_ctx;
@@ -275,7 +276,7 @@ void add_wired_entry(unsigned long entrylo0, unsigned long entrylo1,
 	}
 }
 
-void tlb_init(void)
+void __cpuinit tlb_init(void)
 {
 	local_flush_tlb_all();
 

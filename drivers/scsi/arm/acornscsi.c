@@ -62,6 +62,13 @@
  */
 #undef CONFIG_SCSI_ACORNSCSI_TAGGED_QUEUE
 /*
+ * SCSI-II Linked command support.
+ *
+ * The higher level code doesn't support linked commands yet, and so the option
+ * is undef'd here.
+ */
+#undef CONFIG_SCSI_ACORNSCSI_LINK
+/*
  * SCSI-II Synchronous transfer support.
  *
  * Tried and tested...
@@ -131,6 +138,7 @@
 #include <linux/stringify.h>
 #include <linux/io.h>
 
+#include <asm/system.h>
 #include <asm/ecard.h>
 
 #include "../scsi.h"
@@ -151,6 +159,10 @@
 #define ABORT_TAG 0xd
 #else
 #error "Yippee!  ABORT TAG is now defined!  Remove this error!"
+#endif
+
+#ifdef CONFIG_SCSI_ACORNSCSI_LINK
+#error SCSI2 LINKed commands not supported (yet)!
 #endif
 
 #ifdef USE_DMAC
@@ -1657,6 +1669,42 @@ void acornscsi_message(AS_Host *host)
 	}
 	break;
 
+#ifdef CONFIG_SCSI_ACORNSCSI_LINK
+    case LINKED_CMD_COMPLETE:
+    case LINKED_FLG_CMD_COMPLETE:
+	/*
+	 * We don't support linked commands yet
+	 */
+	if (0) {
+#if (DEBUG & DEBUG_LINK)
+	    printk("scsi%d.%c: lun %d tag %d linked command complete\n",
+		    host->host->host_no, acornscsi_target(host), host->SCpnt->tag);
+#endif
+	    /*
+	     * A linked command should only terminate with one of these messages
+	     * if there are more linked commands available.
+	     */
+	    if (!host->SCpnt->next_link) {
+		printk(KERN_WARNING "scsi%d.%c: lun %d tag %d linked command complete, but no next_link\n",
+			instance->host_no, acornscsi_target(host), host->SCpnt->tag);
+		acornscsi_sbic_issuecmd(host, CMND_ASSERTATN);
+		msgqueue_addmsg(&host->scsi.msgs, 1, ABORT);
+	    } else {
+		struct scsi_cmnd *SCpnt = host->SCpnt;
+
+		acornscsi_dma_cleanup(host);
+
+		host->SCpnt = host->SCpnt->next_link;
+		host->SCpnt->tag = SCpnt->tag;
+		SCpnt->result = DID_OK | host->scsi.SCp.Message << 8 | host->Scsi.SCp.Status;
+		SCpnt->done(SCpnt);
+
+		/* initialise host->SCpnt->SCp */
+	    }
+	    break;
+	}
+#endif
+
     default: /* reject message */
 	printk(KERN_ERR "scsi%d.%c: unrecognised message %02X, rejecting\n",
 		host->host->host_no, acornscsi_target(host),
@@ -2778,6 +2826,9 @@ char *acornscsi_info(struct Scsi_Host *host)
 #ifdef CONFIG_SCSI_ACORNSCSI_TAGGED_QUEUE
     " TAG"
 #endif
+#ifdef CONFIG_SCSI_ACORNSCSI_LINK
+    " LINK"
+#endif
 #if (DEBUG & DEBUG_NO_WRITE)
     " NOWRITE (" __stringify(NO_WRITE) ")"
 #endif
@@ -2786,34 +2837,42 @@ char *acornscsi_info(struct Scsi_Host *host)
     return string;
 }
 
-static int acornscsi_show_info(struct seq_file *m, struct Scsi_Host *instance)
+int acornscsi_proc_info(struct Scsi_Host *instance, char *buffer, char **start, off_t offset,
+			int length, int inout)
 {
-    int devidx;
+    int pos, begin = 0, devidx;
     struct scsi_device *scd;
     AS_Host *host;
+    char *p = buffer;
+
+    if (inout == 1)
+	return -EINVAL;
 
     host  = (AS_Host *)instance->hostdata;
     
-    seq_printf(m, "AcornSCSI driver v%d.%d.%d"
+    p += sprintf(p, "AcornSCSI driver v%d.%d.%d"
 #ifdef CONFIG_SCSI_ACORNSCSI_SYNC
     " SYNC"
 #endif
 #ifdef CONFIG_SCSI_ACORNSCSI_TAGGED_QUEUE
     " TAG"
 #endif
+#ifdef CONFIG_SCSI_ACORNSCSI_LINK
+    " LINK"
+#endif
 #if (DEBUG & DEBUG_NO_WRITE)
     " NOWRITE (" __stringify(NO_WRITE) ")"
 #endif
 		"\n\n", VER_MAJOR, VER_MINOR, VER_PATCH);
 
-    seq_printf(m,	"SBIC: WD33C93A  Address: %p    IRQ : %d\n",
+    p += sprintf(p,	"SBIC: WD33C93A  Address: %p    IRQ : %d\n",
 			host->base + SBIC_REGIDX, host->scsi.irq);
 #ifdef USE_DMAC
-    seq_printf(m,	"DMAC: uPC71071  Address: %p  IRQ : %d\n\n",
+    p += sprintf(p,	"DMAC: uPC71071  Address: %p  IRQ : %d\n\n",
 			host->base + DMAC_OFFSET, host->scsi.irq);
 #endif
 
-    seq_printf(m,	"Statistics:\n"
+    p += sprintf(p,	"Statistics:\n"
 			"Queued commands: %-10u    Issued commands: %-10u\n"
 			"Done commands  : %-10u    Reads          : %-10u\n"
 			"Writes         : %-10u    Others         : %-10u\n"
@@ -2828,7 +2887,7 @@ static int acornscsi_show_info(struct seq_file *m, struct Scsi_Host *instance)
     for (devidx = 0; devidx < 9; devidx ++) {
 	unsigned int statptr, prev;
 
-	seq_printf(m, "\n%c:", devidx == 8 ? 'H' : ('0' + devidx));
+	p += sprintf(p, "\n%c:", devidx == 8 ? 'H' : ('0' + devidx));
 	statptr = host->status_ptr[devidx] - 10;
 
 	if ((signed int)statptr < 0)
@@ -2838,7 +2897,7 @@ static int acornscsi_show_info(struct seq_file *m, struct Scsi_Host *instance)
 
 	for (; statptr != host->status_ptr[devidx]; statptr = (statptr + 1) & (STATUS_BUFFER_SIZE - 1)) {
 	    if (host->status[devidx][statptr].when) {
-		seq_printf(m, "%c%02X:%02X+%2ld",
+		p += sprintf(p, "%c%02X:%02X+%2ld",
 			host->status[devidx][statptr].irq ? '-' : ' ',
 			host->status[devidx][statptr].ph,
 			host->status[devidx][statptr].ssr,
@@ -2849,32 +2908,51 @@ static int acornscsi_show_info(struct seq_file *m, struct Scsi_Host *instance)
 	}
     }
 
-    seq_printf(m, "\nAttached devices:\n");
+    p += sprintf(p, "\nAttached devices:\n");
 
     shost_for_each_device(scd, instance) {
-	seq_printf(m, "Device/Lun TaggedQ      Sync\n");
-	seq_printf(m, "     %d/%d   ", scd->id, scd->lun);
+	p += sprintf(p, "Device/Lun TaggedQ      Sync\n");
+	p += sprintf(p, "     %d/%d   ", scd->id, scd->lun);
 	if (scd->tagged_supported)
-		seq_printf(m, "%3sabled(%3d) ",
+		p += sprintf(p, "%3sabled(%3d) ",
 			     scd->simple_tags ? "en" : "dis",
 			     scd->current_tag);
 	else
-		seq_printf(m, "unsupported  ");
+		p += sprintf(p, "unsupported  ");
 
 	if (host->device[scd->id].sync_xfer & 15)
-		seq_printf(m, "offset %d, %d ns\n",
+		p += sprintf(p, "offset %d, %d ns\n",
 			     host->device[scd->id].sync_xfer & 15,
 			     acornscsi_getperiod(host->device[scd->id].sync_xfer));
 	else
-		seq_printf(m, "async\n");
+		p += sprintf(p, "async\n");
 
+	pos = p - buffer;
+	if (pos + begin < offset) {
+	    begin += pos;
+	    p = buffer;
+	}
+	pos = p - buffer;
+	if (pos + begin > offset + length) {
+	    scsi_device_put(scd);
+	    break;
+	}
     }
-    return 0;
+
+    pos = p - buffer;
+
+    *start = buffer + (offset - begin);
+    pos -= offset - begin;
+
+    if (pos > length)
+	pos = length;
+
+    return pos;
 }
 
 static struct scsi_host_template acornscsi_template = {
 	.module			= THIS_MODULE,
-	.show_info		= acornscsi_show_info,
+	.proc_info		= acornscsi_proc_info,
 	.name			= "AcornSCSI",
 	.info			= acornscsi_info,
 	.queuecommand		= acornscsi_queuecmd,
@@ -2888,7 +2966,8 @@ static struct scsi_host_template acornscsi_template = {
 	.proc_name		= "acornscsi",
 };
 
-static int acornscsi_probe(struct expansion_card *ec, const struct ecard_id *id)
+static int __devinit
+acornscsi_probe(struct expansion_card *ec, const struct ecard_id *id)
 {
 	struct Scsi_Host *host;
 	AS_Host *ashost;
@@ -2918,7 +2997,7 @@ static int acornscsi_probe(struct expansion_card *ec, const struct ecard_id *id)
 	ec->irqaddr	= ashost->fast + INT_REG;
 	ec->irqmask	= 0x0a;
 
-	ret = request_irq(host->irq, acornscsi_intr, 0, "acornscsi", ashost);
+	ret = request_irq(host->irq, acornscsi_intr, IRQF_DISABLED, "acornscsi", ashost);
 	if (ret) {
 		printk(KERN_CRIT "scsi%d: IRQ%d not free: %d\n",
 			host->host_no, ashost->scsi.irq, ret);
@@ -2954,7 +3033,7 @@ static int acornscsi_probe(struct expansion_card *ec, const struct ecard_id *id)
 	return ret;
 }
 
-static void acornscsi_remove(struct expansion_card *ec)
+static void __devexit acornscsi_remove(struct expansion_card *ec)
 {
 	struct Scsi_Host *host = ecard_get_drvdata(ec);
 	AS_Host *ashost = (AS_Host *)host->hostdata;
@@ -2985,7 +3064,7 @@ static const struct ecard_id acornscsi_cids[] = {
 
 static struct ecard_driver acornscsi_driver = {
 	.probe		= acornscsi_probe,
-	.remove		= acornscsi_remove,
+	.remove		= __devexit_p(acornscsi_remove),
 	.id_table	= acornscsi_cids,
 	.drv = {
 		.name		= "acornscsi",

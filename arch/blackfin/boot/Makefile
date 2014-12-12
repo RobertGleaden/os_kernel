@@ -6,17 +6,20 @@
 # for more details.
 #
 
-targets := uImage uImage.bin uImage.bz2 uImage.gz uImage.lzma uImage.lzo uImage.xip
+MKIMAGE := $(srctree)/scripts/mkuboot.sh
+
+targets := vmImage vmImage.bin vmImage.bz2 vmImage.gz vmImage.lzma vmImage.lzo vmImage.xip
 extra-y += vmlinux.bin vmlinux.bin.gz vmlinux.bin.bz2 vmlinux.bin.lzma vmlinux.bin.lzo vmlinux.bin.xip
 
-ifeq ($(CONFIG_RAMKERNEL),y)
-UIMAGE_LOADADDR = $(CONFIG_BOOT_LOAD)
-else # CONFIG_ROMKERNEL must be set
-UIMAGE_LOADADDR = $(CONFIG_ROM_BASE)
-endif
-UIMAGE_ENTRYADDR = $(shell $(NM) vmlinux | awk '$$NF == "__start" {print $$1}')
-UIMAGE_NAME = '$(CPU_REV)-$(KERNELRELEASE)'
-UIMAGE_OPTS-$(CONFIG_ROMKERNEL) += -x
+UIMAGE_OPTS-y :=
+UIMAGE_OPTS-$(CONFIG_RAMKERNEL) += -a $(CONFIG_BOOT_LOAD)
+UIMAGE_OPTS-$(CONFIG_ROMKERNEL) += -a $(CONFIG_ROM_BASE) -x
+
+quiet_cmd_uimage = UIMAGE  $@
+      cmd_uimage = $(CONFIG_SHELL) $(MKIMAGE) -A $(ARCH) -O linux -T kernel \
+                   -C $(2) -n '$(CPU_REV)-$(KERNELRELEASE)' \
+                   -e $(shell $(NM) vmlinux | awk '$$NF == "__start" {print $$1}') \
+                   $(UIMAGE_OPTS-y) -d $< $@
 
 $(obj)/vmlinux.bin: vmlinux FORCE
 	$(call if_changed,objcopy)
@@ -39,22 +42,22 @@ quiet_cmd_mk_bin_xip = BIN     $@
 $(obj)/vmlinux.bin.xip: $(obj)/vmlinux.bin FORCE
 	$(call if_changed,mk_bin_xip)
 
-$(obj)/uImage.bin: $(obj)/vmlinux.bin
+$(obj)/vmImage.bin: $(obj)/vmlinux.bin
 	$(call if_changed,uimage,none)
 
-$(obj)/uImage.bz2: $(obj)/vmlinux.bin.bz2
+$(obj)/vmImage.bz2: $(obj)/vmlinux.bin.bz2
 	$(call if_changed,uimage,bzip2)
 
-$(obj)/uImage.gz: $(obj)/vmlinux.bin.gz
+$(obj)/vmImage.gz: $(obj)/vmlinux.bin.gz
 	$(call if_changed,uimage,gzip)
 
-$(obj)/uImage.lzma: $(obj)/vmlinux.bin.lzma
+$(obj)/vmImage.lzma: $(obj)/vmlinux.bin.lzma
 	$(call if_changed,uimage,lzma)
 
-$(obj)/uImage.lzo: $(obj)/vmlinux.bin.lzo
+$(obj)/vmImage.lzo: $(obj)/vmlinux.bin.lzo
 	$(call if_changed,uimage,lzo)
 
-$(obj)/uImage.xip: $(obj)/vmlinux.bin.xip
+$(obj)/vmImage.xip: $(obj)/vmlinux.bin.xip
 	$(call if_changed,uimage,none)
 
 suffix-y                      := bin
@@ -64,7 +67,7 @@ suffix-$(CONFIG_KERNEL_LZMA)  := lzma
 suffix-$(CONFIG_KERNEL_LZO)   := lzo
 suffix-$(CONFIG_ROMKERNEL)    := xip
 
-$(obj)/uImage: $(obj)/uImage.$(suffix-y)
+$(obj)/vmImage: $(obj)/vmImage.$(suffix-y)
 	@ln -sf $(notdir $<) $@
 
 install:

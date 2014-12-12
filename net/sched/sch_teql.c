@@ -67,6 +67,7 @@ struct teql_master {
 struct teql_sched_data {
 	struct Qdisc *next;
 	struct teql_master *m;
+	struct neighbour *ncache;
 	struct sk_buff_head q;
 };
 
@@ -87,7 +88,9 @@ teql_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		return NET_XMIT_SUCCESS;
 	}
 
-	return qdisc_drop(skb, sch);
+	kfree_skb(skb);
+	sch->qstats.drops++;
+	return NET_XMIT_DROP;
 }
 
 static struct sk_buff *
@@ -133,6 +136,7 @@ teql_reset(struct Qdisc *sch)
 
 	skb_queue_purge(&dat->q);
 	sch->q.qlen = 0;
+	teql_neigh_release(xchg(&dat->ncache, NULL));
 }
 
 static void
@@ -164,6 +168,7 @@ teql_destroy(struct Qdisc *sch)
 					}
 				}
 				skb_queue_purge(&dat->q);
+				teql_neigh_release(xchg(&dat->ncache, NULL));
 				break;
 			}
 
@@ -220,27 +225,23 @@ static int teql_qdisc_init(struct Qdisc *sch, struct nlattr *opt)
 
 
 static int
-__teql_resolve(struct sk_buff *skb, struct sk_buff *skb_res,
-	       struct net_device *dev, struct netdev_queue *txq,
-	       struct dst_entry *dst)
+__teql_resolve(struct sk_buff *skb, struct sk_buff *skb_res, struct net_device *dev)
 {
-	struct neighbour *n;
-	int err = 0;
+	struct netdev_queue *dev_queue = netdev_get_tx_queue(dev, 0);
+	struct teql_sched_data *q = qdisc_priv(dev_queue->qdisc);
+	struct neighbour *mn = dst_get_neighbour(skb_dst(skb));
+	struct neighbour *n = q->ncache;
 
-	n = dst_neigh_lookup_skb(dst, skb);
-	if (!n)
-		return -ENOENT;
-
-	if (dst->dev != dev) {
-		struct neighbour *mn;
-
-		mn = __neigh_lookup_errno(n->tbl, n->primary_key, dev);
-		neigh_release(n);
-		if (IS_ERR(mn))
-			return PTR_ERR(mn);
-		n = mn;
+	if (mn->tbl == NULL)
+		return -EINVAL;
+	if (n && n->tbl == mn->tbl &&
+	    memcmp(n->primary_key, mn->primary_key, mn->tbl->key_len) == 0) {
+		atomic_inc(&n->refcnt);
+	} else {
+		n = __neigh_lookup_errno(mn->tbl, mn->primary_key, dev);
+		if (IS_ERR(n))
+			return PTR_ERR(n);
 	}
-
 	if (neigh_event_send(n, skb_res) == 0) {
 		int err;
 		char haddr[MAX_ADDR_LEN];
@@ -249,34 +250,29 @@ __teql_resolve(struct sk_buff *skb, struct sk_buff *skb_res,
 		err = dev_hard_header(skb, dev, ntohs(skb->protocol), haddr,
 				      NULL, skb->len);
 
-		if (err < 0)
-			err = -EINVAL;
-	} else {
-		err = (skb_res == NULL) ? -EAGAIN : 1;
+		if (err < 0) {
+			neigh_release(n);
+			return -EINVAL;
+		}
+		teql_neigh_release(xchg(&q->ncache, n));
+		return 0;
 	}
 	neigh_release(n);
-	return err;
+	return (skb_res == NULL) ? -EAGAIN : 1;
 }
 
 static inline int teql_resolve(struct sk_buff *skb,
-			       struct sk_buff *skb_res,
-			       struct net_device *dev,
-			       struct netdev_queue *txq)
+			       struct sk_buff *skb_res, struct net_device *dev)
 {
-	struct dst_entry *dst = skb_dst(skb);
-	int res;
-
+	struct netdev_queue *txq = netdev_get_tx_queue(dev, 0);
 	if (txq->qdisc == &noop_qdisc)
 		return -ENODEV;
 
-	if (!dev->header_ops || !dst)
+	if (dev->header_ops == NULL ||
+	    skb_dst(skb) == NULL ||
+	    dst_get_neighbour(skb_dst(skb)) == NULL)
 		return 0;
-
-	rcu_read_lock();
-	res = __teql_resolve(skb, skb_res, dev, txq, dst);
-	rcu_read_unlock();
-
-	return res;
+	return __teql_resolve(skb, skb_res, dev);
 }
 
 static netdev_tx_t teql_master_xmit(struct sk_buff *skb, struct net_device *dev)
@@ -305,18 +301,18 @@ restart:
 
 		if (slave_txq->qdisc_sleeping != q)
 			continue;
-		if (netif_xmit_stopped(netdev_get_tx_queue(slave, subq)) ||
+		if (__netif_subqueue_stopped(slave, subq) ||
 		    !netif_running(slave)) {
 			busy = 1;
 			continue;
 		}
 
-		switch (teql_resolve(skb, skb_res, slave, slave_txq)) {
+		switch (teql_resolve(skb, skb_res, slave)) {
 		case 0:
 			if (__netif_tx_trylock(slave_txq)) {
 				unsigned int length = qdisc_pkt_len(skb);
 
-				if (!netif_xmit_frozen_or_stopped(slave_txq) &&
+				if (!netif_tx_queue_frozen_or_stopped(slave_txq) &&
 				    slave_ops->ndo_start_xmit(skb, slave) == NETDEV_TX_OK) {
 					txq_trans_update(slave_txq);
 					__netif_tx_unlock(slave_txq);
@@ -328,7 +324,7 @@ restart:
 				}
 				__netif_tx_unlock(slave_txq);
 			}
-			if (netif_xmit_stopped(netdev_get_tx_queue(dev, 0)))
+			if (netif_queue_stopped(dev))
 				busy = 1;
 			break;
 		case 1:

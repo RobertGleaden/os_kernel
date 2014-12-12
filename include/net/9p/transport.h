@@ -26,8 +26,12 @@
 #ifndef NET_9P_TRANSPORT_H
 #define NET_9P_TRANSPORT_H
 
-#define P9_DEF_MIN_RESVPORT	(665U)
-#define P9_DEF_MAX_RESVPORT	(1023U)
+#define P9_TRANS_PREF_PAYLOAD_MASK 0x1
+
+/* Default. Add Payload to PDU before sending it down to transport layer */
+#define P9_TRANS_PREF_PAYLOAD_DEF  0x0
+/* Send pay load separately to transport layer along with PDU.*/
+#define P9_TRANS_PREF_PAYLOAD_SEP  0x1
 
 /**
  * struct p9_trans_module - transport module interface
@@ -40,8 +44,6 @@
  * @close: member function to discard a connection on this transport
  * @request: member function to issue a request to the transport
  * @cancel: member function to cancel a request (if it hasn't been sent)
- * @cancelled: member function to notify that a cancelled request will not
- *             not receive a reply
  *
  * This is the basic API for a transport module which is registered by the
  * transport module with the 9P core network module and used by the client
@@ -54,15 +56,13 @@ struct p9_trans_module {
 	struct list_head list;
 	char *name;		/* name of transport */
 	int maxsize;		/* max message size of transport */
+	int pref;               /* Preferences of this transport */
 	int def;		/* this transport should be default */
 	struct module *owner;
 	int (*create)(struct p9_client *, const char *, char *);
 	void (*close) (struct p9_client *);
 	int (*request) (struct p9_client *, struct p9_req_t *req);
 	int (*cancel) (struct p9_client *, struct p9_req_t *req);
-	int (*cancelled)(struct p9_client *, struct p9_req_t *req);
-	int (*zc_request)(struct p9_client *, struct p9_req_t *,
-			  char *, char *, int , int, int, int);
 };
 
 void v9fs_register_trans(struct p9_trans_module *m);

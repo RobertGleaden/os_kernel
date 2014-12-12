@@ -589,7 +589,7 @@ static int crq_queue_create(struct crq_queue *queue, struct srp_target *target)
 	}
 
 	err = request_irq(vport->dma_dev->irq, &ibmvstgt_interrupt,
-			  0, "ibmvstgt", target);
+			  IRQF_DISABLED, "ibmvstgt", target);
 	if (err)
 		goto req_irq_failed;
 
@@ -907,7 +907,7 @@ static int ibmvstgt_remove(struct vio_dev *dev)
 	return 0;
 }
 
-static struct vio_device_id ibmvstgt_device_table[] = {
+static struct vio_device_id ibmvstgt_device_table[] __devinitdata = {
 	{"v-scsi-host", "IBM,v-scsi-host"},
 	{"",""}
 };
@@ -918,7 +918,10 @@ static struct vio_driver ibmvstgt_driver = {
 	.id_table = ibmvstgt_device_table,
 	.probe = ibmvstgt_probe,
 	.remove = ibmvstgt_remove,
-	.name = "ibmvscsis",
+	.driver = {
+		.name = "ibmvscsis",
+		.owner = THIS_MODULE,
+	}
 };
 
 static int get_system_info(void)

@@ -25,7 +25,7 @@
 /**
  * gfs2_drevalidate - Check directory lookup consistency
  * @dentry: the mapping to check
- * @flags: lookup flags
+ * @nd:
  *
  * Check to make sure the lookup necessary to arrive at this inode from its
  * parent is still good.
@@ -33,7 +33,7 @@
  * Returns: 1 if the dentry is ok, 0 if it isn't
  */
 
-static int gfs2_drevalidate(struct dentry *dentry, unsigned int flags)
+static int gfs2_drevalidate(struct dentry *dentry, struct nameidata *nd)
 {
 	struct dentry *parent;
 	struct gfs2_sbd *sdp;
@@ -44,7 +44,7 @@ static int gfs2_drevalidate(struct dentry *dentry, unsigned int flags)
 	int error;
 	int had_lock = 0;
 
-	if (flags & LOOKUP_RCU)
+	if (nd && nd->flags & LOOKUP_RCU)
 		return -ECHILD;
 
 	parent = dget_parent(dentry);
@@ -93,9 +93,12 @@ invalid_gunlock:
 	if (!had_lock)
 		gfs2_glock_dq_uninit(&d_gh);
 invalid:
-	if (check_submounts_and_drop(dentry) != 0)
-		goto valid;
-
+	if (inode && S_ISDIR(inode->i_mode)) {
+		if (have_submounts(dentry))
+			goto valid;
+		shrink_dcache_parent(dentry);
+	}
+	d_drop(dentry);
 	dput(parent);
 	return 0;
 
@@ -106,7 +109,8 @@ fail:
 	return 0;
 }
 
-static int gfs2_dhash(const struct dentry *dentry, struct qstr *str)
+static int gfs2_dhash(const struct dentry *dentry, const struct inode *inode,
+		struct qstr *str)
 {
 	str->hash = gfs2_disk_hash(str->name, str->len);
 	return 0;

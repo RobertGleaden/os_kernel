@@ -567,19 +567,18 @@ int iwch_bind_mw(struct ib_qp *qp,
 	if (mw_bind->send_flags & IB_SEND_SIGNALED)
 		t3_wr_flags = T3_COMPLETION_FLAG;
 
-	sgl.addr = mw_bind->bind_info.addr;
-	sgl.lkey = mw_bind->bind_info.mr->lkey;
-	sgl.length = mw_bind->bind_info.length;
+	sgl.addr = mw_bind->addr;
+	sgl.lkey = mw_bind->mr->lkey;
+	sgl.length = mw_bind->length;
 	wqe->bind.reserved = 0;
 	wqe->bind.type = TPT_VATO;
 
 	/* TBD: check perms */
-	wqe->bind.perms = iwch_ib_to_tpt_bind_access(
-		mw_bind->bind_info.mw_access_flags);
-	wqe->bind.mr_stag = cpu_to_be32(mw_bind->bind_info.mr->lkey);
+	wqe->bind.perms = iwch_ib_to_tpt_bind_access(mw_bind->mw_access_flags);
+	wqe->bind.mr_stag = cpu_to_be32(mw_bind->mr->lkey);
 	wqe->bind.mw_stag = cpu_to_be32(mw->rkey);
-	wqe->bind.mw_len = cpu_to_be32(mw_bind->bind_info.length);
-	wqe->bind.mw_va = cpu_to_be64(mw_bind->bind_info.addr);
+	wqe->bind.mw_len = cpu_to_be32(mw_bind->length);
+	wqe->bind.mw_va = cpu_to_be64(mw_bind->addr);
 	err = iwch_sgl2pbl_map(rhp, &sgl, 1, &pbl_addr, &page_size);
 	if (err) {
 		spin_unlock_irqrestore(&qhp->lock, flag);
@@ -804,7 +803,7 @@ int iwch_post_terminate(struct iwch_qp *qhp, struct respQ_msg_t *rsp_msg)
  * Assumes qhp lock is held.
  */
 static void __flush_qp(struct iwch_qp *qhp, struct iwch_cq *rchp,
-				struct iwch_cq *schp)
+				struct iwch_cq *schp, unsigned long *flag)
 {
 	int count;
 	int flushed;
@@ -813,44 +812,38 @@ static void __flush_qp(struct iwch_qp *qhp, struct iwch_cq *rchp,
 	PDBG("%s qhp %p rchp %p schp %p\n", __func__, qhp, rchp, schp);
 	/* take a ref on the qhp since we must release the lock */
 	atomic_inc(&qhp->refcnt);
-	spin_unlock(&qhp->lock);
+	spin_unlock_irqrestore(&qhp->lock, *flag);
 
 	/* locking hierarchy: cq lock first, then qp lock. */
-	spin_lock(&rchp->lock);
+	spin_lock_irqsave(&rchp->lock, *flag);
 	spin_lock(&qhp->lock);
 	cxio_flush_hw_cq(&rchp->cq);
 	cxio_count_rcqes(&rchp->cq, &qhp->wq, &count);
 	flushed = cxio_flush_rq(&qhp->wq, &rchp->cq, count);
 	spin_unlock(&qhp->lock);
-	spin_unlock(&rchp->lock);
-	if (flushed) {
-		spin_lock(&rchp->comp_handler_lock);
+	spin_unlock_irqrestore(&rchp->lock, *flag);
+	if (flushed)
 		(*rchp->ibcq.comp_handler)(&rchp->ibcq, rchp->ibcq.cq_context);
-		spin_unlock(&rchp->comp_handler_lock);
-	}
 
 	/* locking hierarchy: cq lock first, then qp lock. */
-	spin_lock(&schp->lock);
+	spin_lock_irqsave(&schp->lock, *flag);
 	spin_lock(&qhp->lock);
 	cxio_flush_hw_cq(&schp->cq);
 	cxio_count_scqes(&schp->cq, &qhp->wq, &count);
 	flushed = cxio_flush_sq(&qhp->wq, &schp->cq, count);
 	spin_unlock(&qhp->lock);
-	spin_unlock(&schp->lock);
-	if (flushed) {
-		spin_lock(&schp->comp_handler_lock);
+	spin_unlock_irqrestore(&schp->lock, *flag);
+	if (flushed)
 		(*schp->ibcq.comp_handler)(&schp->ibcq, schp->ibcq.cq_context);
-		spin_unlock(&schp->comp_handler_lock);
-	}
 
 	/* deref */
 	if (atomic_dec_and_test(&qhp->refcnt))
 	        wake_up(&qhp->wait);
 
-	spin_lock(&qhp->lock);
+	spin_lock_irqsave(&qhp->lock, *flag);
 }
 
-static void flush_qp(struct iwch_qp *qhp)
+static void flush_qp(struct iwch_qp *qhp, unsigned long *flag)
 {
 	struct iwch_cq *rchp, *schp;
 
@@ -860,19 +853,15 @@ static void flush_qp(struct iwch_qp *qhp)
 	if (qhp->ibqp.uobject) {
 		cxio_set_wq_in_error(&qhp->wq);
 		cxio_set_cq_in_error(&rchp->cq);
-		spin_lock(&rchp->comp_handler_lock);
 		(*rchp->ibcq.comp_handler)(&rchp->ibcq, rchp->ibcq.cq_context);
-		spin_unlock(&rchp->comp_handler_lock);
 		if (schp != rchp) {
 			cxio_set_cq_in_error(&schp->cq);
-			spin_lock(&schp->comp_handler_lock);
 			(*schp->ibcq.comp_handler)(&schp->ibcq,
 						   schp->ibcq.cq_context);
-			spin_unlock(&schp->comp_handler_lock);
 		}
 		return;
 	}
-	__flush_qp(qhp, rchp, schp);
+	__flush_qp(qhp, rchp, schp, flag);
 }
 
 
@@ -883,8 +872,7 @@ u16 iwch_rqes_posted(struct iwch_qp *qhp)
 {
 	union t3_wr *wqe = qhp->wq.queue;
 	u16 count = 0;
-
-	while (count < USHRT_MAX && fw_riwrh_opcode((struct fw_riwrh *)wqe) == T3_WR_RCV) {
+	while ((count+1) != 0 && fw_riwrh_opcode((struct fw_riwrh *)wqe) == T3_WR_RCV) {
 		count++;
 		wqe++;
 	}
@@ -1032,7 +1020,7 @@ int iwch_modify_qp(struct iwch_dev *rhp, struct iwch_qp *qhp,
 			break;
 		case IWCH_QP_STATE_ERROR:
 			qhp->attr.state = IWCH_QP_STATE_ERROR;
-			flush_qp(qhp);
+			flush_qp(qhp, &flag);
 			break;
 		default:
 			ret = -EINVAL;
@@ -1080,7 +1068,7 @@ int iwch_modify_qp(struct iwch_dev *rhp, struct iwch_qp *qhp,
 		}
 		switch (attrs->next_state) {
 			case IWCH_QP_STATE_IDLE:
-				flush_qp(qhp);
+				flush_qp(qhp, &flag);
 				qhp->attr.state = IWCH_QP_STATE_IDLE;
 				qhp->attr.llp_stream_handle = NULL;
 				put_ep(&qhp->ep->com);
@@ -1134,7 +1122,7 @@ err:
 	free=1;
 	wake_up(&qhp->wait);
 	BUG_ON(!ep);
-	flush_qp(qhp);
+	flush_qp(qhp, &flag);
 out:
 	spin_unlock_irqrestore(&qhp->lock, flag);
 

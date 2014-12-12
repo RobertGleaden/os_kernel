@@ -96,16 +96,12 @@ int b43_phy_init(struct b43_wldev *dev)
 
 	phy->channel = ops->get_default_chan(dev);
 
-	phy->ops->switch_analog(dev, true);
-	b43_software_rfkill(dev, false);
-
+	ops->software_rfkill(dev, false);
 	err = ops->init(dev);
 	if (err) {
 		b43err(dev->wl, "PHY init failed\n");
 		goto err_block_rf;
 	}
-	phy->do_full_init = false;
-
 	/* Make sure to switch hardware and firmware (SHM) to
 	 * the default channel. */
 	err = b43_switch_channel(dev, ops->get_default_chan(dev));
@@ -117,11 +113,10 @@ int b43_phy_init(struct b43_wldev *dev)
 	return 0;
 
 err_phy_exit:
-	phy->do_full_init = true;
 	if (ops->exit)
 		ops->exit(dev);
 err_block_rf:
-	b43_software_rfkill(dev, true);
+	ops->software_rfkill(dev, true);
 
 	return err;
 }
@@ -130,8 +125,7 @@ void b43_phy_exit(struct b43_wldev *dev)
 {
 	const struct b43_phy_operations *ops = dev->phy.ops;
 
-	b43_software_rfkill(dev, true);
-	dev->phy.do_full_init = true;
+	ops->software_rfkill(dev, true);
 	if (ops->exit)
 		ops->exit(dev);
 }
@@ -139,9 +133,9 @@ void b43_phy_exit(struct b43_wldev *dev)
 bool b43_has_hardware_pctl(struct b43_wldev *dev)
 {
 	if (!dev->phy.hardware_power_control)
-		return false;
+		return 0;
 	if (!dev->phy.ops->supports_hwpctl)
-		return false;
+		return 0;
 	return dev->phy.ops->supports_hwpctl(dev);
 }
 
@@ -151,7 +145,7 @@ void b43_radio_lock(struct b43_wldev *dev)
 
 #if B43_DEBUG
 	B43_WARN_ON(dev->phy.radio_locked);
-	dev->phy.radio_locked = true;
+	dev->phy.radio_locked = 1;
 #endif
 
 	macctl = b43_read32(dev, B43_MMIO_MACCTL);
@@ -169,7 +163,7 @@ void b43_radio_unlock(struct b43_wldev *dev)
 
 #if B43_DEBUG
 	B43_WARN_ON(!dev->phy.radio_locked);
-	dev->phy.radio_locked = false;
+	dev->phy.radio_locked = 0;
 #endif
 
 	/* Commit any write */
@@ -184,7 +178,7 @@ void b43_phy_lock(struct b43_wldev *dev)
 {
 #if B43_DEBUG
 	B43_WARN_ON(dev->phy.phy_locked);
-	dev->phy.phy_locked = true;
+	dev->phy.phy_locked = 1;
 #endif
 	B43_WARN_ON(dev->dev->core_rev < 3);
 
@@ -196,7 +190,7 @@ void b43_phy_unlock(struct b43_wldev *dev)
 {
 #if B43_DEBUG
 	B43_WARN_ON(!dev->phy.phy_locked);
-	dev->phy.phy_locked = false;
+	dev->phy.phy_locked = 0;
 #endif
 	B43_WARN_ON(dev->dev->core_rev < 3);
 
@@ -244,21 +238,6 @@ void b43_radio_maskset(struct b43_wldev *dev, u16 offset, u16 mask, u16 set)
 {
 	b43_radio_write16(dev, offset,
 			  (b43_radio_read16(dev, offset) & mask) | set);
-}
-
-bool b43_radio_wait_value(struct b43_wldev *dev, u16 offset, u16 mask,
-			  u16 value, int delay, int timeout)
-{
-	u16 val;
-	int i;
-
-	for (i = 0; i < timeout; i += delay) {
-		val = b43_radio_read(dev, offset);
-		if ((val & mask) == value)
-			return true;
-		udelay(delay);
-	}
-	return false;
 }
 
 u16 b43_phy_read(struct b43_wldev *dev, u16 reg)
@@ -315,90 +294,6 @@ void b43_phy_maskset(struct b43_wldev *dev, u16 offset, u16 mask, u16 set)
 	} else {
 		b43_phy_write(dev, offset,
 			      (b43_phy_read(dev, offset) & mask) | set);
-	}
-}
-
-void b43_phy_put_into_reset(struct b43_wldev *dev)
-{
-	u32 tmp;
-
-	switch (dev->dev->bus_type) {
-#ifdef CONFIG_B43_BCMA
-	case B43_BUS_BCMA:
-		tmp = bcma_aread32(dev->dev->bdev, BCMA_IOCTL);
-		tmp &= ~B43_BCMA_IOCTL_GMODE;
-		tmp |= B43_BCMA_IOCTL_PHY_RESET;
-		tmp |= BCMA_IOCTL_FGC;
-		bcma_awrite32(dev->dev->bdev, BCMA_IOCTL, tmp);
-		udelay(1);
-
-		tmp = bcma_aread32(dev->dev->bdev, BCMA_IOCTL);
-		tmp &= ~BCMA_IOCTL_FGC;
-		bcma_awrite32(dev->dev->bdev, BCMA_IOCTL, tmp);
-		udelay(1);
-		break;
-#endif
-#ifdef CONFIG_B43_SSB
-	case B43_BUS_SSB:
-		tmp = ssb_read32(dev->dev->sdev, SSB_TMSLOW);
-		tmp &= ~B43_TMSLOW_GMODE;
-		tmp |= B43_TMSLOW_PHYRESET;
-		tmp |= SSB_TMSLOW_FGC;
-		ssb_write32(dev->dev->sdev, SSB_TMSLOW, tmp);
-		usleep_range(1000, 2000);
-
-		tmp = ssb_read32(dev->dev->sdev, SSB_TMSLOW);
-		tmp &= ~SSB_TMSLOW_FGC;
-		ssb_write32(dev->dev->sdev, SSB_TMSLOW, tmp);
-		usleep_range(1000, 2000);
-
-		break;
-#endif
-	}
-}
-
-void b43_phy_take_out_of_reset(struct b43_wldev *dev)
-{
-	u32 tmp;
-
-	switch (dev->dev->bus_type) {
-#ifdef CONFIG_B43_BCMA
-	case B43_BUS_BCMA:
-		/* Unset reset bit (with forcing clock) */
-		tmp = bcma_aread32(dev->dev->bdev, BCMA_IOCTL);
-		tmp &= ~B43_BCMA_IOCTL_PHY_RESET;
-		tmp &= ~B43_BCMA_IOCTL_PHY_CLKEN;
-		tmp |= BCMA_IOCTL_FGC;
-		bcma_awrite32(dev->dev->bdev, BCMA_IOCTL, tmp);
-		udelay(1);
-
-		/* Do not force clock anymore */
-		tmp = bcma_aread32(dev->dev->bdev, BCMA_IOCTL);
-		tmp &= ~BCMA_IOCTL_FGC;
-		tmp |= B43_BCMA_IOCTL_PHY_CLKEN;
-		bcma_awrite32(dev->dev->bdev, BCMA_IOCTL, tmp);
-		udelay(1);
-		break;
-#endif
-#ifdef CONFIG_B43_SSB
-	case B43_BUS_SSB:
-		/* Unset reset bit (with forcing clock) */
-		tmp = ssb_read32(dev->dev->sdev, SSB_TMSLOW);
-		tmp &= ~B43_TMSLOW_PHYRESET;
-		tmp &= ~B43_TMSLOW_PHYCLKEN;
-		tmp |= SSB_TMSLOW_FGC;
-		ssb_write32(dev->dev->sdev, SSB_TMSLOW, tmp);
-		ssb_read32(dev->dev->sdev, SSB_TMSLOW); /* flush */
-		usleep_range(1000, 2000);
-
-		tmp = ssb_read32(dev->dev->sdev, SSB_TMSLOW);
-		tmp &= ~SSB_TMSLOW_FGC;
-		tmp |= B43_TMSLOW_PHYCLKEN;
-		ssb_write32(dev->dev->sdev, SSB_TMSLOW, tmp);
-		ssb_read32(dev->dev->sdev, SSB_TMSLOW); /* flush */
-		usleep_range(1000, 2000);
-		break;
-#endif
 	}
 }
 
@@ -533,7 +428,7 @@ int b43_phy_shm_tssi_read(struct b43_wldev *dev, u16 shm_offset)
 	average = (a + b + c + d + 2) / 4;
 	if (is_ofdm) {
 		/* Adjust for CCK-boost */
-		if (b43_shm_read16(dev, B43_SHM_SHARED, B43_SHM_SH_HOSTF1)
+		if (b43_shm_read16(dev, B43_SHM_SHARED, B43_SHM_SH_HOSTFLO)
 		    & B43_HF_CCKBOOST)
 			average = (average >= 13) ? (average - 13) : 0;
 	}
@@ -551,38 +446,6 @@ bool b43_channel_type_is_40mhz(enum nl80211_channel_type channel_type)
 {
 	return (channel_type == NL80211_CHAN_HT40MINUS ||
 		channel_type == NL80211_CHAN_HT40PLUS);
-}
-
-/* http://bcm-v4.sipsolutions.net/802.11/PHY/N/BmacPhyClkFgc */
-void b43_phy_force_clock(struct b43_wldev *dev, bool force)
-{
-	u32 tmp;
-
-	WARN_ON(dev->phy.type != B43_PHYTYPE_N &&
-		dev->phy.type != B43_PHYTYPE_HT);
-
-	switch (dev->dev->bus_type) {
-#ifdef CONFIG_B43_BCMA
-	case B43_BUS_BCMA:
-		tmp = bcma_aread32(dev->dev->bdev, BCMA_IOCTL);
-		if (force)
-			tmp |= BCMA_IOCTL_FGC;
-		else
-			tmp &= ~BCMA_IOCTL_FGC;
-		bcma_awrite32(dev->dev->bdev, BCMA_IOCTL, tmp);
-		break;
-#endif
-#ifdef CONFIG_B43_SSB
-	case B43_BUS_SSB:
-		tmp = ssb_read32(dev->dev->sdev, SSB_TMSLOW);
-		if (force)
-			tmp |= SSB_TMSLOW_FGC;
-		else
-			tmp &= ~SSB_TMSLOW_FGC;
-		ssb_write32(dev->dev->sdev, SSB_TMSLOW, tmp);
-		break;
-#endif
-	}
 }
 
 /* http://bcm-v4.sipsolutions.net/802.11/PHY/Cordic */

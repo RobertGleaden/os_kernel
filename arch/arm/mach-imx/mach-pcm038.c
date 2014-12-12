@@ -18,7 +18,7 @@
  */
 
 #include <linux/i2c.h>
-#include <linux/platform_data/at24.h>
+#include <linux/i2c/at24.h>
 #include <linux/io.h>
 #include <linux/mtd/plat-ram.h>
 #include <linux/mtd/physmap.h>
@@ -27,18 +27,18 @@
 #include <linux/mfd/mc13783.h>
 #include <linux/spi/spi.h>
 #include <linux/irq.h>
-#include <linux/gpio.h>
 
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/time.h>
 
-#include "board-pcm038.h"
-#include "common.h"
+#include <mach/board-pcm038.h>
+#include <mach/common.h>
+#include <mach/hardware.h>
+#include <mach/iomux-mx27.h>
+#include <mach/ulpi.h>
+
 #include "devices-imx27.h"
-#include "hardware.h"
-#include "iomux-mx27.h"
-#include "ulpi.h"
 
 static const int pcm038_pins[] __initconst = {
 	/* UART1 */
@@ -176,9 +176,7 @@ static struct platform_device *platform_devices[] __initdata = {
  * setup other stuffs to access the sram. */
 static void __init pcm038_init_sram(void)
 {
-	__raw_writel(0x0000d843, MX27_IO_ADDRESS(MX27_WEIM_CSCRxU(1)));
-	__raw_writel(0x22252521, MX27_IO_ADDRESS(MX27_WEIM_CSCRxL(1)));
-	__raw_writel(0x22220a00, MX27_IO_ADDRESS(MX27_WEIM_CSCRxA(1)));
+	mx27_setup_weimcs(1, 0x0000d843, 0x22252521, 0x22220a00);
 }
 
 static const struct imxi2c_platform_data pcm038_i2c1_data __initconst = {
@@ -211,7 +209,7 @@ static const struct spi_imx_master pcm038_spi0_data __initconst = {
 
 static struct regulator_consumer_supply sdhc1_consumers[] = {
 	{
-		.dev_name = "imx21-mmc.1",
+		.dev_name = "mxc-mmc.1",
 		.supply	= "sdhc_vcc",
 	},
 };
@@ -233,7 +231,7 @@ static struct regulator_init_data sdhc1_data = {
 
 static struct regulator_consumer_supply cam_consumers[] = {
 	{
-		.dev_name = NULL,
+		.dev	= NULL,
 		.supply	= "imx_cam_vcc",
 	},
 };
@@ -268,13 +266,14 @@ static struct mc13xxx_platform_data pcm038_pmic = {
 		.regulators = pcm038_regulators,
 		.num_regulators = ARRAY_SIZE(pcm038_regulators),
 	},
-	.flags = MC13XXX_USE_ADC | MC13XXX_USE_TOUCHSCREEN,
+	.flags = MC13783_USE_ADC | MC13783_USE_REGULATOR |
+		 MC13783_USE_TOUCHSCREEN,
 };
 
 static struct spi_board_info pcm038_spi_board_info[] __initdata = {
 	{
 		.modalias = "mc13783",
-		/* irq number is run-time assigned */
+		.irq = IRQ_GPIOB(23),
 		.max_speed_hz = 300000,
 		.bus_num = 0,
 		.chip_select = 0,
@@ -325,7 +324,6 @@ static void __init pcm038_init(void)
 	mxc_gpio_mode(GPIO_PORTB | 23 | GPIO_GPIO | GPIO_IN);
 
 	imx27_add_spi_imx0(&pcm038_spi0_data);
-	pcm038_spi_board_info[0].irq = gpio_to_irq(IMX_GPIO_NR(2, 23));
 	spi_register_board_info(pcm038_spi_board_info,
 				ARRAY_SIZE(pcm038_spi_board_info));
 
@@ -333,8 +331,8 @@ static void __init pcm038_init(void)
 
 	imx27_add_fec(NULL);
 	platform_add_devices(platform_devices, ARRAY_SIZE(platform_devices));
-	imx27_add_imx2_wdt();
-	imx27_add_mxc_w1();
+	imx27_add_imx2_wdt(NULL);
+	imx27_add_mxc_w1(NULL);
 
 #ifdef CONFIG_MACH_PCM970_BASEBOARD
 	pcm970_baseboard_init();
@@ -346,12 +344,15 @@ static void __init pcm038_timer_init(void)
 	mx27_clocks_init(26000000);
 }
 
+static struct sys_timer pcm038_timer = {
+	.init = pcm038_timer_init,
+};
+
 MACHINE_START(PCM038, "phyCORE-i.MX27")
-	.atag_offset = 0x100,
+	.boot_params = MX27_PHYS_OFFSET + 0x100,
 	.map_io = mx27_map_io,
 	.init_early = imx27_init_early,
 	.init_irq = mx27_init_irq,
-	.init_time	= pcm038_timer_init,
+	.timer = &pcm038_timer,
 	.init_machine = pcm038_init,
-	.restart	= mxc_restart,
 MACHINE_END

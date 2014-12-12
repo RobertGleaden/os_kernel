@@ -177,12 +177,13 @@
 #include <net/ax25.h>
 
 #include <asm/irq.h>
+#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
 #include "z8530.h"
 
-static const char banner[] __initconst = KERN_INFO \
+static const char banner[] __initdata = KERN_INFO \
 	"AX.25: Z8530 SCC driver version "VERSION".dl1bke\n";
 
 static void t_dwait(unsigned long);
@@ -1734,7 +1735,7 @@ static int scc_net_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 			if (!Ivec[hwcfg.irq].used && hwcfg.irq)
 			{
 				if (request_irq(hwcfg.irq, scc_isr,
-						0, "AX.25 SCC",
+						IRQF_DISABLED, "AX.25 SCC",
 						(void *)(long) hwcfg.irq))
 					printk(KERN_WARNING "z8530drv: warning, cannot get IRQ %d\n", hwcfg.irq);
 				else
@@ -2118,7 +2119,7 @@ static int __init scc_init_driver (void)
 	}
 	rtnl_unlock();
 
-	proc_create("z8530drv", 0, init_net.proc_net, &scc_net_seq_fops);
+	proc_net_fops_create(&init_net, "z8530drv", 0, &scc_net_seq_fops);
 
 	return 0;
 }
@@ -2173,7 +2174,7 @@ static void __exit scc_cleanup_driver(void)
 	if (Vector_Latch)
 		release_region(Vector_Latch, 1);
 
-	remove_proc_entry("z8530drv", init_net.proc_net);
+	proc_net_remove(&init_net, "z8530drv");
 }
 
 MODULE_AUTHOR("Joerg Reuter <jreuter@yaina.de>");

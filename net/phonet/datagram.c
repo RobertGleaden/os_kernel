@@ -5,8 +5,8 @@
  *
  * Copyright (C) 2008 Nokia Corporation.
  *
- * Authors: Sakari Ailus <sakari.ailus@nokia.com>
- *          Rémi Denis-Courmont
+ * Contact: Remi Denis-Courmont <remi.denis-courmont@nokia.com>
+ * Original author: Sakari Ailus <sakari.ailus@nokia.com>
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -30,7 +30,6 @@
 #include <net/sock.h>
 
 #include <linux/phonet.h>
-#include <linux/export.h>
 #include <net/phonet/phonet.h>
 
 static int pn_backlog_rcv(struct sock *sk, struct sk_buff *skb);
@@ -86,7 +85,7 @@ static int pn_init(struct sock *sk)
 static int pn_sendmsg(struct kiocb *iocb, struct sock *sk,
 			struct msghdr *msg, size_t len)
 {
-	DECLARE_SOCKADDR(struct sockaddr_pn *, target, msg->msg_name);
+	struct sockaddr_pn *target;
 	struct sk_buff *skb;
 	int err;
 
@@ -94,12 +93,13 @@ static int pn_sendmsg(struct kiocb *iocb, struct sock *sk,
 				MSG_CMSG_COMPAT))
 		return -EOPNOTSUPP;
 
-	if (target == NULL)
+	if (msg->msg_name == NULL)
 		return -EDESTADDRREQ;
 
 	if (msg->msg_namelen < sizeof(struct sockaddr_pn))
 		return -EINVAL;
 
+	target = (struct sockaddr_pn *)msg->msg_name;
 	if (target->spn_family != AF_PHONET)
 		return -EAFNOSUPPORT;
 
@@ -138,6 +138,9 @@ static int pn_recvmsg(struct kiocb *iocb, struct sock *sk,
 			MSG_CMSG_COMPAT))
 		goto out_nofree;
 
+	if (addr_len)
+		*addr_len = sizeof(sa);
+
 	skb = skb_recv_datagram(sk, flags, noblock, &rval);
 	if (skb == NULL)
 		goto out_nofree;
@@ -158,11 +161,8 @@ static int pn_recvmsg(struct kiocb *iocb, struct sock *sk,
 
 	rval = (flags & MSG_TRUNC) ? skb->len : copylen;
 
-	if (msg->msg_name != NULL) {
-		__sockaddr_check_size(sizeof(sa));
-		memcpy(msg->msg_name, &sa, sizeof(sa));
-		*addr_len = sizeof(sa);
-	}
+	if (msg->msg_name != NULL)
+		memcpy(msg->msg_name, &sa, sizeof(struct sockaddr_pn));
 
 out:
 	skb_free_datagram(sk, skb);

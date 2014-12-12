@@ -26,6 +26,7 @@
 #include <linux/profile.h>
 #include <linux/bitops.h>
 
+#include <asm/system.h>
 #include <asm/io.h>
 #include <asm/uaccess.h>
 
@@ -117,6 +118,13 @@ handle_irq(int irq)
 		return;
 	}
 
+	/*
+	 * From here we must proceed with IPL_MAX. Note that we do not
+	 * explicitly enable interrupts afterwards - some MILO PALcode
+	 * (namely LX164 one) seems to have severe problems with RTI
+	 * at IPL 0.
+	 */
+	local_irq_disable();
 	irq_enter();
 	generic_handle_irq_desc(irq, desc);
 	irq_exit();

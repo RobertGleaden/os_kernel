@@ -11,16 +11,10 @@
  */
 
 #include <linux/dma-mapping.h>
-#include <linux/module.h>
-#include <linux/dmaengine.h>
-#include <linux/of.h>
-
-#include <mach/dma.h>
 
 #include <sound/core.h>
 #include <sound/soc.h>
 #include <sound/pxa2xx-lib.h>
-#include <sound/dmaengine_pcm.h>
 
 #include "../../arm/pxa2xx-pcm.h"
 
@@ -30,7 +24,7 @@ static int pxa2xx_pcm_hw_params(struct snd_pcm_substream *substream,
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct pxa2xx_runtime_data *prtd = runtime->private_data;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_dmaengine_dai_dma_data *dma;
+	struct pxa2xx_pcm_dma_params *dma;
 	int ret;
 
 	dma = snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
@@ -44,7 +38,7 @@ static int pxa2xx_pcm_hw_params(struct snd_pcm_substream *substream,
 	 * with different params */
 	if (prtd->params == NULL) {
 		prtd->params = dma;
-		ret = pxa_request_dma("name", DMA_PRIO_LOW,
+		ret = pxa_request_dma(prtd->params->name, DMA_PRIO_LOW,
 			      pxa2xx_pcm_dma_irq, substream);
 		if (ret < 0)
 			return ret;
@@ -52,7 +46,7 @@ static int pxa2xx_pcm_hw_params(struct snd_pcm_substream *substream,
 	} else if (prtd->params != dma) {
 		pxa_free_dma(prtd->dma_ch);
 		prtd->params = dma;
-		ret = pxa_request_dma("name", DMA_PRIO_LOW,
+		ret = pxa_request_dma(prtd->params->name, DMA_PRIO_LOW,
 			      pxa2xx_pcm_dma_irq, substream);
 		if (ret < 0)
 			return ret;
@@ -89,15 +83,18 @@ static struct snd_pcm_ops pxa2xx_pcm_ops = {
 	.mmap		= pxa2xx_pcm_mmap,
 };
 
+static u64 pxa2xx_pcm_dmamask = DMA_BIT_MASK(32);
+
 static int pxa2xx_soc_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_card *card = rtd->card->snd_card;
 	struct snd_pcm *pcm = rtd->pcm;
-	int ret;
+	int ret = 0;
 
-	ret = dma_coerce_mask_and_coherent(card->dev, DMA_BIT_MASK(32));
-	if (ret)
-		return ret;
+	if (!card->dev->dma_mask)
+		card->dev->dma_mask = &pxa2xx_pcm_dmamask;
+	if (!card->dev->coherent_dma_mask)
+		card->dev->coherent_dma_mask = DMA_BIT_MASK(32);
 
 	if (pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream) {
 		ret = pxa2xx_pcm_preallocate_dma_buffer(pcm,
@@ -122,36 +119,38 @@ static struct snd_soc_platform_driver pxa2xx_soc_platform = {
 	.pcm_free	= pxa2xx_pcm_free_dma_buffers,
 };
 
-static int pxa2xx_soc_platform_probe(struct platform_device *pdev)
+static int __devinit pxa2xx_soc_platform_probe(struct platform_device *pdev)
 {
 	return snd_soc_register_platform(&pdev->dev, &pxa2xx_soc_platform);
 }
 
-static int pxa2xx_soc_platform_remove(struct platform_device *pdev)
+static int __devexit pxa2xx_soc_platform_remove(struct platform_device *pdev)
 {
 	snd_soc_unregister_platform(&pdev->dev);
 	return 0;
 }
 
-#ifdef CONFIG_OF
-static const struct of_device_id snd_soc_pxa_audio_match[] = {
-	{ .compatible   = "mrvl,pxa-pcm-audio" },
-	{ }
-};
-#endif
-
 static struct platform_driver pxa_pcm_driver = {
 	.driver = {
-		.name = "pxa-pcm-audio",
-		.owner = THIS_MODULE,
-		.of_match_table = of_match_ptr(snd_soc_pxa_audio_match),
+			.name = "pxa-pcm-audio",
+			.owner = THIS_MODULE,
 	},
 
 	.probe = pxa2xx_soc_platform_probe,
-	.remove = pxa2xx_soc_platform_remove,
+	.remove = __devexit_p(pxa2xx_soc_platform_remove),
 };
 
-module_platform_driver(pxa_pcm_driver);
+static int __init snd_pxa_pcm_init(void)
+{
+	return platform_driver_register(&pxa_pcm_driver);
+}
+module_init(snd_pxa_pcm_init);
+
+static void __exit snd_pxa_pcm_exit(void)
+{
+	platform_driver_unregister(&pxa_pcm_driver);
+}
+module_exit(snd_pxa_pcm_exit);
 
 MODULE_AUTHOR("Nicolas Pitre");
 MODULE_DESCRIPTION("Intel PXA2xx PCM DMA module");

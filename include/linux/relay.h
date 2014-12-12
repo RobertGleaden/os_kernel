@@ -15,10 +15,12 @@
 #include <linux/timer.h>
 #include <linux/wait.h>
 #include <linux/list.h>
-#include <linux/bug.h>
 #include <linux/fs.h>
 #include <linux/poll.h>
 #include <linux/kref.h>
+
+/* Needs a _much_ better name... */
+#define FIX_SIZE(x) ((((x) - 1) & PAGE_MASK) + PAGE_SIZE)
 
 /*
  * Tracks changes to rchan/rchan_buf structs
@@ -142,7 +144,7 @@ struct rchan_callbacks
 	 */
 	struct dentry *(*create_buf_file)(const char *filename,
 					  struct dentry *parent,
-					  umode_t mode,
+					  int mode,
 					  struct rchan_buf *buf,
 					  int *is_global);
 

@@ -1,6 +1,8 @@
 /*
+ *  arch/s390/math-emu/math.c
+ *
  *  S390 version
- *    Copyright IBM Corp. 1999, 2001
+ *    Copyright (C) 1999-2001 IBM Deutschland Entwicklung GmbH, IBM Corporation
  *    Author(s): Martin Schwidefsky (schwidefsky@de.ibm.com),
  *
  * 'math.c' emulates IEEE instructions on a S390 processor
@@ -18,8 +20,6 @@
 #include <math-emu/single.h>
 #include <math-emu/double.h>
 #include <math-emu/quad.h>
-
-#define FPC_VALID_MASK		0xF8F8FF03
 
 /*
  * I miss a macro to round a floating point number to the

@@ -59,8 +59,7 @@ int orinoco_wiphy_register(struct wiphy *wiphy)
 	for (i = 0; i < NUM_CHANNELS; i++) {
 		if (priv->channel_mask & (1 << i)) {
 			priv->channels[i].center_freq =
-				ieee80211_channel_to_frequency(i + 1,
-							   IEEE80211_BAND_2GHZ);
+				ieee80211_dsss_chan_to_freq(i + 1);
 			channels++;
 		}
 	}
@@ -139,7 +138,7 @@ static int orinoco_change_vif(struct wiphy *wiphy, struct net_device *dev,
 	return err;
 }
 
-static int orinoco_scan(struct wiphy *wiphy,
+static int orinoco_scan(struct wiphy *wiphy, struct net_device *dev,
 			struct cfg80211_scan_request *request)
 {
 	struct orinoco_private *priv = wiphy_priv(wiphy);
@@ -161,24 +160,26 @@ static int orinoco_scan(struct wiphy *wiphy,
 	return err;
 }
 
-static int orinoco_set_monitor_channel(struct wiphy *wiphy,
-				       struct cfg80211_chan_def *chandef)
+static int orinoco_set_channel(struct wiphy *wiphy,
+			struct net_device *netdev,
+			struct ieee80211_channel *chan,
+			enum nl80211_channel_type channel_type)
 {
 	struct orinoco_private *priv = wiphy_priv(wiphy);
 	int err = 0;
 	unsigned long flags;
 	int channel;
 
-	if (!chandef->chan)
+	if (!chan)
 		return -EINVAL;
 
-	if (cfg80211_get_chandef_type(chandef) != NL80211_CHAN_NO_HT)
+	if (channel_type != NL80211_CHAN_NO_HT)
 		return -EINVAL;
 
-	if (chandef->chan->band != IEEE80211_BAND_2GHZ)
+	if (chan->band != IEEE80211_BAND_2GHZ)
 		return -EINVAL;
 
-	channel = ieee80211_frequency_to_channel(chandef->chan->center_freq);
+	channel = ieee80211_freq_to_dsss_chan(chan->center_freq);
 
 	if ((channel < 1) || (channel > NUM_CHANNELS) ||
 	     !(priv->channel_mask & (1 << (channel - 1))))
@@ -285,7 +286,7 @@ static int orinoco_set_wiphy_params(struct wiphy *wiphy, u32 changed)
 
 const struct cfg80211_ops orinoco_cfg_ops = {
 	.change_virtual_intf = orinoco_change_vif,
-	.set_monitor_channel = orinoco_set_monitor_channel,
+	.set_channel = orinoco_set_channel,
 	.scan = orinoco_scan,
 	.set_wiphy_params = orinoco_set_wiphy_params,
 };

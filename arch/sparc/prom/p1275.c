@@ -5,6 +5,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/string.h>
@@ -12,6 +13,7 @@
 
 #include <asm/openprom.h>
 #include <asm/oplib.h>
+#include <asm/system.h>
 #include <asm/spitfire.h>
 #include <asm/pstate.h>
 #include <asm/ldc.h>

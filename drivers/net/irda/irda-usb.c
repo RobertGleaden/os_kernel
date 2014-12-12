@@ -58,6 +58,7 @@
 #include <linux/moduleparam.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
+#include <linux/init.h>
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/slab.h>
@@ -1670,7 +1671,7 @@ static int irda_usb_probe(struct usb_interface *intf,
 
 	/* Is this really necessary? (no, except maybe for broken devices) */
 	if (usb_reset_configuration (dev) < 0) {
-		dev_err(&intf->dev, "reset_configuration failed\n");
+		err("reset_configuration failed");
 		ret = -EIO;
 		goto err_out_3;
 	}
@@ -1913,8 +1914,41 @@ static struct usb_driver irda_driver = {
 #endif
 };
 
-module_usb_driver(irda_driver);
+/************************* MODULE CALLBACKS *************************/
+/*
+ * Deal with module insertion/removal
+ * Mostly tell USB about our existence
+ */
 
+/*------------------------------------------------------------------*/
+/*
+ * Module insertion
+ */
+static int __init usb_irda_init(void)
+{
+	int	ret;
+
+	ret = usb_register(&irda_driver);
+	if (ret < 0)
+		return ret;
+
+	IRDA_MESSAGE("USB IrDA support registered\n");
+	return 0;
+}
+module_init(usb_irda_init);
+
+/*------------------------------------------------------------------*/
+/*
+ * Module removal
+ */
+static void __exit usb_irda_cleanup(void)
+{
+	/* Deregister the driver and remove all pending instances */
+	usb_deregister(&irda_driver);
+}
+module_exit(usb_irda_cleanup);
+
+/*------------------------------------------------------------------*/
 /*
  * Module parameters
  */

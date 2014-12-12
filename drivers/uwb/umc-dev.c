@@ -6,7 +6,6 @@
  * This file is released under the GNU GPL v2.
  */
 #include <linux/kernel.h>
-#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/uwb/umc.h>
 
@@ -66,7 +65,6 @@ int umc_device_register(struct umc_dev *umc)
 	return 0;
 
 error_device_register:
-	put_device(&umc->dev);
 	release_resource(&umc->resource);
 error_request_resource:
 	return err;

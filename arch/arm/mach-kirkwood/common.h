@@ -11,8 +11,6 @@
 #ifndef __ARCH_KIRKWOOD_COMMON_H
 #define __ARCH_KIRKWOOD_COMMON_H
 
-#include <linux/reboot.h>
-
 struct dsa_platform_data;
 struct mv643xx_eth_platform_data;
 struct mv_sata_platform_data;
@@ -32,7 +30,8 @@ void kirkwood_init(void);
 void kirkwood_init_early(void);
 void kirkwood_init_irq(void);
 
-void kirkwood_setup_wins(void);
+extern struct mbus_dram_target_info kirkwood_mbus_dram_info;
+void kirkwood_setup_cpu_mbus(void);
 
 void kirkwood_enable_pcie(void);
 void kirkwood_pcie_id(u32 *dev, u32 *rev);
@@ -49,25 +48,11 @@ void kirkwood_i2c_init(void);
 void kirkwood_uart0_init(void);
 void kirkwood_uart1_init(void);
 void kirkwood_nand_init(struct mtd_partition *parts, int nr_parts, int delay);
-void kirkwood_nand_init_rnb(struct mtd_partition *parts, int nr_parts,
-			    int (*dev_ready)(struct mtd_info *));
+void kirkwood_nand_init_rnb(struct mtd_partition *parts, int nr_parts, int (*dev_ready)(struct mtd_info *));
 void kirkwood_audio_init(void);
-void kirkwood_cpuidle_init(void);
-void kirkwood_cpufreq_init(void);
-
-void kirkwood_restart(enum reboot_mode, const char *);
-void kirkwood_clk_init(void);
-
-/* early init functions not converted to fdt yet */
-char *kirkwood_id(void);
-void kirkwood_l2_init(void);
-void kirkwood_wdt_init(void);
-void kirkwood_xor0_init(void);
-void kirkwood_xor1_init(void);
-void kirkwood_crypto_init(void);
 
 extern int kirkwood_tclk;
-extern void kirkwood_timer_init(void);
+extern struct sys_timer kirkwood_timer;
 
 #define ARRAY_AND_SIZE(x)	(x), ARRAY_SIZE(x)
 

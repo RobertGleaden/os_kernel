@@ -46,9 +46,9 @@
 #define MMU_VPN_MASK	0xfffff000
 
 #if defined(CONFIG_SUPERH32)
-#include <asm/mmu_context_32.h>
+#include "mmu_context_32.h"
 #else
-#include <asm/mmu_context_64.h>
+#include "mmu_context_64.h"
 #endif
 
 /*
@@ -81,7 +81,7 @@ static inline void get_mmu_context(struct mm_struct *mm, unsigned int cpu)
 
 		/*
 		 * Fix version; Note that we avoid version #0
-		 * to distinguish NO_CONTEXT.
+		 * to distingush NO_CONTEXT.
 		 */
 		if (!asid)
 			asid = MMU_CONTEXT_FIRST_VERSION;

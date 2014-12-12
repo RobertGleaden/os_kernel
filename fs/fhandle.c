@@ -10,7 +10,6 @@
 #include <linux/personality.h>
 #include <asm/uaccess.h>
 #include "internal.h"
-#include "mount.h"
 
 static long do_sys_name_to_handle(struct path *path,
 				  struct file_handle __user *ufh,
@@ -22,11 +21,11 @@ static long do_sys_name_to_handle(struct path *path,
 	struct file_handle *handle = NULL;
 
 	/*
-	 * We need to make sure whether the file system
+	 * We need t make sure wether the file system
 	 * support decoding of the file handle
 	 */
-	if (!path->dentry->d_sb->s_export_op ||
-	    !path->dentry->d_sb->s_export_op->fh_to_dentry)
+	if (!path->mnt->mnt_sb->s_export_op ||
+	    !path->mnt->mnt_sb->s_export_op->fh_to_dentry)
 		return -EOPNOTSUPP;
 
 	if (copy_from_user(&f_handle, ufh, sizeof(struct file_handle)))
@@ -40,7 +39,7 @@ static long do_sys_name_to_handle(struct path *path,
 	if (!handle)
 		return -ENOMEM;
 
-	/* convert handle size to multiple of sizeof(u32) */
+	/* convert handle size to  multiple of sizeof(u32) */
 	handle_dwords = f_handle.handle_bytes >> 2;
 
 	/* we ask for a non connected handle */
@@ -52,7 +51,7 @@ static long do_sys_name_to_handle(struct path *path,
 	handle_bytes = handle_dwords * sizeof(u32);
 	handle->handle_bytes = handle_bytes;
 	if ((handle->handle_bytes > f_handle.handle_bytes) ||
-	    (retval == FILEID_INVALID) || (retval == -ENOSPC)) {
+	    (retval == 255) || (retval == -ENOSPC)) {
 		/* As per old exportfs_encode_fh documentation
 		 * we could return ENOSPC to indicate overflow
 		 * But file system returned 255 always. So handle
@@ -67,8 +66,7 @@ static long do_sys_name_to_handle(struct path *path,
 	} else
 		retval = 0;
 	/* copy the mount id */
-	if (copy_to_user(mnt_id, &real_mount(path->mnt)->mnt_id,
-			 sizeof(*mnt_id)) ||
+	if (copy_to_user(mnt_id, &path->mnt->mnt_id, sizeof(*mnt_id)) ||
 	    copy_to_user(ufh, handle,
 			 sizeof(struct file_handle) + handle_bytes))
 		retval = -EFAULT;
@@ -113,21 +111,24 @@ SYSCALL_DEFINE5(name_to_handle_at, int, dfd, const char __user *, name,
 
 static struct vfsmount *get_vfsmount_from_fd(int fd)
 {
-	struct vfsmount *mnt;
+	struct path path;
 
 	if (fd == AT_FDCWD) {
 		struct fs_struct *fs = current->fs;
 		spin_lock(&fs->lock);
-		mnt = mntget(fs->pwd.mnt);
+		path = fs->pwd;
+		mntget(path.mnt);
 		spin_unlock(&fs->lock);
 	} else {
-		struct fd f = fdget(fd);
-		if (!f.file)
+		int fput_needed;
+		struct file *file = fget_light(fd, &fput_needed);
+		if (!file)
 			return ERR_PTR(-EBADF);
-		mnt = mntget(f.file->f_path.mnt);
-		fdput(f);
+		path = file->f_path;
+		mntget(path.mnt);
+		fput_light(file, fput_needed);
 	}
-	return mnt;
+	return path.mnt;
 }
 
 static int vfs_dentry_acceptable(void *context, struct dentry *dentry)

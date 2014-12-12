@@ -215,7 +215,7 @@ static int generate_txhdr_fw3(struct b43legacy_wldev *dev,
 	rate_fb_ofdm = b43legacy_is_ofdm_rate(rate_fb->hw_value);
 
 	txhdr->mac_frame_ctl = wlhdr->frame_control;
-	memcpy(txhdr->tx_receiver, wlhdr->addr1, ETH_ALEN);
+	memcpy(txhdr->tx_receiver, wlhdr->addr1, 6);
 
 	/* Calculate duration for fallback rate */
 	if ((rate_fb->hw_value == rate) ||
@@ -228,7 +228,6 @@ static int generate_txhdr_fw3(struct b43legacy_wldev *dev,
 	} else {
 		txhdr->dur_fb = ieee80211_generic_frame_duration(dev->wl->hw,
 							 info->control.vif,
-							 info->band,
 							 fragment_len,
 							 rate_fb);
 	}
@@ -254,7 +253,7 @@ static int generate_txhdr_fw3(struct b43legacy_wldev *dev,
 				   B43legacy_TX4_MAC_KEYALG_SHIFT) &
 				   B43legacy_TX4_MAC_KEYALG;
 			wlhdr_len = ieee80211_hdrlen(wlhdr->frame_control);
-			iv_len = min_t(size_t, info->control.hw_key->iv_len,
+			iv_len = min((size_t)info->control.hw_key->iv_len,
 				     ARRAY_SIZE(txhdr->iv));
 			memcpy(txhdr->iv, ((u8 *)wlhdr) + wlhdr_len, iv_len);
 		} else {
@@ -269,7 +268,8 @@ static int generate_txhdr_fw3(struct b43legacy_wldev *dev,
 	b43legacy_generate_plcp_hdr((struct b43legacy_plcp_hdr4 *)
 				    (&txhdr->plcp), plcp_fragment_len,
 				    rate);
-	b43legacy_generate_plcp_hdr(&txhdr->plcp_fb, plcp_fragment_len,
+	b43legacy_generate_plcp_hdr((struct b43legacy_plcp_hdr4 *)
+				    (&txhdr->plcp_fb), plcp_fragment_len,
 				    rate_fb->hw_value);
 
 	/* PHY TX Control word */
@@ -277,7 +277,19 @@ static int generate_txhdr_fw3(struct b43legacy_wldev *dev,
 		phy_ctl |= B43legacy_TX4_PHY_ENC_OFDM;
 	if (info->control.rates[0].flags & IEEE80211_TX_RC_USE_SHORT_PREAMBLE)
 		phy_ctl |= B43legacy_TX4_PHY_SHORTPRMBL;
-	phy_ctl |= B43legacy_TX4_PHY_ANTLAST;
+	switch (info->antenna_sel_tx) {
+	case 0:
+		phy_ctl |= B43legacy_TX4_PHY_ANTLAST;
+		break;
+	case 1:
+		phy_ctl |= B43legacy_TX4_PHY_ANT0;
+		break;
+	case 2:
+		phy_ctl |= B43legacy_TX4_PHY_ANT1;
+		break;
+	default:
+		B43legacy_BUG_ON(1);
+	}
 
 	/* MAC control */
 	rates = info->control.rates;
@@ -339,7 +351,8 @@ static int generate_txhdr_fw3(struct b43legacy_wldev *dev,
 		b43legacy_generate_plcp_hdr((struct b43legacy_plcp_hdr4 *)
 					    (&txhdr->rts_plcp),
 					    len, rts_rate);
-		b43legacy_generate_plcp_hdr(&txhdr->rts_plcp_fb,
+		b43legacy_generate_plcp_hdr((struct b43legacy_plcp_hdr4 *)
+					    (&txhdr->rts_plcp_fb),
 					    len, rts_rate_fb);
 		hdr = (struct ieee80211_hdr *)(&txhdr->rts_frame);
 		txhdr->rts_dur_fb = hdr->duration_id;
@@ -557,7 +570,7 @@ void b43legacy_rx(struct b43legacy_wldev *dev,
 		status.mactime += mactime;
 		if (low_mactime_now <= mactime)
 			status.mactime -= 0x10000;
-		status.flag |= RX_FLAG_MACTIME_START;
+		status.flag |= RX_FLAG_MACTIME_MPDU;
 	}
 
 	chanid = (chanstat & B43legacy_RX_CHAN_ID) >>

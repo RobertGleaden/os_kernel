@@ -24,7 +24,8 @@
  * the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program;  if not, see <http://www.gnu.org/licenses/>.
+ * along with this program;  if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
 
@@ -132,7 +133,7 @@ static inline void netlbl_af4list_audit_addr(struct audit_buffer *audit_buf,
 }
 #endif
 
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 
 #define __af6list_entry(ptr) container_of(ptr, struct netlbl_af6list, list)
 

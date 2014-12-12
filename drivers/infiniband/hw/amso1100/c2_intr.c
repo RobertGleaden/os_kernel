@@ -169,8 +169,7 @@ static void handle_vq(struct c2_dev *c2dev, u32 mq_index)
 		 * We should never get here, as the adapter should
 		 * never send us a reply that we're not expecting.
 		 */
-		if (reply_msg != NULL)
-			vq_repbuf_free(c2dev, host_msg);
+		vq_repbuf_free(c2dev, host_msg);
 		pr_debug("handle_vq: UNEXPECTEDLY got NULL req\n");
 		return;
 	}
@@ -184,11 +183,6 @@ static void handle_vq(struct c2_dev *c2dev, u32 mq_index)
 	case IW_CM_EVENT_ESTABLISHED:
 		c2_set_qp_state(req->qp,
 				C2_QP_STATE_RTS);
-		/*
-		 * Until ird/ord negotiation via MPAv2 support is added, send
-		 * max supported values
-		 */
-		cm_event.ird = cm_event.ord = 128;
 	case IW_CM_EVENT_CLOSE:
 
 		/*

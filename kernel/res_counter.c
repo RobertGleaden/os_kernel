@@ -17,110 +17,77 @@
 void res_counter_init(struct res_counter *counter, struct res_counter *parent)
 {
 	spin_lock_init(&counter->lock);
-	counter->limit = RES_COUNTER_MAX;
-	counter->soft_limit = RES_COUNTER_MAX;
+	counter->limit = RESOURCE_MAX;
+	counter->soft_limit = RESOURCE_MAX;
 	counter->parent = parent;
 }
 
-static u64 res_counter_uncharge_locked(struct res_counter *counter,
-				       unsigned long val)
+int res_counter_charge_locked(struct res_counter *counter, unsigned long val)
 {
-	if (WARN_ON(counter->usage < val))
-		val = counter->usage;
-
-	counter->usage -= val;
-	return counter->usage;
-}
-
-static int res_counter_charge_locked(struct res_counter *counter,
-				     unsigned long val, bool force)
-{
-	int ret = 0;
-
 	if (counter->usage + val > counter->limit) {
 		counter->failcnt++;
-		ret = -ENOMEM;
-		if (!force)
-			return ret;
+		return -ENOMEM;
 	}
 
 	counter->usage += val;
 	if (counter->usage > counter->max_usage)
 		counter->max_usage = counter->usage;
-	return ret;
-}
-
-static int __res_counter_charge(struct res_counter *counter, unsigned long val,
-				struct res_counter **limit_fail_at, bool force)
-{
-	int ret, r;
-	unsigned long flags;
-	struct res_counter *c, *u;
-
-	r = ret = 0;
-	*limit_fail_at = NULL;
-	local_irq_save(flags);
-	for (c = counter; c != NULL; c = c->parent) {
-		spin_lock(&c->lock);
-		r = res_counter_charge_locked(c, val, force);
-		spin_unlock(&c->lock);
-		if (r < 0 && !ret) {
-			ret = r;
-			*limit_fail_at = c;
-			if (!force)
-				break;
-		}
-	}
-
-	if (ret < 0 && !force) {
-		for (u = counter; u != c; u = u->parent) {
-			spin_lock(&u->lock);
-			res_counter_uncharge_locked(u, val);
-			spin_unlock(&u->lock);
-		}
-	}
-	local_irq_restore(flags);
-
-	return ret;
+	return 0;
 }
 
 int res_counter_charge(struct res_counter *counter, unsigned long val,
 			struct res_counter **limit_fail_at)
 {
-	return __res_counter_charge(counter, val, limit_fail_at, false);
-}
-
-int res_counter_charge_nofail(struct res_counter *counter, unsigned long val,
-			      struct res_counter **limit_fail_at)
-{
-	return __res_counter_charge(counter, val, limit_fail_at, true);
-}
-
-u64 res_counter_uncharge_until(struct res_counter *counter,
-			       struct res_counter *top,
-			       unsigned long val)
-{
+	int ret;
 	unsigned long flags;
-	struct res_counter *c;
-	u64 ret = 0;
+	struct res_counter *c, *u;
 
+	*limit_fail_at = NULL;
 	local_irq_save(flags);
-	for (c = counter; c != top; c = c->parent) {
-		u64 r;
+	for (c = counter; c != NULL; c = c->parent) {
 		spin_lock(&c->lock);
-		r = res_counter_uncharge_locked(c, val);
-		if (c == counter)
-			ret = r;
+		ret = res_counter_charge_locked(c, val);
 		spin_unlock(&c->lock);
+		if (ret < 0) {
+			*limit_fail_at = c;
+			goto undo;
+		}
 	}
+	ret = 0;
+	goto done;
+undo:
+	for (u = counter; u != c; u = u->parent) {
+		spin_lock(&u->lock);
+		res_counter_uncharge_locked(u, val);
+		spin_unlock(&u->lock);
+	}
+done:
 	local_irq_restore(flags);
 	return ret;
 }
 
-u64 res_counter_uncharge(struct res_counter *counter, unsigned long val)
+void res_counter_uncharge_locked(struct res_counter *counter, unsigned long val)
 {
-	return res_counter_uncharge_until(counter, NULL, val);
+	if (WARN_ON(counter->usage < val))
+		val = counter->usage;
+
+	counter->usage -= val;
 }
+
+void res_counter_uncharge(struct res_counter *counter, unsigned long val)
+{
+	unsigned long flags;
+	struct res_counter *c;
+
+	local_irq_save(flags);
+	for (c = counter; c != NULL; c = c->parent) {
+		spin_lock(&c->lock);
+		res_counter_uncharge_locked(c, val);
+		spin_unlock(&c->lock);
+	}
+	local_irq_restore(flags);
+}
+
 
 static inline unsigned long long *
 res_counter_member(struct res_counter *counter, int member)
@@ -179,33 +146,46 @@ u64 res_counter_read_u64(struct res_counter *counter, int member)
 #endif
 
 int res_counter_memparse_write_strategy(const char *buf,
-					unsigned long long *resp)
+					unsigned long long *res)
 {
 	char *end;
-	unsigned long long res;
 
-	/* return RES_COUNTER_MAX(unlimited) if "-1" is specified */
+	/* return RESOURCE_MAX(unlimited) if "-1" is specified */
 	if (*buf == '-') {
-		int rc = kstrtoull(buf + 1, 10, &res);
-
-		if (rc)
-			return rc;
-		if (res != 1)
+		*res = simple_strtoull(buf + 1, &end, 10);
+		if (*res != 1 || *end != '\0')
 			return -EINVAL;
-		*resp = RES_COUNTER_MAX;
+		*res = RESOURCE_MAX;
 		return 0;
 	}
 
-	res = memparse(buf, &end);
+	/* FIXME - make memparse() take const char* args */
+	*res = memparse((char *)buf, &end);
 	if (*end != '\0')
 		return -EINVAL;
 
-	if (PAGE_ALIGN(res) >= res)
-		res = PAGE_ALIGN(res);
-	else
-		res = RES_COUNTER_MAX;
+	*res = PAGE_ALIGN(*res);
+	return 0;
+}
 
-	*resp = res;
+int res_counter_write(struct res_counter *counter, int member,
+		      const char *buf, write_strategy_fn write_strategy)
+{
+	char *end;
+	unsigned long flags;
+	unsigned long long tmp, *val;
 
+	if (write_strategy) {
+		if (write_strategy(buf, &tmp))
+			return -EINVAL;
+	} else {
+		tmp = simple_strtoull(buf, &end, 10);
+		if (*end != '\0')
+			return -EINVAL;
+	}
+	spin_lock_irqsave(&counter->lock, flags);
+	val = res_counter_member(counter, member);
+	*val = tmp;
+	spin_unlock_irqrestore(&counter->lock, flags);
 	return 0;
 }

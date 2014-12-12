@@ -13,6 +13,7 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/platform_device.h>
@@ -24,6 +25,8 @@
 struct rbtx4939_flash_info {
 	struct mtd_info *mtd;
 	struct map_info map;
+	int nr_parts;
+	struct mtd_partition *parts;
 };
 
 static int rbtx4939_flash_remove(struct platform_device *dev)
@@ -33,29 +36,32 @@ static int rbtx4939_flash_remove(struct platform_device *dev)
 	info = platform_get_drvdata(dev);
 	if (!info)
 		return 0;
+	platform_set_drvdata(dev, NULL);
 
 	if (info->mtd) {
-		struct rbtx4939_flash_data *pdata = dev_get_platdata(&dev->dev);
+		struct rbtx4939_flash_data *pdata = dev->dev.platform_data;
 
+		if (info->nr_parts)
+			kfree(info->parts);
 		mtd_device_unregister(info->mtd);
 		map_destroy(info->mtd);
 	}
 	return 0;
 }
 
-static const char * const rom_probe_types[] = {
-	"cfi_probe", "jedec_probe", NULL };
+static const char *rom_probe_types[] = { "cfi_probe", "jedec_probe", NULL };
+static const char *part_probe_types[] = { "cmdlinepart", NULL };
 
 static int rbtx4939_flash_probe(struct platform_device *dev)
 {
 	struct rbtx4939_flash_data *pdata;
 	struct rbtx4939_flash_info *info;
 	struct resource *res;
-	const char * const *probe_type;
+	const char **probe_type;
 	int err = 0;
 	unsigned long size;
 
-	pdata = dev_get_platdata(&dev->dev);
+	pdata = dev->dev.platform_data;
 	if (!pdata)
 		return -ENODEV;
 
@@ -99,11 +105,24 @@ static int rbtx4939_flash_probe(struct platform_device *dev)
 		goto err_out;
 	}
 	info->mtd->owner = THIS_MODULE;
-	err = mtd_device_parse_register(info->mtd, NULL, NULL, pdata->parts,
-					pdata->nr_parts);
-
 	if (err)
 		goto err_out;
+
+	err = parse_mtd_partitions(info->mtd, part_probe_types,
+				&info->parts, 0);
+	if (err > 0) {
+		mtd_device_register(info->mtd, info->parts, err);
+		info->nr_parts = err;
+		return 0;
+	}
+
+	if (pdata->nr_parts) {
+		pr_notice("Using rbtx4939 partition information\n");
+		mtd_device_register(info->mtd, pdata->parts, pdata->nr_parts);
+		return 0;
+	}
+
+	mtd_device_register(info->mtd, NULL, 0);
 	return 0;
 
 err_out:
@@ -116,8 +135,9 @@ static void rbtx4939_flash_shutdown(struct platform_device *dev)
 {
 	struct rbtx4939_flash_info *info = platform_get_drvdata(dev);
 
-	if (mtd_suspend(info->mtd) == 0)
-		mtd_resume(info->mtd);
+	if (info->mtd->suspend && info->mtd->resume)
+		if (info->mtd->suspend(info->mtd) == 0)
+			info->mtd->resume(info->mtd);
 }
 #else
 #define rbtx4939_flash_shutdown NULL
@@ -133,7 +153,18 @@ static struct platform_driver rbtx4939_flash_driver = {
 	},
 };
 
-module_platform_driver(rbtx4939_flash_driver);
+static int __init rbtx4939_flash_init(void)
+{
+	return platform_driver_register(&rbtx4939_flash_driver);
+}
+
+static void __exit rbtx4939_flash_exit(void)
+{
+	platform_driver_unregister(&rbtx4939_flash_driver);
+}
+
+module_init(rbtx4939_flash_init);
+module_exit(rbtx4939_flash_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("RBTX4939 MTD map driver");

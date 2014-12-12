@@ -24,7 +24,7 @@
 #include <linux/pnp.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
-#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <sound/core.h>
 #include <sound/mpu401.h>
 #include <sound/initval.h>
@@ -35,13 +35,13 @@ MODULE_LICENSE("GPL");
 
 static int index[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = -2}; /* exclude the first card */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
-static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE;	/* Enable this card */
+static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE;	/* Enable this card */
 #ifdef CONFIG_PNP
-static bool pnp[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1};
+static int pnp[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1};
 #endif
 static long port[SNDRV_CARDS] = SNDRV_DEFAULT_PORT;	/* MPU-401 port number */
 static int irq[SNDRV_CARDS] = SNDRV_DEFAULT_IRQ;	/* MPU-401 IRQ */
-static bool uart_enter[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1};
+static int uart_enter[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 1};
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for MPU-401 device.");
@@ -64,8 +64,7 @@ static struct platform_device *platform_devices[SNDRV_CARDS];
 static int pnp_registered;
 static unsigned int snd_mpu401_devices;
 
-static int snd_mpu401_create(struct device *devptr, int dev,
-			     struct snd_card **rcard)
+static int snd_mpu401_create(int dev, struct snd_card **rcard)
 {
 	struct snd_card *card;
 	int err;
@@ -74,8 +73,7 @@ static int snd_mpu401_create(struct device *devptr, int dev,
 		snd_printk(KERN_ERR "the uart_enter option is obsolete; remove it\n");
 
 	*rcard = NULL;
-	err = snd_card_new(devptr, index[dev], id[dev], THIS_MODULE,
-			   0, &card);
+	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &card);
 	if (err < 0)
 		return err;
 	strcpy(card->driver, "MPU-401 UART");
@@ -88,7 +86,8 @@ static int snd_mpu401_create(struct device *devptr, int dev,
 	}
 
 	err = snd_mpu401_uart_new(card, 0, MPU401_HW_MPU401, port[dev], 0,
-				  irq[dev], NULL);
+				  irq[dev], irq[dev] >= 0 ? IRQF_DISABLED : 0,
+				  NULL);
 	if (err < 0) {
 		printk(KERN_ERR "MPU401 not detected at 0x%lx\n", port[dev]);
 		goto _err;
@@ -102,7 +101,7 @@ static int snd_mpu401_create(struct device *devptr, int dev,
 	return err;
 }
 
-static int snd_mpu401_probe(struct platform_device *devptr)
+static int __devinit snd_mpu401_probe(struct platform_device *devptr)
 {
 	int dev = devptr->id;
 	int err;
@@ -116,9 +115,10 @@ static int snd_mpu401_probe(struct platform_device *devptr)
 		snd_printk(KERN_ERR "specify or disable IRQ\n");
 		return -EINVAL;
 	}
-	err = snd_mpu401_create(&devptr->dev, dev, &card);
+	err = snd_mpu401_create(dev, &card);
 	if (err < 0)
 		return err;
+	snd_card_set_dev(card, &devptr->dev);
 	if ((err = snd_card_register(card)) < 0) {
 		snd_card_free(card);
 		return err;
@@ -127,9 +127,10 @@ static int snd_mpu401_probe(struct platform_device *devptr)
 	return 0;
 }
 
-static int snd_mpu401_remove(struct platform_device *devptr)
+static int __devexit snd_mpu401_remove(struct platform_device *devptr)
 {
 	snd_card_free(platform_get_drvdata(devptr));
+	platform_set_drvdata(devptr, NULL);
 	return 0;
 }
 
@@ -137,10 +138,9 @@ static int snd_mpu401_remove(struct platform_device *devptr)
 
 static struct platform_driver snd_mpu401_driver = {
 	.probe		= snd_mpu401_probe,
-	.remove		= snd_mpu401_remove,
+	.remove		= __devexit_p(snd_mpu401_remove),
 	.driver		= {
-		.name	= SND_MPU401_DRIVER,
-		.owner	= THIS_MODULE,
+		.name	= SND_MPU401_DRIVER
 	},
 };
 
@@ -156,8 +156,8 @@ static struct pnp_device_id snd_mpu401_pnpids[] = {
 
 MODULE_DEVICE_TABLE(pnp, snd_mpu401_pnpids);
 
-static int snd_mpu401_pnp(int dev, struct pnp_dev *device,
-			  const struct pnp_device_id *id)
+static int __devinit snd_mpu401_pnp(int dev, struct pnp_dev *device,
+				 const struct pnp_device_id *id)
 {
 	if (!pnp_port_valid(device, 0) ||
 	    pnp_port_flags(device, 0) & IORESOURCE_DISABLED) {
@@ -182,8 +182,8 @@ static int snd_mpu401_pnp(int dev, struct pnp_dev *device,
 	return 0;
 }
 
-static int snd_mpu401_pnp_probe(struct pnp_dev *pnp_dev,
-				const struct pnp_device_id *id)
+static int __devinit snd_mpu401_pnp_probe(struct pnp_dev *pnp_dev,
+					  const struct pnp_device_id *id)
 {
 	static int dev;
 	struct snd_card *card;
@@ -195,13 +195,14 @@ static int snd_mpu401_pnp_probe(struct pnp_dev *pnp_dev,
 		err = snd_mpu401_pnp(dev, pnp_dev, id);
 		if (err < 0)
 			return err;
-		err = snd_mpu401_create(&pnp_dev->dev, dev, &card);
+		err = snd_mpu401_create(dev, &card);
 		if (err < 0)
 			return err;
 		if ((err = snd_card_register(card)) < 0) {
 			snd_card_free(card);
 			return err;
 		}
+		snd_card_set_dev(card, &pnp_dev->dev);
 		pnp_set_drvdata(pnp_dev, card);
 		snd_mpu401_devices++;
 		++dev;
@@ -210,7 +211,7 @@ static int snd_mpu401_pnp_probe(struct pnp_dev *pnp_dev,
 	return -ENODEV;
 }
 
-static void snd_mpu401_pnp_remove(struct pnp_dev *dev)
+static void __devexit snd_mpu401_pnp_remove(struct pnp_dev *dev)
 {
 	struct snd_card *card = (struct snd_card *) pnp_get_drvdata(dev);
 
@@ -222,7 +223,7 @@ static struct pnp_driver snd_mpu401_pnp_driver = {
 	.name = "mpu401",
 	.id_table = snd_mpu401_pnpids,
 	.probe = snd_mpu401_pnp_probe,
-	.remove = snd_mpu401_pnp_remove,
+	.remove = __devexit_p(snd_mpu401_pnp_remove),
 };
 #else
 static struct pnp_driver snd_mpu401_pnp_driver;

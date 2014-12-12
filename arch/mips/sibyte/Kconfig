@@ -71,10 +71,11 @@ config SIBYTE_SB1xxx_SOC
 	bool
 	select DMA_COHERENT
 	select IRQ_CPU
+	select SIBYTE_CFE
 	select SWAP_IO_SPACE
 	select SYS_SUPPORTS_32BIT_KERNEL
 	select SYS_SUPPORTS_64BIT_KERNEL
-	select FW_CFE
+	select CFE
 	select SYS_HAS_EARLY_PRINTK
 
 choice
@@ -147,8 +148,7 @@ config SIBYTE_CFE_CONSOLE
 
 config SIBYTE_BUS_WATCHER
 	bool "Support for Bus Watcher statistics"
-	depends on SIBYTE_SB1xxx_SOC && \
-		(SIBYTE_BCM112X || SIBYTE_SB1250)
+	depends on SIBYTE_SB1xxx_SOC
 	help
 	  Handle and keep statistics on the bus error interrupts (COR_ECC,
 	  BAD_ECC, IO_BUS).

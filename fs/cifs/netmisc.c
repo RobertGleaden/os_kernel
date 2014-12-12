@@ -51,7 +51,7 @@ static const struct smb_to_posix_error mapping_table_ERRDOS[] = {
 	{ERRnoaccess, -EACCES},
 	{ERRbadfid, -EBADF},
 	{ERRbadmcb, -EIO},
-	{ERRnomem, -EREMOTEIO},
+	{ERRnomem, -ENOMEM},
 	{ERRbadmem, -EFAULT},
 	{ERRbadenv, -EFAULT},
 	{ERRbadformat, -EINVAL},
@@ -62,7 +62,7 @@ static const struct smb_to_posix_error mapping_table_ERRDOS[] = {
 	{ERRdiffdevice, -EXDEV},
 	{ERRnofiles, -ENOENT},
 	{ERRwriteprot, -EROFS},
-	{ERRbadshare, -EBUSY},
+	{ERRbadshare, -ETXTBSY},
 	{ERRlock, -EACCES},
 	{ERRunsup, -EINVAL},
 	{ERRnosuchshare, -ENXIO},
@@ -110,7 +110,7 @@ static const struct smb_to_posix_error mapping_table_ERRSRV[] = {
 	{ERRnoroom, -ENOSPC},
 	{ERRrmuns, -EUSERS},
 	{ERRtimeout, -ETIME},
-	{ERRnoresource, -EREMOTEIO},
+	{ERRnoresource, -ENOBUFS},
 	{ERRtoomanyuids, -EUSERS},
 	{ERRbaduid, -EACCES},
 	{ERRusempx, -EIO},
@@ -150,8 +150,8 @@ cifs_inet_pton(const int address_family, const char *cp, int len, void *dst)
 	else if (address_family == AF_INET6)
 		ret = in6_pton(cp, len, dst , '\\', NULL);
 
-	cifs_dbg(NOISY, "address conversion returned %d for %*.*s\n",
-		 ret, len, len, cp);
+	cFYI(DBG2, "address conversion returned %d for %*.*s",
+	     ret, len, len, cp);
 	if (ret > 0)
 		ret = 1;
 	return ret;
@@ -197,14 +197,15 @@ cifs_convert_address(struct sockaddr *dst, const char *src, int len)
 		memcpy(scope_id, pct + 1, slen);
 		scope_id[slen] = '\0';
 
-		rc = kstrtouint(scope_id, 0, &s6->sin6_scope_id);
+		rc = strict_strtoul(scope_id, 0,
+					(unsigned long *)&s6->sin6_scope_id);
 		rc = (rc == 0) ? 1 : 0;
 	}
 
 	return rc;
 }
 
-void
+int
 cifs_set_port(struct sockaddr *addr, const unsigned short int port)
 {
 	switch (addr->sa_family) {
@@ -214,7 +215,19 @@ cifs_set_port(struct sockaddr *addr, const unsigned short int port)
 	case AF_INET6:
 		((struct sockaddr_in6 *)addr)->sin6_port = htons(port);
 		break;
+	default:
+		return 0;
 	}
+	return 1;
+}
+
+int
+cifs_fill_sockaddr(struct sockaddr *dst, const char *src, int len,
+		   const unsigned short int port)
+{
+	if (!cifs_convert_address(dst, src, len))
+		return 0;
+	return cifs_set_port(dst, port);
 }
 
 /*****************************************************************************
@@ -400,7 +413,7 @@ static const struct {
 	 from NT_STATUS_INSUFFICIENT_RESOURCES to
 	 NT_STATUS_INSUFF_SERVER_RESOURCES during the session setup } */
 	{
-	ERRDOS, ERRnoresource, NT_STATUS_INSUFFICIENT_RESOURCES}, {
+	ERRDOS, ERRnomem, NT_STATUS_INSUFFICIENT_RESOURCES}, {
 	ERRDOS, ERRbadpath, NT_STATUS_DFS_EXIT_PATH_FOUND}, {
 	ERRDOS, 23, NT_STATUS_DEVICE_DATA_ERROR}, {
 	ERRHRD, ERRgeneral, NT_STATUS_DEVICE_NOT_CONNECTED}, {
@@ -670,7 +683,7 @@ static const struct {
 	ERRHRD, ERRgeneral, NT_STATUS_NO_USER_SESSION_KEY}, {
 	ERRDOS, 59, NT_STATUS_USER_SESSION_DELETED}, {
 	ERRHRD, ERRgeneral, NT_STATUS_RESOURCE_LANG_NOT_FOUND}, {
-	ERRDOS, ERRnoresource, NT_STATUS_INSUFF_SERVER_RESOURCES}, {
+	ERRDOS, ERRnomem, NT_STATUS_INSUFF_SERVER_RESOURCES}, {
 	ERRHRD, ERRgeneral, NT_STATUS_INVALID_BUFFER_SIZE}, {
 	ERRHRD, ERRgeneral, NT_STATUS_INVALID_ADDRESS_COMPONENT}, {
 	ERRHRD, ERRgeneral, NT_STATUS_INVALID_ADDRESS_WILDCARD}, {
@@ -780,9 +793,7 @@ static const struct {
 	ERRDOS, ERRnoaccess, 0xc0000290}, {
 	ERRDOS, ERRbadfunc, 0xc000029c}, {
 	ERRDOS, ERRsymlink, NT_STATUS_STOPPED_ON_SYMLINK}, {
-	ERRDOS, ERRinvlevel, 0x007c0001}, {
-	0, 0, 0 }
-};
+	ERRDOS, ERRinvlevel, 0x007c0001}, };
 
 /*****************************************************************************
  Print an error message from the status code
@@ -795,8 +806,8 @@ cifs_print_status(__u32 status_code)
 	while (nt_errs[idx].nt_errstr != NULL) {
 		if (((nt_errs[idx].nt_errcode) & 0xFFFFFF) ==
 		    (status_code & 0xFFFFFF)) {
-			pr_notice("Status code returned 0x%08x %s\n",
-				  status_code, nt_errs[idx].nt_errstr);
+			printk(KERN_NOTICE "Status code returned 0x%08x %s\n",
+				   status_code, nt_errs[idx].nt_errstr);
 		}
 		idx++;
 	}
@@ -825,9 +836,8 @@ ntstatus_to_dos(__u32 ntstatus, __u8 *eclass, __u16 *ecode)
 }
 
 int
-map_smb_to_linux_error(char *buf, bool logErr)
+map_smb_to_linux_error(struct smb_hdr *smb, bool logErr)
 {
-	struct smb_hdr *smb = (struct smb_hdr *)buf;
 	unsigned int i;
 	int rc = -EIO;	/* if transport error smb error may not be set */
 	__u8 smberrclass;
@@ -889,7 +899,7 @@ map_smb_to_linux_error(char *buf, bool logErr)
 	}
 	/* else ERRHRD class errors or junk  - return EIO */
 
-	cifs_dbg(FYI, "Mapping smb error code 0x%x to POSIX err %d\n",
+	cFYI(1, "Mapping smb error code 0x%x to POSIX err %d",
 		 le32_to_cpu(smb->Status.CifsError), rc);
 
 	/* generic corrective action e.g. reconnect SMB session on
@@ -903,9 +913,8 @@ map_smb_to_linux_error(char *buf, bool logErr)
  * portion, the number of word parameters and the data portion of the message
  */
 unsigned int
-smbCalcSize(void *buf)
+smbCalcSize(struct smb_hdr *ptr)
 {
-	struct smb_hdr *ptr = (struct smb_hdr *)buf;
 	return (sizeof(struct smb_hdr) + (2 * ptr->WordCount) +
 		2 /* size of the bcc field */ + get_bcc(ptr));
 }
@@ -941,9 +950,8 @@ cifs_UnixTimeToNT(struct timespec t)
 	return (u64) t.tv_sec * 10000000 + t.tv_nsec/100 + NTFS_TIME_OFFSET;
 }
 
-static const int total_days_of_prev_months[] = {
-	0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334
-};
+static int total_days_of_prev_months[] =
+{0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
 
 struct timespec cnvrtDosUnixTm(__le16 le_date, __le16 le_time, int offset)
 {
@@ -954,20 +962,20 @@ struct timespec cnvrtDosUnixTm(__le16 le_date, __le16 le_time, int offset)
 	SMB_TIME *st = (SMB_TIME *)&time;
 	SMB_DATE *sd = (SMB_DATE *)&date;
 
-	cifs_dbg(FYI, "date %d time %d\n", date, time);
+	cFYI(1, "date %d time %d", date, time);
 
 	sec = 2 * st->TwoSeconds;
 	min = st->Minutes;
 	if ((sec > 59) || (min > 59))
-		cifs_dbg(VFS, "illegal time min %d sec %d\n", min, sec);
+		cERROR(1, "illegal time min %d sec %d", min, sec);
 	sec += (min * 60);
 	sec += 60 * 60 * st->Hours;
 	if (st->Hours > 24)
-		cifs_dbg(VFS, "illegal hours %d\n", st->Hours);
+		cERROR(1, "illegal hours %d", st->Hours);
 	days = sd->Day;
 	month = sd->Month;
 	if ((days > 31) || (month > 12)) {
-		cifs_dbg(VFS, "illegal date, month %d day: %d\n", month, days);
+		cERROR(1, "illegal date, month %d day: %d", month, days);
 		if (month > 12)
 			month = 12;
 	}
@@ -993,7 +1001,7 @@ struct timespec cnvrtDosUnixTm(__le16 le_date, __le16 le_time, int offset)
 
 	ts.tv_sec = sec + offset;
 
-	/* cifs_dbg(FYI, "sec after cnvrt dos to unix time %d\n",sec); */
+	/* cFYI(1, "sec after cnvrt dos to unix time %d",sec); */
 
 	ts.tv_nsec = 0;
 	return ts;

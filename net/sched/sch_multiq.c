@@ -11,7 +11,8 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, see <http://www.gnu.org/licenses/>.
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
+ * Place - Suite 330, Boston, MA 02111-1307 USA.
  *
  * Author: Alexander Duyck <alexander.h.duyck@intel.com>
  */
@@ -106,8 +107,7 @@ static struct sk_buff *multiq_dequeue(struct Qdisc *sch)
 		/* Check that target subqueue is available before
 		 * pulling an skb to avoid head-of-line blocking.
 		 */
-		if (!netif_xmit_stopped(
-		    netdev_get_tx_queue(qdisc_dev(sch), q->curband))) {
+		if (!__netif_subqueue_stopped(qdisc_dev(sch), q->curband)) {
 			qdisc = q->queues[q->curband];
 			skb = qdisc->dequeue(qdisc);
 			if (skb) {
@@ -138,8 +138,7 @@ static struct sk_buff *multiq_peek(struct Qdisc *sch)
 		/* Check that target subqueue is available before
 		 * pulling an skb to avoid head-of-line blocking.
 		 */
-		if (!netif_xmit_stopped(
-		    netdev_get_tx_queue(qdisc_dev(sch), curband))) {
+		if (!__netif_subqueue_stopped(qdisc_dev(sch), curband)) {
 			qdisc = q->queues[curband];
 			skb = qdisc->ops->peek(qdisc);
 			if (skb)
@@ -283,8 +282,7 @@ static int multiq_dump(struct Qdisc *sch, struct sk_buff *skb)
 	opt.bands = q->bands;
 	opt.max_bands = q->max_bands;
 
-	if (nla_put(skb, TCA_OPTIONS, sizeof(opt), &opt))
-		goto nla_put_failure;
+	NLA_PUT(skb, TCA_OPTIONS, sizeof(opt), &opt);
 
 	return skb->len;
 

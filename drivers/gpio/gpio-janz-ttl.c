@@ -108,13 +108,13 @@ static void ttl_set_value(struct gpio_chip *gpio, unsigned offset, int value)
 	spin_unlock(&mod->lock);
 }
 
-static void ttl_write_reg(struct ttl_module *mod, u8 reg, u16 val)
+static void __devinit ttl_write_reg(struct ttl_module *mod, u8 reg, u16 val)
 {
 	iowrite16be(reg, &mod->regs->control);
 	iowrite16be(val, &mod->regs->control);
 }
 
-static void ttl_setup_device(struct ttl_module *mod)
+static void __devinit ttl_setup_device(struct ttl_module *mod)
 {
 	/* reset the device to a known state */
 	iowrite16be(0x0000, &mod->regs->control);
@@ -140,7 +140,7 @@ static void ttl_setup_device(struct ttl_module *mod)
 	ttl_write_reg(mod, MASTER_CONF_CTL, CONF_PAE | CONF_PBE | CONF_PCE);
 }
 
-static int ttl_probe(struct platform_device *pdev)
+static int __devinit ttl_probe(struct platform_device *pdev)
 {
 	struct janz_platform_data *pdata;
 	struct device *dev = &pdev->dev;
@@ -149,24 +149,37 @@ static int ttl_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	pdata = dev_get_platdata(&pdev->dev);
+	pdata = pdev->dev.platform_data;
 	if (!pdata) {
 		dev_err(dev, "no platform data\n");
-		return -ENXIO;
+		ret = -ENXIO;
+		goto out_return;
 	}
 
-	mod = devm_kzalloc(dev, sizeof(*mod), GFP_KERNEL);
-	if (!mod)
-		return -ENOMEM;
+	mod = kzalloc(sizeof(*mod), GFP_KERNEL);
+	if (!mod) {
+		dev_err(dev, "unable to allocate private data\n");
+		ret = -ENOMEM;
+		goto out_return;
+	}
 
 	platform_set_drvdata(pdev, mod);
 	spin_lock_init(&mod->lock);
 
 	/* get access to the MODULbus registers for this module */
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	mod->regs = devm_ioremap_resource(dev, res);
-	if (IS_ERR(mod->regs))
-		return PTR_ERR(mod->regs);
+	if (!res) {
+		dev_err(dev, "MODULbus registers not found\n");
+		ret = -ENODEV;
+		goto out_free_mod;
+	}
+
+	mod->regs = ioremap(res->start, resource_size(res));
+	if (!mod->regs) {
+		dev_err(dev, "MODULbus registers not ioremap\n");
+		ret = -ENOMEM;
+		goto out_free_mod;
+	}
 
 	ttl_setup_device(mod);
 
@@ -185,13 +198,22 @@ static int ttl_probe(struct platform_device *pdev)
 	ret = gpiochip_add(gpio);
 	if (ret) {
 		dev_err(dev, "unable to add GPIO chip\n");
-		return ret;
+		goto out_iounmap_regs;
 	}
 
+	dev_info(&pdev->dev, "module %d: registered GPIO device\n",
+			     pdata->modno);
 	return 0;
+
+out_iounmap_regs:
+	iounmap(mod->regs);
+out_free_mod:
+	kfree(mod);
+out_return:
+	return ret;
 }
 
-static int ttl_remove(struct platform_device *pdev)
+static int __devexit ttl_remove(struct platform_device *pdev)
 {
 	struct ttl_module *mod = platform_get_drvdata(pdev);
 	struct device *dev = &pdev->dev;
@@ -203,6 +225,8 @@ static int ttl_remove(struct platform_device *pdev)
 		return ret;
 	}
 
+	iounmap(mod->regs);
+	kfree(mod);
 	return 0;
 }
 
@@ -212,12 +236,23 @@ static struct platform_driver ttl_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= ttl_probe,
-	.remove		= ttl_remove,
+	.remove		= __devexit_p(ttl_remove),
 };
 
-module_platform_driver(ttl_driver);
+static int __init ttl_init(void)
+{
+	return platform_driver_register(&ttl_driver);
+}
+
+static void __exit ttl_exit(void)
+{
+	platform_driver_unregister(&ttl_driver);
+}
 
 MODULE_AUTHOR("Ira W. Snyder <iws@ovro.caltech.edu>");
 MODULE_DESCRIPTION("Janz MODULbus VMOD-TTL Driver");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:janz-ttl");
+
+module_init(ttl_init);
+module_exit(ttl_exit);

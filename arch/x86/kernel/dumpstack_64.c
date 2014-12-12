@@ -104,44 +104,6 @@ in_irq_stack(unsigned long *stack, unsigned long *irq_stack,
 	return (stack >= irq_stack && stack < irq_stack_end);
 }
 
-static const unsigned long irq_stack_size =
-	(IRQ_STACK_SIZE - 64) / sizeof(unsigned long);
-
-enum stack_type {
-	STACK_IS_UNKNOWN,
-	STACK_IS_NORMAL,
-	STACK_IS_EXCEPTION,
-	STACK_IS_IRQ,
-};
-
-static enum stack_type
-analyze_stack(int cpu, struct task_struct *task, unsigned long *stack,
-	      unsigned long **stack_end, unsigned long *irq_stack,
-	      unsigned *used, char **id)
-{
-	unsigned long addr;
-
-	addr = ((unsigned long)stack & (~(THREAD_SIZE - 1)));
-	if ((unsigned long)task_stack_page(task) == addr)
-		return STACK_IS_NORMAL;
-
-	*stack_end = in_exception_stack(cpu, (unsigned long)stack,
-					used, id);
-	if (*stack_end)
-		return STACK_IS_EXCEPTION;
-
-	if (!irq_stack)
-		return STACK_IS_NORMAL;
-
-	*stack_end = irq_stack;
-	irq_stack = irq_stack - irq_stack_size;
-
-	if (in_irq_stack(stack, irq_stack, *stack_end))
-		return STACK_IS_IRQ;
-
-	return STACK_IS_UNKNOWN;
-}
-
 /*
  * x86-64 can have up to three kernel stacks:
  * process stack
@@ -154,12 +116,12 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
 		const struct stacktrace_ops *ops, void *data)
 {
 	const unsigned cpu = get_cpu();
-	struct thread_info *tinfo;
-	unsigned long *irq_stack = (unsigned long *)per_cpu(irq_stack_ptr, cpu);
-	unsigned long dummy;
+	unsigned long *irq_stack_end =
+		(unsigned long *)per_cpu(irq_stack_ptr, cpu);
 	unsigned used = 0;
+	struct thread_info *tinfo;
 	int graph = 0;
-	int done = 0;
+	unsigned long dummy;
 
 	if (!task)
 		task = current;
@@ -167,7 +129,7 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
 	if (!stack) {
 		if (regs)
 			stack = (unsigned long *)regs->sp;
-		else if (task != current)
+		else if (task && task != current)
 			stack = (unsigned long *)task->thread.sp;
 		else
 			stack = &dummy;
@@ -181,61 +143,49 @@ void dump_trace(struct task_struct *task, struct pt_regs *regs,
 	 * exceptions
 	 */
 	tinfo = task_thread_info(task);
-	while (!done) {
-		unsigned long *stack_end;
-		enum stack_type stype;
+	for (;;) {
 		char *id;
+		unsigned long *estack_end;
+		estack_end = in_exception_stack(cpu, (unsigned long)stack,
+						&used, &id);
 
-		stype = analyze_stack(cpu, task, stack, &stack_end,
-				      irq_stack, &used, &id);
-
-		/* Default finish unless specified to continue */
-		done = 1;
-
-		switch (stype) {
-
-		/* Break out early if we are on the thread stack */
-		case STACK_IS_NORMAL:
-			break;
-
-		case STACK_IS_EXCEPTION:
-
+		if (estack_end) {
 			if (ops->stack(data, id) < 0)
 				break;
 
 			bp = ops->walk_stack(tinfo, stack, bp, ops,
-					     data, stack_end, &graph);
+					     data, estack_end, &graph);
 			ops->stack(data, "<EOE>");
 			/*
 			 * We link to the next stack via the
 			 * second-to-last pointer (index -2 to end) in the
 			 * exception stack:
 			 */
-			stack = (unsigned long *) stack_end[-2];
-			done = 0;
-			break;
-
-		case STACK_IS_IRQ:
-
-			if (ops->stack(data, "IRQ") < 0)
-				break;
-			bp = ops->walk_stack(tinfo, stack, bp,
-				     ops, data, stack_end, &graph);
-			/*
-			 * We link to the next stack (which would be
-			 * the process stack normally) the last
-			 * pointer (index -1 to end) in the IRQ stack:
-			 */
-			stack = (unsigned long *) (stack_end[-1]);
-			irq_stack = NULL;
-			ops->stack(data, "EOI");
-			done = 0;
-			break;
-
-		case STACK_IS_UNKNOWN:
-			ops->stack(data, "UNK");
-			break;
+			stack = (unsigned long *) estack_end[-2];
+			continue;
 		}
+		if (irq_stack_end) {
+			unsigned long *irq_stack;
+			irq_stack = irq_stack_end -
+				(IRQ_STACK_SIZE - 64) / sizeof(*irq_stack);
+
+			if (in_irq_stack(stack, irq_stack, irq_stack_end)) {
+				if (ops->stack(data, "IRQ") < 0)
+					break;
+				bp = ops->walk_stack(tinfo, stack, bp,
+					ops, data, irq_stack_end, &graph);
+				/*
+				 * We link to the next stack (which would be
+				 * the process stack normally) the last
+				 * pointer (index -1 to end) in the IRQ stack:
+				 */
+				stack = (unsigned long *) (irq_stack_end[-1]);
+				irq_stack_end = NULL;
+				ops->stack(data, "EOI");
+				continue;
+			}
+		}
+		break;
 	}
 
 	/*
@@ -278,31 +228,36 @@ show_stack_log_lvl(struct task_struct *task, struct pt_regs *regs,
 		if (stack >= irq_stack && stack <= irq_stack_end) {
 			if (stack == irq_stack_end) {
 				stack = (unsigned long *) (irq_stack_end[-1]);
-				pr_cont(" <EOI> ");
+				printk(KERN_CONT " <EOI> ");
 			}
 		} else {
 		if (((long) stack & (THREAD_SIZE-1)) == 0)
 			break;
 		}
 		if (i && ((i % STACKSLOTS_PER_LINE) == 0))
-			pr_cont("\n");
-		pr_cont(" %016lx", *stack++);
+			printk(KERN_CONT "\n");
+		printk(KERN_CONT " %016lx", *stack++);
 		touch_nmi_watchdog();
 	}
 	preempt_enable();
 
-	pr_cont("\n");
+	printk(KERN_CONT "\n");
 	show_trace_log_lvl(task, regs, sp, bp, log_lvl);
 }
 
-void show_regs(struct pt_regs *regs)
+void show_registers(struct pt_regs *regs)
 {
 	int i;
 	unsigned long sp;
+	const int cpu = smp_processor_id();
+	struct task_struct *cur = current;
 
 	sp = regs->sp;
-	show_regs_print_info(KERN_DEFAULT);
+	printk("CPU %d ", cpu);
+	print_modules();
 	__show_regs(regs, 1);
+	printk("Process %s (pid: %d, threadinfo %p, task %p)\n",
+		cur->comm, cur->pid, task_thread_info(cur), cur);
 
 	/*
 	 * When in-kernel, we also print out the stack and code at the
@@ -314,11 +269,11 @@ void show_regs(struct pt_regs *regs)
 		unsigned char c;
 		u8 *ip;
 
-		printk(KERN_DEFAULT "Stack:\n");
+		printk(KERN_EMERG "Stack:\n");
 		show_stack_log_lvl(NULL, regs, (unsigned long *)sp,
-				   0, KERN_DEFAULT);
+				   0, KERN_EMERG);
 
-		printk(KERN_DEFAULT "Code: ");
+		printk(KERN_EMERG "Code: ");
 
 		ip = (u8 *)regs->ip - code_prologue;
 		if (ip < (u8 *)PAGE_OFFSET || probe_kernel_address(ip, c)) {
@@ -329,16 +284,16 @@ void show_regs(struct pt_regs *regs)
 		for (i = 0; i < code_len; i++, ip++) {
 			if (ip < (u8 *)PAGE_OFFSET ||
 					probe_kernel_address(ip, c)) {
-				pr_cont(" Bad RIP value.");
+				printk(" Bad RIP value.");
 				break;
 			}
 			if (ip == (u8 *)regs->ip)
-				pr_cont("<%02x> ", c);
+				printk("<%02x> ", c);
 			else
-				pr_cont("%02x ", c);
+				printk("%02x ", c);
 		}
 	}
-	pr_cont("\n");
+	printk("\n");
 }
 
 int is_valid_bugaddr(unsigned long ip)

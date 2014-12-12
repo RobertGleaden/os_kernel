@@ -13,7 +13,9 @@
 	GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
-	along with this program; if not, see <http://www.gnu.org/licenses/>.
+	along with this program; if not, write to the
+	Free Software Foundation, Inc.,
+	59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 
 /*
@@ -111,7 +113,7 @@ static int rt2x00leds_register_led(struct rt2x00_dev *rt2x00dev,
 
 	retval = led_classdev_register(device, &led->led_dev);
 	if (retval) {
-		rt2x00_err(rt2x00dev, "Failed to register led handler\n");
+		ERROR(rt2x00dev, "Failed to register led handler.\n");
 		return retval;
 	}
 
@@ -122,15 +124,17 @@ static int rt2x00leds_register_led(struct rt2x00_dev *rt2x00dev,
 
 void rt2x00leds_register(struct rt2x00_dev *rt2x00dev)
 {
-	char name[36];
+	char dev_name[16];
+	char name[32];
 	int retval;
 	unsigned long on_period;
 	unsigned long off_period;
-	const char *phy_name = wiphy_name(rt2x00dev->hw->wiphy);
+
+	snprintf(dev_name, sizeof(dev_name), "%s-%s",
+		 rt2x00dev->ops->name, wiphy_name(rt2x00dev->hw->wiphy));
 
 	if (rt2x00dev->led_radio.flags & LED_INITIALIZED) {
-		snprintf(name, sizeof(name), "%s-%s::radio",
-			 rt2x00dev->ops->name, phy_name);
+		snprintf(name, sizeof(name), "%s::radio", dev_name);
 
 		retval = rt2x00leds_register_led(rt2x00dev,
 						 &rt2x00dev->led_radio,
@@ -140,8 +144,7 @@ void rt2x00leds_register(struct rt2x00_dev *rt2x00dev)
 	}
 
 	if (rt2x00dev->led_assoc.flags & LED_INITIALIZED) {
-		snprintf(name, sizeof(name), "%s-%s::assoc",
-			 rt2x00dev->ops->name, phy_name);
+		snprintf(name, sizeof(name), "%s::assoc", dev_name);
 
 		retval = rt2x00leds_register_led(rt2x00dev,
 						 &rt2x00dev->led_assoc,
@@ -151,8 +154,7 @@ void rt2x00leds_register(struct rt2x00_dev *rt2x00dev)
 	}
 
 	if (rt2x00dev->led_qual.flags & LED_INITIALIZED) {
-		snprintf(name, sizeof(name), "%s-%s::quality",
-			 rt2x00dev->ops->name, phy_name);
+		snprintf(name, sizeof(name), "%s::quality", dev_name);
 
 		retval = rt2x00leds_register_led(rt2x00dev,
 						 &rt2x00dev->led_qual,

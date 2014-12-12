@@ -11,7 +11,6 @@
 
 #include <linux/tifm.h>
 #include <linux/dma-mapping.h>
-#include <linux/module.h>
 
 #define DRIVER_NAME "tifm_7xx1"
 #define DRIVER_VERSION "0.8"
@@ -356,10 +355,8 @@ static int tifm_7xx1_probe(struct pci_dev *dev,
 	pci_set_drvdata(dev, fm);
 
 	fm->addr = pci_ioremap_bar(dev, 0);
-	if (!fm->addr) {
-		rc = -ENODEV;
+	if (!fm->addr)
 		goto err_out_free;
-	}
 
 	rc = request_irq(dev->irq, tifm_7xx1_isr, IRQF_SHARED, DRIVER_NAME, fm);
 	if (rc)
@@ -380,6 +377,7 @@ err_out_irq:
 err_out_unmap:
 	iounmap(fm->addr);
 err_out_free:
+	pci_set_drvdata(dev, NULL);
 	tifm_free_adapter(fm);
 err_out_int:
 	pci_intx(dev, 0);
@@ -405,6 +403,8 @@ static void tifm_7xx1_remove(struct pci_dev *dev)
 
 	for (cnt = 0; cnt < fm->num_sockets; cnt++)
 		tifm_7xx1_sock_power_off(tifm_7xx1_sock_addr(fm->addr, cnt));
+
+	pci_set_drvdata(dev, NULL);
 
 	iounmap(fm->addr);
 	pci_intx(dev, 0);
@@ -433,9 +433,21 @@ static struct pci_driver tifm_7xx1_driver = {
 	.resume = tifm_7xx1_resume,
 };
 
-module_pci_driver(tifm_7xx1_driver);
+static int __init tifm_7xx1_init(void)
+{
+	return pci_register_driver(&tifm_7xx1_driver);
+}
+
+static void __exit tifm_7xx1_exit(void)
+{
+	pci_unregister_driver(&tifm_7xx1_driver);
+}
+
 MODULE_AUTHOR("Alex Dubov");
 MODULE_DESCRIPTION("TI FlashMedia host driver");
 MODULE_LICENSE("GPL");
 MODULE_DEVICE_TABLE(pci, tifm_7xx1_pci_tbl);
 MODULE_VERSION(DRIVER_VERSION);
+
+module_init(tifm_7xx1_init);
+module_exit(tifm_7xx1_exit);

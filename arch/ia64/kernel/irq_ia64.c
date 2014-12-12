@@ -23,6 +23,7 @@
 #include <linux/ioport.h>
 #include <linux/kernel_stat.h>
 #include <linux/ptrace.h>
+#include <linux/random.h>	/* for rand_initialize_irq() */
 #include <linux/signal.h>
 #include <linux/smp.h>
 #include <linux/threads.h>
@@ -38,6 +39,7 @@
 #include <asm/hw_irq.h>
 #include <asm/machvec.h>
 #include <asm/pgtable.h>
+#include <asm/system.h>
 #include <asm/tlbflush.h>
 
 #ifdef CONFIG_PERFMON
@@ -93,6 +95,14 @@ static int irq_status[NR_IRQS] = {
 	[0 ... NR_IRQS -1] = IRQ_UNUSED
 };
 
+int check_irq_used(int irq)
+{
+	if (irq_status[irq] == IRQ_USED)
+		return 1;
+
+	return -1;
+}
+
 static inline int find_unassigned_irq(void)
 {
 	int irq;
@@ -108,7 +118,7 @@ static inline int find_unassigned_vector(cpumask_t domain)
 	cpumask_t mask;
 	int pos, vector;
 
-	cpumask_and(&mask, &domain, cpu_online_mask);
+	cpus_and(mask, domain, cpu_online_map);
 	if (cpus_empty(mask))
 		return -EINVAL;
 
@@ -131,7 +141,7 @@ static int __bind_irq_vector(int irq, int vector, cpumask_t domain)
 	BUG_ON((unsigned)irq >= NR_IRQS);
 	BUG_ON((unsigned)vector >= IA64_NUM_VECTORS);
 
-	cpumask_and(&mask, &domain, cpu_online_mask);
+	cpus_and(mask, domain, cpu_online_map);
 	if (cpus_empty(mask))
 		return -EINVAL;
 	if ((cfg->vector == vector) && cpus_equal(cfg->domain, domain))
@@ -169,7 +179,7 @@ static void __clear_irq_vector(int irq)
 	BUG_ON(cfg->vector == IRQ_VECTOR_UNASSIGNED);
 	vector = cfg->vector;
 	domain = cfg->domain;
-	cpumask_and(&mask, &cfg->domain, cpu_online_mask);
+	cpus_and(mask, cfg->domain, cpu_online_map);
 	for_each_cpu_mask(cpu, mask)
 		per_cpu(vector_irq, cpu)[vector] = -1;
 	cfg->vector = IRQ_VECTOR_UNASSIGNED;
@@ -312,7 +322,7 @@ void irq_complete_move(unsigned irq)
 	if (unlikely(cpu_isset(smp_processor_id(), cfg->old_domain)))
 		return;
 
-	cpumask_and(&cleanup_mask, &cfg->old_domain, cpu_online_mask);
+	cpus_and(cleanup_mask, cfg->old_domain, cpu_online_map);
 	cfg->move_cleanup_count = cpus_weight(cleanup_mask);
 	for_each_cpu_mask(i, cleanup_mask)
 		platform_send_ipi(i, IA64_IRQ_MOVE_VECTOR, IA64_IPI_DM_INT, 0);
@@ -356,6 +366,7 @@ static irqreturn_t smp_irq_move_cleanup_interrupt(int irq, void *dev_id)
 
 static struct irqaction irq_move_irqaction = {
 	.handler =	smp_irq_move_cleanup_interrupt,
+	.flags =	IRQF_DISABLED,
 	.name =		"irq_move"
 };
 
@@ -382,7 +393,8 @@ void destroy_and_reserve_irq(unsigned int irq)
 {
 	unsigned long flags;
 
-	irq_init_desc(irq);
+	dynamic_irq_cleanup(irq);
+
 	spin_lock_irqsave(&vector_lock, flags);
 	__clear_irq_vector(irq);
 	irq_status[irq] = IRQ_RSVD;
@@ -415,13 +427,13 @@ int create_irq(void)
  out:
 	spin_unlock_irqrestore(&vector_lock, flags);
 	if (irq >= 0)
-		irq_init_desc(irq);
+		dynamic_irq_init(irq);
 	return irq;
 }
 
 void destroy_irq(unsigned int irq)
 {
-	irq_init_desc(irq);
+	dynamic_irq_cleanup(irq);
 	clear_irq_vector(irq);
 }
 
@@ -479,13 +491,14 @@ ia64_handle_irq (ia64_vector vector, struct pt_regs *regs)
 	ia64_srlz_d();
 	while (vector != IA64_SPURIOUS_INT_VECTOR) {
 		int irq = local_vector_to_irq(vector);
+		struct irq_desc *desc = irq_to_desc(irq);
 
 		if (unlikely(IS_LOCAL_TLB_FLUSH(vector))) {
 			smp_local_flush_tlb();
-			kstat_incr_irq_this_cpu(irq);
+			kstat_incr_irqs_this_cpu(irq, desc);
 		} else if (unlikely(IS_RESCHEDULE(vector))) {
 			scheduler_ipi();
-			kstat_incr_irq_this_cpu(irq);
+			kstat_incr_irqs_this_cpu(irq, desc);
 		} else {
 			ia64_setreg(_IA64_REG_CR_TPR, vector);
 			ia64_srlz_d();
@@ -538,12 +551,13 @@ void ia64_process_pending_intr(void)
 	  */
 	while (vector != IA64_SPURIOUS_INT_VECTOR) {
 		int irq = local_vector_to_irq(vector);
+		struct irq_desc *desc = irq_to_desc(irq);
 
 		if (unlikely(IS_LOCAL_TLB_FLUSH(vector))) {
 			smp_local_flush_tlb();
-			kstat_incr_irq_this_cpu(irq);
+			kstat_incr_irqs_this_cpu(irq, desc);
 		} else if (unlikely(IS_RESCHEDULE(vector))) {
-			kstat_incr_irq_this_cpu(irq);
+			kstat_incr_irqs_this_cpu(irq, desc);
 		} else {
 			struct pt_regs *old_regs = set_irq_regs(NULL);
 
@@ -590,6 +604,7 @@ static irqreturn_t dummy_handler (int irq, void *dev_id)
 
 static struct irqaction ipi_irqaction = {
 	.handler =	handle_IPI,
+	.flags =	IRQF_DISABLED,
 	.name =		"IPI"
 };
 
@@ -598,11 +613,13 @@ static struct irqaction ipi_irqaction = {
  */
 static struct irqaction resched_irqaction = {
 	.handler =	dummy_handler,
+	.flags =	IRQF_DISABLED,
 	.name =		"resched"
 };
 
 static struct irqaction tlb_irqaction = {
 	.handler =	dummy_handler,
+	.flags =	IRQF_DISABLED,
 	.name =		"tlb_flush"
 };
 

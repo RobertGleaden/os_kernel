@@ -5,6 +5,7 @@
  * FIXME: LOCKING !!!
  */
 
+#include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
 #include <linux/spinlock.h>
@@ -685,7 +686,7 @@ static int pmf_add_functions(struct pmf_device *dev, void *driverdata)
 	int count = 0;
 
 	for (pp = dev->node->properties; pp != 0; pp = pp->next) {
-		const char *name;
+		char *name;
 		if (strncmp(pp->name, PP_PREFIX, plen) != 0)
 			continue;
 		name = pp->name + plen;

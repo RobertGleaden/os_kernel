@@ -25,8 +25,6 @@
 #include <linux/fs_uart_pd.h>
 #include <linux/fsl_devices.h>
 #include <linux/mii.h>
-#include <linux/of_address.h>
-#include <linux/of_fdt.h>
 #include <linux/of_platform.h>
 
 #include <asm/delay.h>
@@ -34,6 +32,7 @@
 #include <asm/machdep.h>
 #include <asm/page.h>
 #include <asm/processor.h>
+#include <asm/system.h>
 #include <asm/time.h>
 #include <asm/mpc8xx.h>
 #include <asm/8xx_immap.h>

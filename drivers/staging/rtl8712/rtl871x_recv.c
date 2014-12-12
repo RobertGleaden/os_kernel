@@ -28,16 +28,12 @@
 
 #define _RTL871X_RECV_C_
 
-#include <linux/ip.h>
-#include <linux/slab.h>
-#include <linux/if_ether.h>
-#include <linux/kmemleak.h>
-#include <linux/etherdevice.h>
-
 #include "osdep_service.h"
 #include "drv_types.h"
 #include "recv_osdep.h"
 #include "mlme_osdep.h"
+#include "ip.h"
+#include "if_ether.h"
 #include "ethernet.h"
 #include "usb_ops.h"
 #include "wifi.h"
@@ -72,12 +68,11 @@ sint _r8712_init_recv_priv(struct recv_priv *precvpriv,
 	_init_queue(&precvpriv->recv_pending_queue);
 	precvpriv->adapter = padapter;
 	precvpriv->free_recvframe_cnt = NR_RECVFRAME;
-	precvpriv->pallocated_frame_buf = kmalloc(NR_RECVFRAME *
-						  sizeof(union recv_frame) + RXFRAME_ALIGN_SZ,
-						  GFP_ATOMIC);
+	precvpriv->pallocated_frame_buf = _malloc(NR_RECVFRAME *
+					   sizeof(union recv_frame) +
+					   RXFRAME_ALIGN_SZ);
 	if (precvpriv->pallocated_frame_buf == NULL)
 		return _FAIL;
-	kmemleak_not_leak(precvpriv->pallocated_frame_buf);
 	memset(precvpriv->pallocated_frame_buf, 0, NR_RECVFRAME *
 		sizeof(union recv_frame) + RXFRAME_ALIGN_SZ);
 	precvpriv->precv_frame_buf = precvpriv->pallocated_frame_buf +
@@ -94,6 +89,7 @@ sint _r8712_init_recv_priv(struct recv_priv *precvpriv,
 		precvframe++;
 	}
 	precvpriv->rx_pending_cnt = 1;
+	sema_init(&precvpriv->allrxreturnevt, 0);
 	return r8712_init_recv_priv(precvpriv, padapter);
 }
 
@@ -254,7 +250,7 @@ union recv_frame *r8712_portctrl(struct _adapter *adapter,
 	struct sta_info *psta;
 	struct	sta_priv *pstapriv;
 	union recv_frame *prtnframe;
-	u16 ether_type;
+	u16 ether_type = 0;
 
 	pstapriv = &adapter->stapriv;
 	ptr = get_recvframe_data(precv_frame);
@@ -263,14 +259,15 @@ union recv_frame *r8712_portctrl(struct _adapter *adapter,
 	psta = r8712_get_stainfo(pstapriv, psta_addr);
 	auth_alg = adapter->securitypriv.AuthAlgrthm;
 	if (auth_alg == 2) {
-		/* get ether_type */
-		ptr = ptr + pfhdr->attrib.hdrlen + LLC_HEADER_SIZE;
-		memcpy(&ether_type, ptr, 2);
-		ether_type = ntohs((unsigned short)ether_type);
-
 		if ((psta != NULL) && (psta->ieee8021x_blocked)) {
 			/* blocked
 			 * only accept EAPOL frame */
+			prtnframe = precv_frame;
+			/*get ether_type */
+			ptr = ptr + pfhdr->attrib.hdrlen +
+			      pfhdr->attrib.iv_len + LLC_HEADER_SIZE;
+			memcpy(&ether_type, ptr, 2);
+			ether_type = ntohs((unsigned short)ether_type);
 			if (ether_type == 0x888e)
 				prtnframe = precv_frame;
 			else {
@@ -331,8 +328,8 @@ static sint sta2sta_data_frame(struct _adapter *adapter,
 			return _FAIL;
 		if ((memcmp(myhwaddr, pattrib->dst, ETH_ALEN)) && (!bmcast))
 			return _FAIL;
-		if (is_zero_ether_addr(pattrib->bssid) ||
-		    is_zero_ether_addr(mybssid) ||
+		if (!memcmp(pattrib->bssid, "\x0\x0\x0\x0\x0\x0", ETH_ALEN) ||
+		    !memcmp(mybssid, "\x0\x0\x0\x0\x0\x0", ETH_ALEN) ||
 		    (memcmp(pattrib->bssid, mybssid, ETH_ALEN)))
 			return _FAIL;
 		sta_addr = pattrib->src;
@@ -409,8 +406,8 @@ static sint ap2sta_data_frame(struct _adapter *adapter,
 		if ((memcmp(myhwaddr, pattrib->dst, ETH_ALEN)) && (!bmcast))
 			return _FAIL;
 		/* check BSSID */
-		if (is_zero_ether_addr(pattrib->bssid) ||
-		     is_zero_ether_addr(mybssid) ||
+		if (!memcmp(pattrib->bssid, "\x0\x0\x0\x0\x0\x0", ETH_ALEN) ||
+		     !memcmp(mybssid, "\x0\x0\x0\x0\x0\x0", ETH_ALEN) ||
 		     (memcmp(pattrib->bssid, mybssid, ETH_ALEN)))
 			return _FAIL;
 		if (bmcast)
@@ -605,6 +602,8 @@ sint r8712_wlanhdr_to_ethhdr(union recv_frame *precvframe)
 	u8	bsnaphdr;
 	u8	*psnap_type;
 	struct ieee80211_snap_hdr *psnap;
+
+	sint ret = _SUCCESS;
 	struct _adapter	*adapter = precvframe->u.hdr.adapter;
 	struct mlme_priv *pmlmepriv = &adapter->mlmepriv;
 
@@ -651,7 +650,7 @@ sint r8712_wlanhdr_to_ethhdr(union recv_frame *precvframe)
 		len = htons(len);
 		memcpy(ptr + 12, &len, 2);
 	}
-	return _SUCCESS;
+	return ret;
 }
 
 s32 r8712_recv_entry(union recv_frame *precvframe)

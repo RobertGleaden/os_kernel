@@ -31,7 +31,6 @@
 #include <linux/kernel.h>
 #include <linux/kgdb.h>
 #include <linux/kdb.h>
-#include <linux/serial_core.h>
 #include <linux/reboot.h>
 #include <linux/uaccess.h>
 #include <asm/cacheflush.h>
@@ -218,7 +217,7 @@ void gdbstub_msg_write(const char *s, int len)
 
 		/* Pack in hex chars */
 		for (i = 0; i < wcount; i++)
-			bufptr = hex_byte_pack(bufptr, s[i]);
+			bufptr = pack_hex_byte(bufptr, s[i]);
 		*bufptr = '\0';
 
 		/* Move up */
@@ -250,7 +249,7 @@ char *kgdb_mem2hex(char *mem, char *buf, int count)
 	if (err)
 		return NULL;
 	while (count > 0) {
-		buf = hex_byte_pack(buf, *tmp);
+		buf = pack_hex_byte(buf, *tmp);
 		tmp++;
 		count--;
 	}
@@ -412,14 +411,14 @@ static char *pack_threadid(char *pkt, unsigned char *id)
 	limit = id + (BUF_THREAD_ID_SIZE / 2);
 	while (id < limit) {
 		if (!lzero || *id != 0) {
-			pkt = hex_byte_pack(pkt, *id);
+			pkt = pack_hex_byte(pkt, *id);
 			lzero = 0;
 		}
 		id++;
 	}
 
 	if (lzero)
-		pkt = hex_byte_pack(pkt, 0);
+		pkt = pack_hex_byte(pkt, 0);
 
 	return pkt;
 }
@@ -487,7 +486,7 @@ static void gdb_cmd_status(struct kgdb_state *ks)
 	dbg_remove_all_break();
 
 	remcom_out_buffer[0] = 'S';
-	hex_byte_pack(&remcom_out_buffer[1], ks->signo);
+	pack_hex_byte(&remcom_out_buffer[1], ks->signo);
 }
 
 static void gdb_get_regs_helper(struct kgdb_state *ks)
@@ -783,10 +782,7 @@ static void gdb_cmd_query(struct kgdb_state *ks)
 			len = len / 2;
 			remcom_out_buffer[len++] = 0;
 
-			kdb_common_init_state(ks);
 			kdb_parse(remcom_out_buffer);
-			kdb_common_deinit_state();
-
 			strcpy(remcom_out_buffer, "OK");
 		}
 		break;
@@ -958,7 +954,7 @@ int gdb_serial_stub(struct kgdb_state *ks)
 		/* Reply to host that an exception has occurred */
 		ptr = remcom_out_buffer;
 		*ptr++ = 'T';
-		ptr = hex_byte_pack(ptr, ks->signo);
+		ptr = pack_hex_byte(ptr, ks->signo);
 		ptr += strlen(strcpy(ptr, "thread:"));
 		int_to_threadref(thref, shadow_pid(current->pid));
 		ptr = pack_threadid(ptr, thref);
@@ -1115,13 +1111,6 @@ void gdbstub_exit(int status)
 	unsigned char checksum, ch, buffer[3];
 	int loop;
 
-	if (!kgdb_connected)
-		return;
-	kgdb_connected = 0;
-
-	if (!dbg_io_ops || dbg_kdb_mode)
-		return;
-
 	buffer[0] = 'W';
 	buffer[1] = hex_asc_hi(status);
 	buffer[2] = hex_asc_lo(status);
@@ -1140,6 +1129,5 @@ void gdbstub_exit(int status)
 	dbg_io_ops->write_char(hex_asc_lo(checksum));
 
 	/* make sure the output is flushed, lest the bootloader clobber it */
-	if (dbg_io_ops->flush)
-		dbg_io_ops->flush();
+	dbg_io_ops->flush();
 }

@@ -25,8 +25,7 @@
 #include <linux/mtd/physmap.h>
 #include <linux/pda_power.h>
 #include <linux/pwm_backlight.h>
-#include <linux/regulator/driver.h>
-#include <linux/regulator/gpio-regulator.h>
+#include <linux/regulator/bq24022.h>
 #include <linux/regulator/machine.h>
 #include <linux/usb/gpio_vbus.h>
 #include <linux/i2c/pxa-i2c.h>
@@ -34,14 +33,13 @@
 #include <mach/hardware.h>
 #include <asm/mach-types.h>
 #include <asm/mach/arch.h>
-#include <asm/system_info.h>
 
 #include <mach/pxa27x.h>
 #include <mach/magician.h>
-#include <linux/platform_data/video-pxafb.h>
-#include <linux/platform_data/mmc-pxamci.h>
-#include <linux/platform_data/irda-pxaficp.h>
-#include <linux/platform_data/usb-ohci-pxa27x.h>
+#include <mach/pxafb.h>
+#include <mach/mmc.h>
+#include <mach/irda.h>
+#include <mach/ohci.h>
 
 #include "devices.h"
 #include "generic.h"
@@ -186,8 +184,8 @@ static struct resource egpio_resources[] = {
 		.flags = IORESOURCE_MEM,
 	},
 	[1] = {
-		.start = PXA_GPIO_TO_IRQ(GPIO13_MAGICIAN_CPLD_IRQ),
-		.end   = PXA_GPIO_TO_IRQ(GPIO13_MAGICIAN_CPLD_IRQ),
+		.start = gpio_to_irq(GPIO13_MAGICIAN_CPLD_IRQ),
+		.end   = gpio_to_irq(GPIO13_MAGICIAN_CPLD_IRQ),
 		.flags = IORESOURCE_IRQ,
 	},
 };
@@ -378,7 +376,6 @@ static struct platform_pwm_backlight_data backlight_data = {
 	.max_brightness = 272,
 	.dft_brightness = 100,
 	.pwm_period_ns  = 30923,
-	.enable_gpio    = -1,
 	.init           = magician_backlight_init,
 	.notify         = magician_backlight_notify,
 	.exit           = magician_backlight_exit,
@@ -471,8 +468,8 @@ static struct resource pasic3_resources[] = {
 	},
 	/* No IRQ handler in the PASIC3, DS1WM needs an external IRQ */
 	[1] = {
-		.start  = PXA_GPIO_TO_IRQ(GPIO107_MAGICIAN_DS1WM_IRQ),
-		.end    = PXA_GPIO_TO_IRQ(GPIO107_MAGICIAN_DS1WM_IRQ),
+		.start  = gpio_to_irq(GPIO107_MAGICIAN_DS1WM_IRQ),
+		.end    = gpio_to_irq(GPIO107_MAGICIAN_DS1WM_IRQ),
 		.flags  = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE,
 	}
 };
@@ -580,8 +577,14 @@ static struct platform_device power_supply = {
  */
 
 static struct regulator_consumer_supply bq24022_consumers[] = {
-	REGULATOR_SUPPLY("vbus_draw", NULL),
-	REGULATOR_SUPPLY("ac_draw", NULL),
+	{
+		.dev = &gpio_vbus.dev,
+		.supply = "vbus_draw",
+	},
+	{
+		.dev = &power_supply.dev,
+		.supply = "ac_draw",
+	},
 };
 
 static struct regulator_init_data bq24022_init_data = {
@@ -593,34 +596,14 @@ static struct regulator_init_data bq24022_init_data = {
 	.consumer_supplies      = bq24022_consumers,
 };
 
-static struct gpio bq24022_gpios[] = {
-	{ EGPIO_MAGICIAN_BQ24022_ISET2, GPIOF_OUT_INIT_LOW, "bq24022_iset2" },
-};
-
-static struct gpio_regulator_state bq24022_states[] = {
-	{ .value = 100000, .gpios = (0 << 0) },
-	{ .value = 500000, .gpios = (1 << 0) },
-};
-
-static struct gpio_regulator_config bq24022_info = {
-	.supply_name = "bq24022",
-
-	.enable_gpio = GPIO30_MAGICIAN_BQ24022_nCHARGE_EN,
-	.enable_high = 0,
-	.enabled_at_boot = 0,
-
-	.gpios = bq24022_gpios,
-	.nr_gpios = ARRAY_SIZE(bq24022_gpios),
-
-	.states = bq24022_states,
-	.nr_states = ARRAY_SIZE(bq24022_states),
-
-	.type = REGULATOR_CURRENT,
-	.init_data = &bq24022_init_data,
+static struct bq24022_mach_info bq24022_info = {
+	.gpio_nce   = GPIO30_MAGICIAN_BQ24022_nCHARGE_EN,
+	.gpio_iset2 = EGPIO_MAGICIAN_BQ24022_ISET2,
+	.init_data  = &bq24022_init_data,
 };
 
 static struct platform_device bq24022 = {
-	.name = "gpio-regulator",
+	.name = "bq24022",
 	.id   = -1,
 	.dev  = {
 		.platform_data = &bq24022_info,
@@ -634,8 +617,9 @@ static struct platform_device bq24022 = {
 static int magician_mci_init(struct device *dev,
 				irq_handler_t detect_irq, void *data)
 {
-	return request_irq(IRQ_MAGICIAN_SD, detect_irq, 0,
-			   "mmc card detect", data);
+	return request_irq(IRQ_MAGICIAN_SD, detect_irq,
+				IRQF_DISABLED | IRQF_SAMPLE_RANDOM,
+				"mmc card detect", data);
 }
 
 static void magician_mci_exit(struct device *dev, void *data)
@@ -769,12 +753,11 @@ static void __init magician_init(void)
 
 
 MACHINE_START(MAGICIAN, "HTC Magician")
-	.atag_offset = 0x100,
+	.boot_params = 0xa0000100,
 	.map_io = pxa27x_map_io,
 	.nr_irqs = MAGICIAN_NR_IRQS,
 	.init_irq = pxa27x_init_irq,
 	.handle_irq = pxa27x_handle_irq,
 	.init_machine = magician_init,
-	.init_time	= pxa_timer_init,
-	.restart	= pxa_restart,
+	.timer = &pxa_timer,
 MACHINE_END

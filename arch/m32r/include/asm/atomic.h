@@ -11,9 +11,7 @@
 
 #include <linux/types.h>
 #include <asm/assembler.h>
-#include <asm/cmpxchg.h>
-#include <asm/dcache_clear.h>
-#include <asm/barrier.h>
+#include <asm/system.h>
 
 /*
  * Atomic operations that C can't guarantee us.  Useful for
@@ -308,5 +306,11 @@ static __inline__ void atomic_set_mask(unsigned long  mask, atomic_t *addr)
 	);
 	local_irq_restore(flags);
 }
+
+/* Atomic operations are already serializing on m32r */
+#define smp_mb__before_atomic_dec()	barrier()
+#define smp_mb__after_atomic_dec()	barrier()
+#define smp_mb__before_atomic_inc()	barrier()
+#define smp_mb__after_atomic_inc()	barrier()
 
 #endif	/* _ASM_M32R_ATOMIC_H */

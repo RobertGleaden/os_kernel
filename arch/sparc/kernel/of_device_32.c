@@ -2,6 +2,7 @@
 #include <linux/kernel.h>
 #include <linux/of.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/mod_devicetable.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
@@ -356,7 +357,7 @@ static struct platform_device * __init scan_one_device(struct device_node *dp,
 		op->archdata.num_irqs = len / sizeof(struct linux_prom_irqs);
 		for (i = 0; i < op->archdata.num_irqs; i++)
 			op->archdata.irqs[i] =
-			    sparc_config.build_device_irq(op, intr[i].pri);
+			    sparc_irq_config.build_device_irq(op, intr[i].pri);
 	} else {
 		const unsigned int *irq =
 			of_get_property(dp, "interrupts", &len);
@@ -365,7 +366,7 @@ static struct platform_device * __init scan_one_device(struct device_node *dp,
 			op->archdata.num_irqs = len / sizeof(unsigned int);
 			for (i = 0; i < op->archdata.num_irqs; i++)
 				op->archdata.irqs[i] =
-				    sparc_config.build_device_irq(op, irq[i]);
+				    sparc_irq_config.build_device_irq(op, irq[i]);
 		} else {
 			op->archdata.num_irqs = 0;
 		}

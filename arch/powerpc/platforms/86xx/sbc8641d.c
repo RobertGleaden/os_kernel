@@ -21,6 +21,7 @@
 #include <linux/seq_file.h>
 #include <linux/of_platform.h>
 
+#include <asm/system.h>
 #include <asm/time.h>
 #include <asm/machdep.h>
 #include <asm/pci-bridge.h>
@@ -38,16 +39,23 @@
 static void __init
 sbc8641_setup_arch(void)
 {
+#ifdef CONFIG_PCI
+	struct device_node *np;
+#endif
+
 	if (ppc_md.progress)
 		ppc_md.progress("sbc8641_setup_arch()", 0);
+
+#ifdef CONFIG_PCI
+	for_each_compatible_node(np, "pci", "fsl,mpc8641-pcie")
+		fsl_add_bridge(np, 0);
+#endif
 
 	printk("SBC8641 board from Wind River\n");
 
 #ifdef CONFIG_SMP
 	mpc86xx_smp_init();
 #endif
-
-	fsl_pci_assign_primary();
 }
 
 
@@ -95,7 +103,6 @@ mpc86xx_time_init(void)
 static __initdata struct of_device_id of_bus_ids[] = {
 	{ .compatible = "simple-bus", },
 	{ .compatible = "gianfar", },
-	{ .compatible = "fsl,mpc8641-pcie", },
 	{},
 };
 
@@ -105,7 +112,7 @@ static int __init declare_of_platform_devices(void)
 
 	return 0;
 }
-machine_arch_initcall(sbc8641, declare_of_platform_devices);
+machine_device_initcall(sbc8641, declare_of_platform_devices);
 
 define_machine(sbc8641) {
 	.name			= "SBC8641D",

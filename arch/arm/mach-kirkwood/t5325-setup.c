@@ -16,6 +16,7 @@
 #include <linux/mtd/physmap.h>
 #include <linux/spi/flash.h>
 #include <linux/spi/spi.h>
+#include <linux/spi/orion_spi.h>
 #include <linux/i2c.h>
 #include <linux/mv643xx_eth.h>
 #include <linux/ata_platform.h>
@@ -29,7 +30,7 @@
 #include "common.h"
 #include "mpp.h"
 
-static struct mtd_partition hp_t5325_partitions[] = {
+struct mtd_partition hp_t5325_partitions[] = {
 	{
 		.name		= "u-boot env",
 		.size		= SZ_64K,
@@ -59,14 +60,14 @@ static struct mtd_partition hp_t5325_partitions[] = {
 	},
 };
 
-static const struct flash_platform_data hp_t5325_flash = {
+const struct flash_platform_data hp_t5325_flash = {
 	.type		= "mx25l8005",
 	.name		= "spi_flash",
 	.parts		= hp_t5325_partitions,
 	.nr_parts	= ARRAY_SIZE(hp_t5325_partitions),
 };
 
-static struct spi_board_info __initdata hp_t5325_spi_slave_info[] = {
+struct spi_board_info __initdata hp_t5325_spi_slave_info[] = {
 	{
 		.modalias	= "m25p80",
 		.platform_data	= &hp_t5325_flash,
@@ -103,11 +104,6 @@ static struct platform_device hp_t5325_button_device = {
 	.dev		= {
 		.platform_data	= &hp_t5325_button_data,
 	}
-};
-
-static struct platform_device hp_t5325_audio_device = {
-	.name		= "t5325-audio",
-	.id		= -1,
 };
 
 static unsigned int hp_t5325_mpp_config[] __initdata = {
@@ -183,7 +179,6 @@ static void __init hp_t5325_init(void)
 	kirkwood_sata_init(&hp_t5325_sata_data);
 	kirkwood_ehci_init();
 	platform_device_register(&hp_t5325_button_device);
-	platform_device_register(&hp_t5325_audio_device);
 
 	i2c_register_board_info(0, i2c_board_info, ARRAY_SIZE(i2c_board_info));
 	kirkwood_audio_init();
@@ -206,11 +201,10 @@ subsys_initcall(hp_t5325_pci_init);
 
 MACHINE_START(T5325, "HP t5325 Thin Client")
 	/* Maintainer: Martin Michlmayr <tbm@cyrius.com> */
-	.atag_offset	= 0x100,
+	.boot_params	= 0x00000100,
 	.init_machine	= hp_t5325_init,
 	.map_io		= kirkwood_map_io,
 	.init_early	= kirkwood_init_early,
 	.init_irq	= kirkwood_init_irq,
-	.init_time	= kirkwood_timer_init,
-	.restart	= kirkwood_restart,
+	.timer		= &kirkwood_timer,
 MACHINE_END

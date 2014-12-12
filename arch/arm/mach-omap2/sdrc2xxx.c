@@ -24,13 +24,14 @@
 #include <linux/clk.h>
 #include <linux/io.h>
 
-#include "soc.h"
-#include "iomap.h"
-#include "common.h"
-#include "prm2xxx.h"
+#include <plat/common.h>
+#include <plat/clock.h>
+#include <plat/sram.h>
+
+#include "prm2xxx_3xxx.h"
 #include "clock.h"
+#include <plat/sdrc.h>
 #include "sdrc.h"
-#include "sram.h"
 
 /* Memory timing, DLL mode flags */
 #define M_DDR		1
@@ -103,9 +104,9 @@ u32 omap2xxx_sdrc_reprogram(u32 level, u32 force)
 	 * prm2xxx.c function
 	 */
 	if (cpu_is_omap2420())
-		writel_relaxed(0xffff, OMAP2420_PRCM_VOLTSETUP);
+		__raw_writel(0xffff, OMAP2420_PRCM_VOLTSETUP);
 	else
-		writel_relaxed(0xffff, OMAP2430_PRCM_VOLTSETUP);
+		__raw_writel(0xffff, OMAP2430_PRCM_VOLTSETUP);
 	omap2_sram_reprogram_sdrc(level, dll_ctrl, m_type);
 	curr_perf_level = level;
 	local_irq_restore(flags);

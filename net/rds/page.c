@@ -33,7 +33,6 @@
 #include <linux/highmem.h>
 #include <linux/gfp.h>
 #include <linux/cpu.h>
-#include <linux/export.h>
 
 #include "rds.h"
 
@@ -74,12 +73,11 @@ int rds_page_copy_user(struct page *page, unsigned long offset,
 }
 EXPORT_SYMBOL_GPL(rds_page_copy_user);
 
-/**
- * rds_page_remainder_alloc - build up regions of a message.
+/*
+ * Message allocation uses this to build up regions of a message.
  *
- * @scat: Scatter list for message
- * @bytes: the number of bytes needed.
- * @gfp: the waiting behaviour of the allocation
+ * @bytes - the number of bytes needed.
+ * @gfp - the waiting behaviour of the allocation
  *
  * @gfp is always ored with __GFP_HIGHMEM.  Callers must be prepared to
  * kmap the pages, etc.

@@ -1,3 +1,8 @@
+/*
+ * $Id: pmcc4_drv.c,v 3.1 2007/08/15 23:32:17 rickd PMCC4_3_1B $
+ */
+
+
 /*-----------------------------------------------------------------------------
  * pmcc4_drv.c -
  *
@@ -17,10 +22,74 @@
  * For further information, contact via email: support@onestopsystems.com
  * One Stop Systems, Inc.  Escondido, California  U.S.A.
  *-----------------------------------------------------------------------------
+ * RCS info:
+ * RCS revision: $Revision: 3.1 $
+ * Last changed on $Date: 2007/08/15 23:32:17 $
+ * Changed by $Author: rickd $
+ *-----------------------------------------------------------------------------
+ * $Log: pmcc4_drv.c,v $
+ * Revision 3.1  2007/08/15 23:32:17  rickd
+ * Use 'if 0' instead of GNU comment delimeter to avoid line wrap induced compiler errors.
+ *
+ * Revision 3.0  2007/08/15 22:19:55  rickd
+ * Correct sizeof() castings and pi->regram to support 64bit compatibility.
+ *
+ * Revision 2.10  2006/04/21 00:56:40  rickd
+ * workqueue files now prefixed with <sbecom> prefix.
+ *
+ * Revision 2.9  2005/11/01 19:22:49  rickd
+ * Add sanity checks against max_port for ioctl functions.
+ *
+ * Revision 2.8  2005/10/27 18:59:25  rickd
+ * Code cleanup.  Default channel config to HDLC_FCS16.
+ *
+ * Revision 2.7  2005/10/18 18:16:30  rickd
+ * Further NCOMM code repairs - (1) interrupt matrix usage inconsistent
+ * for indexing into nciInterrupt[][], code missing double parameters.
+ * (2) check input of ncomm interrupt registration cardID for correct
+ * boundary values.
+ *
+ * Revision 2.6  2005/10/17 23:55:28  rickd
+ * Initial port of NCOMM support patches from original work found
+ * in pmc_c4t1e1 as updated by NCOMM.  Ref: CONFIG_SBE_PMCC4_NCOMM.
+ * Corrected NCOMMs wanpmcC4T1E1_getBaseAddress() to correctly handle
+ * multiple boards.
+ *
+ * Revision 2.5  2005/10/13 23:01:28  rickd
+ * Correct panic for illegal address reference w/in get_brdinfo on
+ * first_if/last_if name acquistion under Linux 2.6
+ *
+ * Revision 2.4  2005/10/13 21:20:19  rickd
+ * Correction of c4_cleanup() wherein next should be acquired before
+ * ci_t structure is free'd.
+ *
+ * Revision 2.3  2005/10/13 19:20:10  rickd
+ * Correct driver removal cleanup code for multiple boards.
+ *
+ * Revision 2.2  2005/10/11 18:34:04  rickd
+ * New routine added to determine number of ports (comets) on board.
+ *
+ * Revision 2.1  2005/10/05 00:48:13  rickd
+ * Add some RX activation trace code.
+ *
+ * Revision 2.0  2005/09/28 00:10:06  rickd
+ * Implement 2.6 workqueue for TX/RX restart.  Correction to
+ * hardware register boundary checks allows expanded access of MUSYCC.
+ * Implement new musycc reg&bits namings.
+ *
+ *-----------------------------------------------------------------------------
  */
+
+char        OSSIid_pmcc4_drvc[] =
+"@(#)pmcc4_drv.c - $Revision: 3.1 $   (c) Copyright 2002-2007 One Stop Systems, Inc.";
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#if defined (__FreeBSD__) || defined (__NetBSD__)
+#include <sys/param.h>
+#include <sys/systm.h>
+#include <sys/errno.h>
+#else
 #include <linux/types.h>
 #include "pmcc4_sysdep.h"
 #include <linux/errno.h>
@@ -28,7 +97,8 @@
 #include <linux/sched.h>        /* include for timer */
 #include <linux/timer.h>        /* include for timer */
 #include <linux/hdlc.h>
-#include <linux/io.h>
+#include <asm/io.h>
+#endif
 
 #include "sbecom_inline_linux.h"
 #include "libsbew.h"
@@ -38,6 +108,13 @@
 #include "musycc.h"
 #include "comet.h"
 #include "sbe_bid.h"
+
+#ifdef SBE_INCLUDE_SYMBOLS
+#define STATIC
+#else
+#define STATIC  static
+#endif
+
 
 #define KERN_WARN KERN_WARNING
 
@@ -70,7 +147,7 @@ extern void *memset (void *s, int c, size_t n);
 #endif
 
 int         drvr_state = SBE_DRVR_INIT;
-ci_t       *c4_list = NULL;
+ci_t       *c4_list = 0;
 ci_t       *CI;                 /* dummy pointer to board ZEROE's data -
                                  * DEBUG USAGE */
 
@@ -112,15 +189,44 @@ c4_find_chan (int channum)
         for (portnum = 0; portnum < ci->max_port; portnum++)
             for (gchan = 0; gchan < MUSYCC_NCHANS; gchan++)
             {
-		ch = ci->port[portnum].chan[gchan];
-		if (ch) {
-			if ((ch->state != UNASSIGNED) &&
-			   (ch->channum == channum))
-				return ch;
-		}
+                if ((ch = ci->port[portnum].chan[gchan]))
+                {
+                    if ((ch->state != UNASSIGNED) &&
+                        (ch->channum == channum))
+                        return (ch);
+                }
             }
-    return NULL;
+    return 0;
 }
+
+
+ci_t       *__init
+c4_new (void *hi)
+{
+    ci_t       *ci;
+
+#ifdef SBE_MAP_DEBUG
+    pr_warning("c4_new() entered, ci needs %u.\n",
+               (unsigned int) sizeof (ci_t));
+#endif
+
+    ci = (ci_t *) OS_kmalloc (sizeof (ci_t));
+    if (ci)
+    {
+        ci->hdw_info = hi;
+        ci->state = C_INIT;         /* mark as hardware not available */
+        ci->next = c4_list;
+        c4_list = ci;
+        ci->brdno = ci->next ? ci->next->brdno + 1 : 0;
+    } else
+        pr_warning("failed CI malloc, size %u.\n",
+                   (unsigned int) sizeof (ci_t));
+
+    if (CI == 0)
+        CI = ci;                    /* DEBUG, only board 0 usage */
+    return ci;
+}
+
 
 /***
  * Check port state and set LED states using watchdog or ioctl...
@@ -157,7 +263,7 @@ c4_find_chan (int channum)
 #define COMET_LBCMD_READ  0x80  /* read only (do not set, return read value) */
 
 void
-checkPorts (ci_t *ci)
+checkPorts (ci_t * ci)
 {
 #ifndef CONFIG_SBE_PMCC4_NCOMM
     /*
@@ -165,7 +271,7 @@ checkPorts (ci_t *ci)
      * alarms conflicts with NCOMM's interrupt servicing implementation.
      */
 
-    struct s_comet_reg    *comet;
+    comet_t    *comet;
     volatile u_int32_t value;
     u_int32_t   copyVal, LEDval;
 
@@ -422,8 +528,8 @@ checkPorts (ci_t *ci)
 }
 
 
-static void
-c4_watchdog (ci_t *ci)
+STATIC void
+c4_watchdog (ci_t * ci)
 {
     if (drvr_state != SBE_DRVR_AVAILABLE)
     {
@@ -456,12 +562,12 @@ c4_cleanup (void)
             for (j = 0; j < MUSYCC_NCHANS; j++)
             {
                 if (pi->chan[j])
-                    kfree(pi->chan[j]);     /* free mch_t struct */
+                    OS_kfree (pi->chan[j]);     /* free mch_t struct */
             }
-            kfree(pi->regram_saved);
+            OS_kfree (pi->regram_saved);
         }
-        kfree(ci->iqd_p_saved);
-        kfree(ci);
+        OS_kfree (ci->iqd_p_saved);
+        OS_kfree (ci);
         ci = next;                  /* cleanup next board, if any */
     }
 }
@@ -476,9 +582,9 @@ c4_cleanup (void)
  */
 
 int
-c4_get_portcfg (ci_t *ci)
+c4_get_portcfg (ci_t * ci)
 {
-    struct s_comet_reg    *comet;
+    comet_t    *comet;
     int         portnum, mask;
     u_int32_t   wdata, rdata;
 
@@ -500,7 +606,7 @@ c4_get_portcfg (ci_t *ci)
 /* nothing herein should generate interrupts */
 
 status_t    __init
-c4_init (ci_t *ci, u_char *func0, u_char *func1)
+c4_init (ci_t * ci, u_char *func0, u_char *func1)
 {
     mpi_t      *pi;
     mch_t      *ch;
@@ -532,7 +638,7 @@ c4_init (ci_t *ci, u_char *func0, u_char *func1)
         for (portnum = 0; portnum < MUSYCC_NPORTS; portnum++)
         {
             pi = &ci->port[portnum];
-            pi->cometbase = (struct s_comet_reg *) ((u_int32_t *) (func1 + COMET_OFFSET (portnum)));
+            pi->cometbase = (comet_t *) ((u_int32_t *) (func1 + COMET_OFFSET (portnum)));
             pi->reg = (struct musycc_globalr *) ((u_char *) ci->reg + (portnum * 0x800));
             pi->portnum = portnum;
             pi->p.portnum = portnum;
@@ -590,7 +696,7 @@ c4_init (ci_t *ci, u_char *func0, u_char *func1)
         /* allocate channel structures for this port */
         for (j = 0; j < MUSYCC_NCHANS; j++)
         {
-		ch = kzalloc(sizeof(mch_t), GFP_KERNEL | GFP_DMA);
+            ch = OS_kmalloc (sizeof (mch_t));
             if (ch)
             {
                 pi->chan[j] = ch;
@@ -634,14 +740,13 @@ c4_init (ci_t *ci, u_char *func0, u_char *func1)
 /* better be fully setup to handle interrupts when you call this */
 
 status_t    __init
-c4_init2 (ci_t *ci)
+c4_init2 (ci_t * ci)
 {
     status_t    ret;
 
     /* PORT POINT: this routine generates first interrupt */
-	ret = musycc_init(ci);
-	if (ret != SBE_DRVR_SUCCESS)
-		return ret;
+    if ((ret = musycc_init (ci)) != SBE_DRVR_SUCCESS)
+        return ret;
 
 #if 0
     ci->p.framing_type = FRAMING_CBP;
@@ -663,9 +768,9 @@ c4_init2 (ci_t *ci)
 /* This function sets the loopback mode (or clears it, as the case may be). */
 
 int
-c4_loop_port (ci_t *ci, int portnum, u_int8_t cmd)
+c4_loop_port (ci_t * ci, int portnum, u_int8_t cmd)
 {
-    struct s_comet_reg    *comet;
+    comet_t    *comet;
     volatile u_int32_t loopValue;
 
     comet = ci->port[portnum].cometbase;
@@ -722,13 +827,13 @@ c4_loop_port (ci_t *ci, int portnum, u_int8_t cmd)
  */
 
 status_t
-c4_frame_rw (ci_t *ci, struct sbecom_port_param *pp)
+c4_frame_rw (ci_t * ci, struct sbecom_port_param * pp)
 {
-    struct s_comet_reg    *comet;
+    comet_t    *comet;
     volatile u_int32_t data;
 
     if (pp->portnum >= ci->max_port)/* sanity check */
-        return -ENXIO;
+        return ENXIO;
 
     comet = ci->port[pp->portnum].cometbase;
     data = pci_read_32 ((u_int32_t *) comet + pp->port_mode) & 0xff;
@@ -761,7 +866,7 @@ c4_frame_rw (ci_t *ci, struct sbecom_port_param *pp)
  */
 
 status_t
-c4_pld_rw (ci_t *ci, struct sbecom_port_param *pp)
+c4_pld_rw (ci_t * ci, struct sbecom_port_param * pp)
 {
     volatile u_int32_t *regaddr;
     volatile u_int32_t data;
@@ -799,11 +904,11 @@ c4_pld_rw (ci_t *ci, struct sbecom_port_param *pp)
  */
 
 status_t
-c4_musycc_rw (ci_t *ci, struct c4_musycc_param *mcp)
+c4_musycc_rw (ci_t * ci, struct c4_musycc_param * mcp)
 {
     mpi_t      *pi;
     volatile u_int32_t *dph;    /* hardware implemented register */
-    u_int32_t *dpr = NULL;	/* RAM image of registers for group command
+    u_int32_t  *dpr = 0;        /* RAM image of registers for group command
                                  * usage */
     int         offset = mcp->offset % 0x800;   /* group relative address
                                                  * offset, mcp->portnum is
@@ -817,7 +922,7 @@ c4_musycc_rw (ci_t *ci, struct c4_musycc_param *mcp)
      */
     portnum = (mcp->offset % 0x6000) / 0x800;
     if (portnum >= ci->max_port)
-        return -ENXIO;
+        return ENXIO;
     pi = &ci->port[portnum];
     if (mcp->offset >= 0x6000)
         offset += 0x6000;           /* put back in MsgCfgDesc address offset */
@@ -863,10 +968,10 @@ c4_musycc_rw (ci_t *ci, struct c4_musycc_param *mcp)
 }
 
 status_t
-c4_get_port (ci_t *ci, int portnum)
+c4_get_port (ci_t * ci, int portnum)
 {
     if (portnum >= ci->max_port)    /* sanity check */
-        return -ENXIO;
+        return ENXIO;
 
     SD_SEM_TAKE (&ci->sem_wdbusy, "_wd_");      /* only 1 thru here, per
                                                  * board */
@@ -878,7 +983,7 @@ c4_get_port (ci_t *ci, int portnum)
 }
 
 status_t
-c4_set_port (ci_t *ci, int portnum)
+c4_set_port (ci_t * ci, int portnum)
 {
     mpi_t      *pi;
     struct sbecom_port_param *pp;
@@ -887,7 +992,7 @@ c4_set_port (ci_t *ci, int portnum)
     int         i;
 
     if (portnum >= ci->max_port)    /* sanity check */
-        return -ENXIO;
+        return ENXIO;
 
     pi = &ci->port[portnum];
     pp = &ci->port[portnum].p;
@@ -899,15 +1004,15 @@ c4_set_port (ci_t *ci, int portnum)
                 portnum, e1mode, pi->openchans);
     }
     if (pi->openchans)
-        return -EBUSY;               /* group needs initialization only for
+        return EBUSY;               /* group needs initialization only for
                                      * first channel of a group */
 
     {
         status_t    ret;
 
-	ret = c4_wq_port_init(pi);
-	if (ret)       /* create/init workqueue_struct */
-		return ret;
+        if ((ret = c4_wq_port_init (pi)))       /* create/init
+                                                 * workqueue_struct */
+            return (ret);
     }
 
     init_comet (ci, pi->cometbase, pp->port_mode, 1 /* clockmaster == true */ , pp->portP);
@@ -983,17 +1088,17 @@ c4_set_port (ci_t *ci, int portnum)
 unsigned int max_int = 0;
 
 status_t
-c4_new_chan (ci_t *ci, int portnum, int channum, void *user)
+c4_new_chan (ci_t * ci, int portnum, int channum, void *user)
 {
     mpi_t      *pi;
     mch_t      *ch;
     int         gchan;
 
     if (c4_find_chan (channum))     /* a new channel shouldn't already exist */
-        return -EEXIST;
+        return EEXIST;
 
     if (portnum >= ci->max_port)    /* sanity check */
-        return -ENXIO;
+        return ENXIO;
 
     pi = &(ci->port[portnum]);
     /* find any available channel within this port */
@@ -1004,7 +1109,7 @@ c4_new_chan (ci_t *ci, int portnum, int channum, void *user)
             break;
     }
     if (gchan == MUSYCC_NCHANS)     /* exhausted table, all were assigned */
-        return -ENFILE;
+        return ENFILE;
 
     ch->up = pi;
 
@@ -1027,13 +1132,12 @@ c4_new_chan (ci_t *ci, int portnum, int channum, void *user)
     {
         status_t    ret;
 
-	ret = c4_wk_chan_init(pi, ch);
-	if (ret)
-		return ret;
+        if ((ret = c4_wk_chan_init (pi, ch)))
+            return ret;
     }
 
     /* save off interface assignments which bound a board */
-    if (!ci->first_if)		/* first channel registered is assumed to
+    if (ci->first_if == 0)          /* first channel registered is assumed to
                                      * be the lowest channel */
     {
         ci->first_if = ci->last_if = user;
@@ -1052,10 +1156,8 @@ c4_del_chan (int channum)
 {
     mch_t      *ch;
 
-	ch = c4_find_chan(channum);
-	if (!ch)
-		return -ENOENT;
-
+    if (!(ch = c4_find_chan (channum)))
+        return ENOENT;
     if (ch->state == UP)
         musycc_chan_down ((ci_t *) 0, channum);
     ch->state = UNASSIGNED;
@@ -1070,9 +1172,8 @@ c4_del_chan_stats (int channum)
 {
     mch_t      *ch;
 
-	ch = c4_find_chan(channum);
-	if (!ch)
-		return -ENOENT;
+    if (!(ch = c4_find_chan (channum)))
+        return ENOENT;
 
     memset (&ch->s, 0, sizeof (struct sbecom_chan_stats));
     return 0;
@@ -1080,25 +1181,24 @@ c4_del_chan_stats (int channum)
 
 
 status_t
-c4_set_chan (int channum, struct sbecom_chan_param *p)
+c4_set_chan (int channum, struct sbecom_chan_param * p)
 {
     mch_t      *ch;
     int         i, x = 0;
 
-	ch = c4_find_chan(channum);
-	if (!ch)
-		return -ENOENT;
+    if (!(ch = c4_find_chan (channum)))
+        return ENOENT;
 
 #if 1
     if (ch->p.card != p->card ||
         ch->p.port != p->port ||
         ch->p.channum != p->channum)
-        return -EINVAL;
+        return EINVAL;
 #endif
 
     if (!(ch->up->group_is_set))
     {
-        return -EIO;                 /* out of order, SET_PORT command
+        return EIO;                 /* out of order, SET_PORT command
                                      * required prior to first group's
                                      * SET_CHAN command */
     }
@@ -1120,12 +1220,10 @@ c4_set_chan (int channum, struct sbecom_chan_param *p)
     {
         status_t    ret;
 
-	ret = musycc_chan_down((ci_t *)0, channum);
-	if (ret)
-		return ret;
-	ret = c4_chan_up(ch->up->up, channum);
-	if (ret)
-		return ret;
+        if ((ret = musycc_chan_down ((ci_t *) 0, channum)))
+            return ret;
+        if ((ret = c4_chan_up (ch->up->up, channum)))
+            return ret;
         sd_enable_xmit (ch->user);  /* re-enable to catch flow controlled
                                      * channel */
     }
@@ -1134,34 +1232,30 @@ c4_set_chan (int channum, struct sbecom_chan_param *p)
 
 
 status_t
-c4_get_chan (int channum, struct sbecom_chan_param *p)
+c4_get_chan (int channum, struct sbecom_chan_param * p)
 {
     mch_t      *ch;
 
-	ch = c4_find_chan(channum);
-	if (!ch)
-		return -ENOENT;
-
+    if (!(ch = c4_find_chan (channum)))
+        return ENOENT;
     *p = ch->p;
     return 0;
 }
 
 status_t
-c4_get_chan_stats (int channum, struct sbecom_chan_stats *p)
+c4_get_chan_stats (int channum, struct sbecom_chan_stats * p)
 {
     mch_t      *ch;
 
-	ch = c4_find_chan(channum);
-	if (!ch)
-		return -ENOENT;
-
+    if (!(ch = c4_find_chan (channum)))
+        return ENOENT;
     *p = ch->s;
     p->tx_pending = atomic_read (&ch->tx_pending);
     return 0;
 }
 
-static int
-c4_fifo_alloc (mpi_t *pi, int chan, int *len)
+STATIC int
+c4_fifo_alloc (mpi_t * pi, int chan, int *len)
 {
     int         i, l = 0, start = 0, max = 0, maxstart = 0;
 
@@ -1198,7 +1292,7 @@ c4_fifo_alloc (mpi_t *pi, int chan, int *len)
 }
 
 void
-c4_fifo_free (mpi_t *pi, int chan)
+c4_fifo_free (mpi_t * pi, int chan)
 {
     int         i;
 
@@ -1212,7 +1306,7 @@ c4_fifo_free (mpi_t *pi, int chan)
 
 
 status_t
-c4_chan_up (ci_t *ci, int channum)
+c4_chan_up (ci_t * ci, int channum)
 {
     mpi_t      *pi;
     mch_t      *ch;
@@ -1223,10 +1317,8 @@ c4_chan_up (ci_t *ci, int channum)
     u_int32_t   tmp;            /* for optimizing conversion across BE
                                  * platform */
 
-	ch = c4_find_chan(channum);
-	if (!ch)
-		return -ENOENT;
-
+    if (!(ch = c4_find_chan (channum)))
+        return ENOENT;
     if (ch->state == UP)
     {
         if (cxt1e1_log_level >= LOG_MONITOR)
@@ -1249,7 +1341,7 @@ c4_chan_up (ci_t *ci, int channum)
                 pr_info("+ ask4 %x, currently %x\n",
                         ch->p.bitmask[i], pi->tsm[i]);
             }
-            return -EINVAL;
+            return EINVAL;
         }
         for (j = 0; j < 8; j++)
             if (ch->p.bitmask[i] & (1 << j))
@@ -1262,7 +1354,7 @@ c4_chan_up (ci_t *ci, int channum)
         /* if( cxt1e1_log_level >= LOG_WARN)  */
         pr_info("%s: c4_chan_up[%d] ENOBUFS (no TimeSlots assigned)\n",
                 ci->devname, channum);
-        return -ENOBUFS;             /* this should not happen */
+        return ENOBUFS;             /* this should not happen */
     }
     addr = c4_fifo_alloc (pi, gchan, &nbuf);
     ch->state = UP;
@@ -1339,8 +1431,8 @@ c4_chan_up (ci_t *ci, int channum)
     ch->txd_num = txnum;
     ch->rxix_irq_srv = 0;
 
-	ch->mdr = kzalloc(sizeof(struct mdesc) * rxnum, GFP_KERNEL | GFP_DMA);
-	ch->mdt = kzalloc(sizeof(struct mdesc) * txnum, GFP_KERNEL | GFP_DMA);
+    ch->mdr = OS_kmalloc (sizeof (struct mdesc) * rxnum);
+    ch->mdt = OS_kmalloc (sizeof (struct mdesc) * txnum);
     if (ch->p.chan_mode == CFG_CH_PROTO_TRANS)
                tmp = __constant_cpu_to_le32 (cxt1e1_max_mru | EOBIRQ_ENABLE);
     else
@@ -1357,13 +1449,12 @@ c4_chan_up (ci_t *ci, int channum)
         }
         md->next = cpu_to_le32 (OS_vtophys (md->snext));
 
-	m = OS_mem_token_alloc(cxt1e1_max_mru);
-	if (!m) {
-		if (cxt1e1_log_level >= LOG_MONITOR)
-			pr_info(
-			"%s: c4_chan_up[%d] - token alloc failure, size = %d.\n",
-			ci->devname, channum, cxt1e1_max_mru);
-		goto errfree;
+               if (!(m = OS_mem_token_alloc (cxt1e1_max_mru)))
+        {
+            if (cxt1e1_log_level >= LOG_MONITOR)
+                pr_info("%s: c4_chan_up[%d] - token alloc failure, size = %d.\n",
+                                               ci->devname, channum, cxt1e1_max_mru);
+            goto errfree;
         }
         md->mem_token = m;
         md->data = cpu_to_le32 (OS_vtophys (OS_mem_token_data (m)));
@@ -1378,7 +1469,7 @@ c4_chan_up (ci_t *ci, int channum)
         md->status = HOST_TX_OWNED; /* Host owns TX descriptor ** CODING
                                      * NOTE: HOST_TX_OWNED = 0 so no need to
                                      * byteSwap */
-        md->mem_token = NULL;
+        md->mem_token = 0;
         md->data = 0;
         if (i == (txnum - 1))
         {
@@ -1433,20 +1524,20 @@ errfree:
         i--;
         OS_mem_token_free (ch->mdr[i].mem_token);
     }
-    kfree(ch->mdt);
-    ch->mdt = NULL;
+    OS_kfree (ch->mdt);
+    ch->mdt = 0;
     ch->txd_num = 0;
-    kfree(ch->mdr);
-    ch->mdr = NULL;
+    OS_kfree (ch->mdr);
+    ch->mdr = 0;
     ch->rxd_num = 0;
     ch->state = DOWN;
-    return -ENOBUFS;
+    return ENOBUFS;
 }
 
 /* stop the hardware from servicing & interrupting */
 
 void
-c4_stopwd (ci_t *ci)
+c4_stopwd (ci_t * ci)
 {
     OS_stop_watchdog (&ci->wd);
     SD_SEM_TAKE (&ci->sem_wdbusy, "_stop_");    /* ensure WD not running */
@@ -1455,7 +1546,7 @@ c4_stopwd (ci_t *ci)
 
 
 void
-sbecom_get_brdinfo (ci_t *ci, struct sbe_brd_info *bip, u_int8_t *bsn)
+sbecom_get_brdinfo (ci_t * ci, struct sbe_brd_info * bip, u_int8_t *bsn)
 {
     char       *np;
     u_int32_t   sn = 0;
@@ -1464,7 +1555,7 @@ sbecom_get_brdinfo (ci_t *ci, struct sbe_brd_info *bip, u_int8_t *bsn)
     bip->brdno = ci->brdno;         /* our board number */
     bip->brd_id = ci->brd_id;
     bip->brd_hdw_id = ci->hdw_bid;
-    bip->brd_chan_cnt = MUSYCC_NCHANS *ci->max_port;   /* number of channels
+    bip->brd_chan_cnt = MUSYCC_NCHANS * ci->max_port;   /* number of channels
                                                          * being used */
     bip->brd_port_cnt = ci->max_port;   /* number of ports being used */
     bip->brd_pci_speed = BINFO_PCI_SPEED_unk;   /* PCI speed not yet
@@ -1514,18 +1605,16 @@ sbecom_get_brdinfo (ci_t *ci, struct sbe_brd_info *bip, u_int8_t *bsn)
 
 
 status_t
-c4_get_iidinfo (ci_t *ci, struct sbe_iid_info *iip)
+c4_get_iidinfo (ci_t * ci, struct sbe_iid_info * iip)
 {
     struct net_device *dev;
     char       *np;
 
-	dev = getuserbychan(iip->channum);
-	if (!dev)
-		return -ENOENT;
+    if (!(dev = getuserbychan (iip->channum)))
+        return ENOENT;
 
     np = dev->name;
     strncpy (iip->iname, np, CHNM_STRLEN - 1);
-    iip->iname[CHNM_STRLEN - 1] = '\0';
     return 0;
 }
 
@@ -1604,7 +1693,7 @@ wanpmcC4T1E1_getBaseAddress (int cardID, int deviceID)
         }
         ci = ci->next;              /* next board, if any */
     }
-    return base;
+    return (base);
 }
 
 #endif                          /*** CONFIG_SBE_PMCC4_NCOMM ***/

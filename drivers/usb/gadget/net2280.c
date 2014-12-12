@@ -9,7 +9,7 @@
  * CODE STATUS HIGHLIGHTS
  *
  * This driver should work well with most "gadget" drivers, including
- * the Mass Storage, Serial, and Ethernet/RNDIS gadget drivers
+ * the File Storage, Serial, and Ethernet/RNDIS gadget drivers
  * as well as Gadget Zero and Gadgetfs.
  *
  * DMA is enabled by default.  Drivers using transfer queues might use
@@ -33,6 +33,15 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #undef	DEBUG		/* messages on error and most fault paths */
@@ -59,12 +68,14 @@
 #include <asm/byteorder.h>
 #include <asm/io.h>
 #include <asm/irq.h>
+#include <asm/system.h>
 #include <asm/unaligned.h>
 
 
 #define	DRIVER_DESC		"PLX NET228x USB Peripheral Controller"
 #define	DRIVER_VERSION		"2005 Sept 27"
 
+#define	DMA_ADDR_INVALID	(~(dma_addr_t)0)
 #define	EP_DONTUSE		13	/* nonzero */
 
 #define USE_RDK_LEDS		/* GPIO pins control three LEDs */
@@ -88,8 +99,8 @@ static const char *const ep_name [] = {
  * Some gadget drivers work better with the dma support here than others.
  * These two parameters let you use PIO or more aggressive DMA.
  */
-static bool use_dma = 1;
-static bool use_dma_chaining = 0;
+static int use_dma = 1;
+static int use_dma_chaining = 0;
 
 /* "modprobe net2280 use_dma=n" etc */
 module_param (use_dma, bool, S_IRUGO);
@@ -110,15 +121,11 @@ module_param (fifo_mode, ushort, 0644);
  * USB suspend requests will be ignored.  This is acceptable for
  * self-powered devices
  */
-static bool enable_suspend = 0;
+static int enable_suspend = 0;
 
 /* "modprobe net2280 enable_suspend=1" etc */
 module_param (enable_suspend, bool, S_IRUGO);
 
-/* force full-speed operation */
-static bool full_speed;
-module_param(full_speed, bool, 0444);
-MODULE_PARM_DESC(full_speed, "force full-speed mode -- for testing only!");
 
 #define	DIR_STRING(bAddress) (((bAddress) & USB_DIR_IN) ? "in" : "out")
 
@@ -129,7 +136,7 @@ static char *type_string (u8 bmAttributes)
 	case USB_ENDPOINT_XFER_BULK:	return "bulk";
 	case USB_ENDPOINT_XFER_ISOC:	return "iso";
 	case USB_ENDPOINT_XFER_INT:	return "intr";
-	}
+	};
 	return "control";
 }
 #endif
@@ -162,7 +169,7 @@ net2280_enable (struct usb_ep *_ep, const struct usb_endpoint_descriptor *desc)
 		return -EDOM;
 
 	/* sanity check ep-e/ep-f since their fifos are small */
-	max = usb_endpoint_maxp (desc) & 0x1fff;
+	max = le16_to_cpu (desc->wMaxPacketSize) & 0x1fff;
 	if (ep->num > 4 && max > 64)
 		return -ERANGE;
 
@@ -293,7 +300,7 @@ static void ep_reset (struct net2280_regs __iomem *regs, struct net2280_ep *ep)
 	ep->desc = NULL;
 	INIT_LIST_HEAD (&ep->queue);
 
-	usb_ep_set_maxpacket_limit(&ep->ep, ~0);
+	ep->ep.maxpacket = ~0;
 	ep->ep.ops = &net2280_ep_ops;
 
 	/* disable the dma, irqs, endpoint... */
@@ -405,6 +412,7 @@ net2280_alloc_request (struct usb_ep *_ep, gfp_t gfp_flags)
 	if (!req)
 		return NULL;
 
+	req->req.dma = DMA_ADDR_INVALID;
 	INIT_LIST_HEAD (&req->queue);
 
 	/* this dma descriptor may be swapped with the previous dummy */
@@ -418,6 +426,7 @@ net2280_alloc_request (struct usb_ep *_ep, gfp_t gfp_flags)
 			return NULL;
 		}
 		td->dmacount = 0;	/* not VALID */
+		td->dmaaddr = cpu_to_le32 (DMA_ADDR_INVALID);
 		td->dmadesc = td->dmaaddr;
 		req->td = td;
 	}
@@ -806,8 +815,12 @@ done (struct net2280_ep *ep, struct net2280_request *req, int status)
 		status = req->req.status;
 
 	dev = ep->dev;
-	if (ep->dma)
-		usb_gadget_unmap_request(&dev->gadget, &req->req, ep->is_in);
+	if (req->mapped) {
+		pci_unmap_single (dev->pdev, req->req.dma, req->req.length,
+			ep->is_in ? PCI_DMA_TODEVICE : PCI_DMA_FROMDEVICE);
+		req->req.dma = DMA_ADDR_INVALID;
+		req->mapped = 0;
+	}
 
 	if (status && status != -ESHUTDOWN)
 		VDEBUG (dev, "complete %s req %p stat %d len %u/%u\n",
@@ -853,13 +866,10 @@ net2280_queue (struct usb_ep *_ep, struct usb_request *_req, gfp_t gfp_flags)
 		return -EOPNOTSUPP;
 
 	/* set up dma mapping in case the caller didn't */
-	if (ep->dma) {
-		int ret;
-
-		ret = usb_gadget_map_request(&dev->gadget, _req,
-				ep->is_in);
-		if (ret)
-			return ret;
+	if (ep->dma && _req->dma == DMA_ADDR_INVALID) {
+		_req->dma = pci_map_single (dev->pdev, _req->buf, _req->length,
+			ep->is_in ? PCI_DMA_TODEVICE : PCI_DMA_FROMDEVICE);
+		req->mapped = 1;
 	}
 
 #if 0
@@ -1400,18 +1410,17 @@ static int net2280_pullup(struct usb_gadget *_gadget, int is_on)
 	return 0;
 }
 
-static int net2280_start(struct usb_gadget *_gadget,
-		struct usb_gadget_driver *driver);
-static int net2280_stop(struct usb_gadget *_gadget,
-		struct usb_gadget_driver *driver);
+static int net2280_start(struct usb_gadget_driver *driver,
+		int (*bind)(struct usb_gadget *));
+static int net2280_stop(struct usb_gadget_driver *driver);
 
 static const struct usb_gadget_ops net2280_ops = {
 	.get_frame	= net2280_get_frame,
 	.wakeup		= net2280_wakeup,
 	.set_selfpowered = net2280_set_selfpowered,
 	.pullup		= net2280_pullup,
-	.udc_start	= net2280_start,
-	.udc_stop	= net2280_stop,
+	.start		= net2280_start,
+	.stop		= net2280_stop,
 };
 
 /*-------------------------------------------------------------------------*/
@@ -1424,8 +1433,8 @@ static const struct usb_gadget_ops net2280_ops = {
  */
 
 /* "function" sysfs attribute */
-static ssize_t function_show(struct device *_dev, struct device_attribute *attr,
-			     char *buf)
+static ssize_t
+show_function (struct device *_dev, struct device_attribute *attr, char *buf)
 {
 	struct net2280	*dev = dev_get_drvdata (_dev);
 
@@ -1435,10 +1444,10 @@ static ssize_t function_show(struct device *_dev, struct device_attribute *attr,
 		return 0;
 	return scnprintf (buf, PAGE_SIZE, "%s\n", dev->driver->function);
 }
-static DEVICE_ATTR_RO(function);
+static DEVICE_ATTR (function, S_IRUGO, show_function, NULL);
 
-static ssize_t registers_show(struct device *_dev,
-			      struct device_attribute *attr, char *buf)
+static ssize_t net2280_show_registers(struct device *_dev,
+				struct device_attribute *attr, char *buf)
 {
 	struct net2280		*dev;
 	char			*next;
@@ -1590,10 +1599,10 @@ static ssize_t registers_show(struct device *_dev,
 
 	return PAGE_SIZE - size;
 }
-static DEVICE_ATTR_RO(registers);
+static DEVICE_ATTR(registers, S_IRUGO, net2280_show_registers, NULL);
 
-static ssize_t queues_show(struct device *_dev, struct device_attribute *attr,
-			   char *buf)
+static ssize_t
+show_queues (struct device *_dev, struct device_attribute *attr, char *buf)
 {
 	struct net2280		*dev;
 	char			*next;
@@ -1630,8 +1639,8 @@ static ssize_t queues_show(struct device *_dev, struct device_attribute *attr,
 					val = "intr"; break;
 				 default:
 					val = "iso"; break;
-				 } val; }),
-				usb_endpoint_maxp (d) & 0x1fff,
+				 }; val; }),
+				le16_to_cpu (d->wMaxPacketSize) & 0x1fff,
 				ep->dma ? "dma" : "pio", ep->fifo_size
 				);
 		} else /* ep0 should only have one transfer queued */
@@ -1690,7 +1699,7 @@ done:
 	spin_unlock_irqrestore (&dev->lock, flags);
 	return PAGE_SIZE - size;
 }
-static DEVICE_ATTR_RO(queues);
+static DEVICE_ATTR (queues, S_IRUGO, show_queues, NULL);
 
 
 #else
@@ -1743,6 +1752,8 @@ static void set_fifo_mode (struct net2280 *dev, int mode)
  * be to associate this gadget driver (yes?) with all of them, or
  * perhaps to bind specific drivers to specific devices.
  */
+
+static struct net2280	*the_controller;
 
 static void usb_reset (struct net2280 *dev)
 {
@@ -1805,9 +1816,9 @@ static void usb_reinit (struct net2280 *dev)
 		ep->regs = &dev->epregs [tmp];
 		ep_reset (dev->regs, ep);
 	}
-	usb_ep_set_maxpacket_limit(&dev->ep [0].ep, 64);
-	usb_ep_set_maxpacket_limit(&dev->ep [5].ep, 64);
-	usb_ep_set_maxpacket_limit(&dev->ep [6].ep, 64);
+	dev->ep [0].ep.maxpacket = 64;
+	dev->ep [5].ep.maxpacket = 64;
+	dev->ep [6].ep.maxpacket = 64;
 
 	dev->gadget.ep0 = &dev->ep [0].ep;
 	dev->ep [0].stopped = 0;
@@ -1869,10 +1880,10 @@ static void ep0_start (struct net2280 *dev)
  * disconnect is reported.  then a host may connect again, or
  * the driver might get unbound.
  */
-static int net2280_start(struct usb_gadget *_gadget,
-		struct usb_gadget_driver *driver)
+static int net2280_start(struct usb_gadget_driver *driver,
+		int (*bind)(struct usb_gadget *))
 {
-	struct net2280		*dev;
+	struct net2280		*dev = the_controller;
 	int			retval;
 	unsigned		i;
 
@@ -1880,11 +1891,14 @@ static int net2280_start(struct usb_gadget *_gadget,
 	 * (dev->usb->xcvrdiag & FORCE_FULL_SPEED_MODE)
 	 * "must not be used in normal operation"
 	 */
-	if (!driver || driver->max_speed < USB_SPEED_HIGH
-			|| !driver->setup)
+	if (!driver
+			|| driver->speed != USB_SPEED_HIGH
+			|| !bind || !driver->setup)
 		return -EINVAL;
-
-	dev = container_of (_gadget, struct net2280, gadget);
+	if (!dev)
+		return -ENODEV;
+	if (dev->driver)
+		return -EBUSY;
 
 	for (i = 0; i < 7; i++)
 		dev->ep [i].irqs = 0;
@@ -1893,15 +1907,20 @@ static int net2280_start(struct usb_gadget *_gadget,
 	dev->softconnect = 1;
 	driver->driver.bus = NULL;
 	dev->driver = driver;
+	dev->gadget.dev.driver = &driver->driver;
+	retval = bind(&dev->gadget);
+	if (retval) {
+		DEBUG (dev, "bind to driver %s --> %d\n",
+				driver->driver.name, retval);
+		dev->driver = NULL;
+		dev->gadget.dev.driver = NULL;
+		return retval;
+	}
 
 	retval = device_create_file (&dev->pdev->dev, &dev_attr_function);
 	if (retval) goto err_unbind;
 	retval = device_create_file (&dev->pdev->dev, &dev_attr_queues);
 	if (retval) goto err_func;
-
-	/* Enable force-full-speed testing mode, if desired */
-	if (full_speed)
-		writel(1 << FORCE_FULL_SPEED_MODE, &dev->usb->xcvrdiag);
 
 	/* ... then enable host detection and ep0; and we're ready
 	 * for set_configuration as well as eventual disconnect.
@@ -1920,6 +1939,8 @@ static int net2280_start(struct usb_gadget *_gadget,
 err_func:
 	device_remove_file (&dev->pdev->dev, &dev_attr_function);
 err_unbind:
+	driver->unbind (&dev->gadget);
+	dev->gadget.dev.driver = NULL;
 	dev->driver = NULL;
 	return retval;
 }
@@ -1942,39 +1963,39 @@ stop_activity (struct net2280 *dev, struct usb_gadget_driver *driver)
 
 	/* report disconnect; the driver is already quiesced */
 	if (driver) {
-		spin_unlock(&dev->lock);
-		driver->disconnect(&dev->gadget);
-		spin_lock(&dev->lock);
+		spin_unlock (&dev->lock);
+		driver->disconnect (&dev->gadget);
+		spin_lock (&dev->lock);
 	}
 
 	usb_reinit (dev);
 }
 
-static int net2280_stop(struct usb_gadget *_gadget,
-		struct usb_gadget_driver *driver)
+static int net2280_stop(struct usb_gadget_driver *driver)
 {
-	struct net2280	*dev;
+	struct net2280	*dev = the_controller;
 	unsigned long	flags;
 
-	dev = container_of (_gadget, struct net2280, gadget);
+	if (!dev)
+		return -ENODEV;
+	if (!driver || driver != dev->driver || !driver->unbind)
+		return -EINVAL;
 
 	spin_lock_irqsave (&dev->lock, flags);
 	stop_activity (dev, driver);
 	spin_unlock_irqrestore (&dev->lock, flags);
 
+	net2280_pullup (&dev->gadget, 0);
+
+	driver->unbind (&dev->gadget);
+	dev->gadget.dev.driver = NULL;
 	dev->driver = NULL;
 
 	net2280_led_active (dev, 0);
-
-	/* Disable full-speed test mode */
-	writel(0, &dev->usb->xcvrdiag);
-
 	device_remove_file (&dev->pdev->dev, &dev_attr_function);
 	device_remove_file (&dev->pdev->dev, &dev_attr_queues);
 
-	DEBUG(dev, "unregistered driver '%s'\n",
-			driver ? driver->driver.name : "");
-
+	DEBUG (dev, "unregistered driver '%s'\n", driver->driver.name);
 	return 0;
 }
 
@@ -2068,7 +2089,7 @@ static void handle_ep_small (struct net2280_ep *ep)
 		return;
 
 	/* manual DMA queue advance after short OUT */
-	if (likely (ep->dma)) {
+	if (likely (ep->dma != 0)) {
 		if (t & (1 << SHORT_PACKET_TRANSFERRED_INTERRUPT)) {
 			u32	count;
 			int	stopped = ep->stopped;
@@ -2245,7 +2266,9 @@ static void handle_stat0_irqs (struct net2280 *dev, u32 stat)
 			else
 				dev->gadget.speed = USB_SPEED_FULL;
 			net2280_led_speed (dev, dev->gadget.speed);
-			DEBUG(dev, "%s\n", usb_speed_string(dev->gadget.speed));
+			DEBUG (dev, "%s speed\n",
+				(dev->gadget.speed == USB_SPEED_HIGH)
+					? "high" : "full");
 		}
 
 		ep = &dev->ep [0];
@@ -2326,7 +2349,7 @@ static void handle_stat0_irqs (struct net2280 *dev, u32 stat)
 			/* hw handles device and interface status */
 			if (u.r.bRequestType != (USB_DIR_IN|USB_RECIP_ENDPOINT))
 				goto delegate;
-			if ((e = get_ep_by_addr (dev, w_index)) == NULL
+			if ((e = get_ep_by_addr (dev, w_index)) == 0
 					|| w_length > 2)
 				goto do_stall;
 
@@ -2354,7 +2377,7 @@ static void handle_stat0_irqs (struct net2280 *dev, u32 stat)
 			if (w_value != USB_ENDPOINT_HALT
 					|| w_length != 0)
 				goto do_stall;
-			if ((e = get_ep_by_addr (dev, w_index)) == NULL)
+			if ((e = get_ep_by_addr (dev, w_index)) == 0)
 				goto do_stall;
 			if (e->wedged) {
 				VDEBUG(dev, "%s wedged, halt not cleared\n",
@@ -2376,7 +2399,7 @@ static void handle_stat0_irqs (struct net2280 *dev, u32 stat)
 			if (w_value != USB_ENDPOINT_HALT
 					|| w_length != 0)
 				goto do_stall;
-			if ((e = get_ep_by_addr (dev, w_index)) == NULL)
+			if ((e = get_ep_by_addr (dev, w_index)) == 0)
 				goto do_stall;
 			if (e->ep.name == ep0name)
 				goto do_stall;
@@ -2458,7 +2481,7 @@ static void handle_stat1_irqs (struct net2280 *dev, u32 stat)
 	mask = (1 << HIGH_SPEED) | (1 << FULL_SPEED);
 
 	/* VBUS disconnect is indicated by VBUS_PIN and VBUS_INTERRUPT set.
-	 * Root Port Reset is indicated by ROOT_PORT_RESET_INTERRUPT set and
+	 * Root Port Reset is indicated by ROOT_PORT_RESET_INTERRRUPT set and
 	 * both HIGH_SPEED and FULL_SPEED clear (as ROOT_PORT_RESET_INTERRUPT
 	 * only indicates a change in the reset state).
 	 */
@@ -2681,9 +2704,13 @@ static void net2280_remove (struct pci_dev *pdev)
 				pci_resource_len (pdev, 0));
 	if (dev->enabled)
 		pci_disable_device (pdev);
+	device_unregister (&dev->gadget.dev);
 	device_remove_file (&pdev->dev, &dev_attr_registers);
+	pci_set_drvdata (pdev, NULL);
 
 	INFO (dev, "unbind\n");
+
+	the_controller = NULL;
 }
 
 /* wrap this driver around the specified device, but
@@ -2697,6 +2724,14 @@ static int net2280_probe (struct pci_dev *pdev, const struct pci_device_id *id)
 	void			__iomem *base = NULL;
 	int			retval, i;
 
+	/* if you want to support more than one controller in a system,
+	 * usb_gadget_driver_{register,unregister}() must change.
+	 */
+	if (the_controller) {
+		dev_warn (&pdev->dev, "ignoring\n");
+		return -EBUSY;
+	}
+
 	/* alloc, and start init */
 	dev = kzalloc (sizeof *dev, GFP_KERNEL);
 	if (dev == NULL){
@@ -2708,9 +2743,13 @@ static int net2280_probe (struct pci_dev *pdev, const struct pci_device_id *id)
 	spin_lock_init (&dev->lock);
 	dev->pdev = pdev;
 	dev->gadget.ops = &net2280_ops;
-	dev->gadget.max_speed = USB_SPEED_HIGH;
+	dev->gadget.is_dualspeed = 1;
 
 	/* the "gadget" abstracts/virtualizes the controller */
+	dev_set_name(&dev->gadget.dev, "gadget");
+	dev->gadget.dev.parent = &pdev->dev;
+	dev->gadget.dev.dma_mask = pdev->dev.dma_mask;
+	dev->gadget.dev.release = gadget_release;
 	dev->gadget.name = driver_name;
 
 	/* now all the pci goodies ... */
@@ -2792,6 +2831,7 @@ static int net2280_probe (struct pci_dev *pdev, const struct pci_device_id *id)
 			goto done;
 		}
 		td->dmacount = 0;	/* not VALID */
+		td->dmaaddr = cpu_to_le32 (DMA_ADDR_INVALID);
 		td->dmadesc = td->dmaaddr;
 		dev->ep [i].dummy = td;
 	}
@@ -2818,11 +2858,14 @@ static int net2280_probe (struct pci_dev *pdev, const struct pci_device_id *id)
 			use_dma
 				? (use_dma_chaining ? "chaining" : "enabled")
 				: "disabled");
+	the_controller = dev;
+
+	retval = device_register (&dev->gadget.dev);
+	if (retval) goto done;
 	retval = device_create_file (&pdev->dev, &dev_attr_registers);
 	if (retval) goto done;
 
-	retval = usb_add_gadget_udc_release(&pdev->dev, &dev->gadget,
-			gadget_release);
+	retval = usb_add_gadget_udc(&pdev->dev, &dev->gadget);
 	if (retval)
 		goto done;
 	return 0;
@@ -2847,9 +2890,6 @@ static void net2280_shutdown (struct pci_dev *pdev)
 
 	/* disable the pullup so the host will think we're gone */
 	writel (0, &dev->usb->usbctl);
-
-	/* Disable full-speed test mode */
-	writel(0, &dev->usb->xcvrdiag);
 }
 
 

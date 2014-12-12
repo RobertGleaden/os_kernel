@@ -12,6 +12,7 @@
  * of this archive for more details.
  */
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
@@ -51,7 +52,7 @@ struct highlander_i2c_dev {
 	size_t			buf_len;
 };
 
-static bool iic_force_poll, iic_force_normal;
+static int iic_force_poll, iic_force_normal;
 static int iic_timeout = 1000, iic_read_delay;
 
 static inline void highlander_i2c_irq_enable(struct highlander_i2c_dev *dev)
@@ -355,7 +356,7 @@ static const struct i2c_algorithm highlander_i2c_algo = {
 	.functionality	= highlander_i2c_func,
 };
 
-static int highlander_i2c_probe(struct platform_device *pdev)
+static int __devinit highlander_i2c_probe(struct platform_device *pdev)
 {
 	struct highlander_i2c_dev *dev;
 	struct i2c_adapter *adap;
@@ -386,7 +387,7 @@ static int highlander_i2c_probe(struct platform_device *pdev)
 		dev->irq = 0;
 
 	if (dev->irq) {
-		ret = request_irq(dev->irq, highlander_i2c_irq, 0,
+		ret = request_irq(dev->irq, highlander_i2c_irq, IRQF_DISABLED,
 				  pdev->name, dev);
 		if (unlikely(ret))
 			goto err_unmap;
@@ -435,10 +436,12 @@ err_unmap:
 err:
 	kfree(dev);
 
+	platform_set_drvdata(pdev, NULL);
+
 	return ret;
 }
 
-static int highlander_i2c_remove(struct platform_device *pdev)
+static int __devexit highlander_i2c_remove(struct platform_device *pdev)
 {
 	struct highlander_i2c_dev *dev = platform_get_drvdata(pdev);
 
@@ -450,6 +453,8 @@ static int highlander_i2c_remove(struct platform_device *pdev)
 	iounmap(dev->base);
 	kfree(dev);
 
+	platform_set_drvdata(pdev, NULL);
+
 	return 0;
 }
 
@@ -460,10 +465,21 @@ static struct platform_driver highlander_i2c_driver = {
 	},
 
 	.probe		= highlander_i2c_probe,
-	.remove		= highlander_i2c_remove,
+	.remove		= __devexit_p(highlander_i2c_remove),
 };
 
-module_platform_driver(highlander_i2c_driver);
+static int __init highlander_i2c_init(void)
+{
+	return platform_driver_register(&highlander_i2c_driver);
+}
+
+static void __exit highlander_i2c_exit(void)
+{
+	platform_driver_unregister(&highlander_i2c_driver);
+}
+
+module_init(highlander_i2c_init);
+module_exit(highlander_i2c_exit);
 
 MODULE_AUTHOR("Paul Mundt");
 MODULE_DESCRIPTION("Renesas Highlander FPGA I2C/SMBus adapter");

@@ -13,16 +13,14 @@
  */
 
 #include <linux/bcd.h>
+#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/gfp.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
 #include <linux/rtc.h>
-#include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
-#include <linux/module.h>
 
 #define DRV_VERSION "0.4"
 
@@ -53,9 +51,11 @@
 #define RTC_BATT_FLAG		0x80
 
 struct rtc_plat_data {
+	struct rtc_device *rtc;
 	void __iomem *ioaddr_nvram;
 	void __iomem *ioaddr_rtc;
 	size_t size_nvram;
+	size_t size;
 	unsigned long last_jiffies;
 	struct bin_attribute nvram_attr;
 };
@@ -116,7 +116,11 @@ static int ds1742_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	/* year is 1900 + tm->tm_year */
 	tm->tm_year = bcd2bin(year) + bcd2bin(century) * 100 - 1900;
 
-	return rtc_valid_tm(tm);
+	if (rtc_valid_tm(tm) < 0) {
+		dev_err(dev, "retrieved date/time is not valid.\n");
+		rtc_time_to_tm(0, tm);
+	}
+	return 0;
 }
 
 static const struct rtc_class_ops ds1742_rtc_ops = {
@@ -154,7 +158,7 @@ static ssize_t ds1742_nvram_write(struct file *filp, struct kobject *kobj,
 	return count;
 }
 
-static int ds1742_rtc_probe(struct platform_device *pdev)
+static int __devinit ds1742_rtc_probe(struct platform_device *pdev)
 {
 	struct rtc_device *rtc;
 	struct resource *res;
@@ -163,17 +167,22 @@ static int ds1742_rtc_probe(struct platform_device *pdev)
 	void __iomem *ioaddr;
 	int ret = 0;
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -ENODEV;
 	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	ioaddr = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(ioaddr))
-		return PTR_ERR(ioaddr);
+	pdata->size = resource_size(res);
+	if (!devm_request_mem_region(&pdev->dev, res->start, pdata->size,
+		pdev->name))
+		return -EBUSY;
+	ioaddr = devm_ioremap(&pdev->dev, res->start, pdata->size);
+	if (!ioaddr)
+		return -ENOMEM;
 
 	pdata->ioaddr_nvram = ioaddr;
-	pdata->size_nvram = resource_size(res) - RTC_SIZE;
+	pdata->size_nvram = pdata->size - RTC_SIZE;
 	pdata->ioaddr_rtc = ioaddr + pdata->size_nvram;
 
 	sysfs_bin_attr_init(&pdata->nvram_attr);
@@ -198,44 +207,50 @@ static int ds1742_rtc_probe(struct platform_device *pdev)
 
 	pdata->last_jiffies = jiffies;
 	platform_set_drvdata(pdev, pdata);
-	rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
+	rtc = rtc_device_register(pdev->name, &pdev->dev,
 				  &ds1742_rtc_ops, THIS_MODULE);
 	if (IS_ERR(rtc))
 		return PTR_ERR(rtc);
+	pdata->rtc = rtc;
 
 	ret = sysfs_create_bin_file(&pdev->dev.kobj, &pdata->nvram_attr);
-	if (ret)
-		dev_err(&pdev->dev, "Unable to create sysfs entry: %s\n",
-			pdata->nvram_attr.attr.name);
-
-	return 0;
+	if (ret) {
+		dev_err(&pdev->dev, "creating nvram file in sysfs failed\n");
+		rtc_device_unregister(rtc);
+	}
+	return ret;
 }
 
-static int ds1742_rtc_remove(struct platform_device *pdev)
+static int __devexit ds1742_rtc_remove(struct platform_device *pdev)
 {
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 
 	sysfs_remove_bin_file(&pdev->dev.kobj, &pdata->nvram_attr);
+	rtc_device_unregister(pdata->rtc);
 	return 0;
 }
 
-static const struct of_device_id __maybe_unused ds1742_rtc_of_match[] = {
-	{ .compatible = "maxim,ds1742", },
-	{ }
-};
-MODULE_DEVICE_TABLE(of, ds1742_rtc_of_match);
-
 static struct platform_driver ds1742_rtc_driver = {
 	.probe		= ds1742_rtc_probe,
-	.remove		= ds1742_rtc_remove,
+	.remove		= __devexit_p(ds1742_rtc_remove),
 	.driver		= {
 		.name	= "rtc-ds1742",
 		.owner	= THIS_MODULE,
-		.of_match_table = ds1742_rtc_of_match,
 	},
 };
 
-module_platform_driver(ds1742_rtc_driver);
+static __init int ds1742_init(void)
+{
+	return platform_driver_register(&ds1742_rtc_driver);
+}
+
+static __exit void ds1742_exit(void)
+{
+	platform_driver_unregister(&ds1742_rtc_driver);
+}
+
+module_init(ds1742_init);
+module_exit(ds1742_exit);
 
 MODULE_AUTHOR("Atsushi Nemoto <anemo@mba.ocn.ne.jp>");
 MODULE_DESCRIPTION("Dallas DS1742 RTC driver");

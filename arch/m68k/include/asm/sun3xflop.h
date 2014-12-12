@@ -11,6 +11,7 @@
 
 #include <asm/page.h>
 #include <asm/pgtable.h>
+#include <asm/system.h>
 #include <asm/irq.h>
 #include <asm/sun3x.h>
 
@@ -207,7 +208,7 @@ static int sun3xflop_request_irq(void)
 	if(!once) {
 		once = 1;
 		error = request_irq(FLOPPY_IRQ, sun3xflop_hardint,
-				    0, "floppy", NULL);
+				    IRQF_DISABLED, "floppy", NULL);
 		return ((error == 0) ? 0 : -1);
 	} else return 0;
 }

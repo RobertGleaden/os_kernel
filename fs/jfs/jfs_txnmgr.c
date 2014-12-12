@@ -2684,7 +2684,7 @@ void txAbort(tid_t tid, int dirty)
 	 * mark filesystem dirty
 	 */
 	if (dirty)
-		jfs_error(tblk->sb, "\n");
+		jfs_error(tblk->sb, "txAbort");
 
 	return;
 }
@@ -2800,7 +2800,7 @@ int jfs_lazycommit(void *arg)
 
 		if (freezing(current)) {
 			LAZY_UNLOCK(flags);
-			try_to_freeze();
+			refrigerator();
 		} else {
 			DECLARE_WAITQUEUE(wq, current);
 
@@ -2977,9 +2977,12 @@ int jfs_sync(void *arg)
 				 * put back on the anon_list.
 				 */
 
-				/* Move from anon_list to anon_list2 */
-				list_move(&jfs_ip->anon_inode_list,
-					  &TxAnchor.anon_list2);
+				/* Take off anon_list */
+				list_del(&jfs_ip->anon_inode_list);
+
+				/* Put on anon_list2 */
+				list_add(&jfs_ip->anon_inode_list,
+					 &TxAnchor.anon_list2);
 
 				TXN_UNLOCK();
 				iput(ip);
@@ -2991,7 +2994,7 @@ int jfs_sync(void *arg)
 
 		if (freezing(current)) {
 			TXN_UNLOCK();
-			try_to_freeze();
+			refrigerator();
 		} else {
 			set_current_state(TASK_INTERRUPTIBLE);
 			TXN_UNLOCK();

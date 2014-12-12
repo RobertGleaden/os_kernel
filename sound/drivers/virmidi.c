@@ -45,7 +45,7 @@
 #include <linux/wait.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
-#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <sound/core.h>
 #include <sound/seq_kernel.h>
 #include <sound/seq_virmidi.h>
@@ -63,7 +63,7 @@ MODULE_SUPPORTED_DEVICE("{{ALSA,Virtual rawmidi device}}");
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
-static bool enable[SNDRV_CARDS] = {1, [1 ... (SNDRV_CARDS - 1)] = 0};
+static int enable[SNDRV_CARDS] = {1, [1 ... (SNDRV_CARDS - 1)] = 0};
 static int midi_devs[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 4};
 
 module_param_array(index, int, NULL, 0444);
@@ -83,15 +83,15 @@ struct snd_card_virmidi {
 static struct platform_device *devices[SNDRV_CARDS];
 
 
-static int snd_virmidi_probe(struct platform_device *devptr)
+static int __devinit snd_virmidi_probe(struct platform_device *devptr)
 {
 	struct snd_card *card;
 	struct snd_card_virmidi *vmidi;
 	int idx, err;
 	int dev = devptr->id;
 
-	err = snd_card_new(&devptr->dev, index[dev], id[dev], THIS_MODULE,
-			   sizeof(struct snd_card_virmidi), &card);
+	err = snd_card_create(index[dev], id[dev], THIS_MODULE,
+			      sizeof(struct snd_card_virmidi), &card);
 	if (err < 0)
 		return err;
 	vmidi = card->private_data;
@@ -118,6 +118,8 @@ static int snd_virmidi_probe(struct platform_device *devptr)
 	strcpy(card->shortname, "VirMIDI");
 	sprintf(card->longname, "Virtual MIDI Card %i", dev + 1);
 
+	snd_card_set_dev(card, &devptr->dev);
+
 	if ((err = snd_card_register(card)) == 0) {
 		platform_set_drvdata(devptr, card);
 		return 0;
@@ -127,9 +129,10 @@ static int snd_virmidi_probe(struct platform_device *devptr)
 	return err;
 }
 
-static int snd_virmidi_remove(struct platform_device *devptr)
+static int __devexit snd_virmidi_remove(struct platform_device *devptr)
 {
 	snd_card_free(platform_get_drvdata(devptr));
+	platform_set_drvdata(devptr, NULL);
 	return 0;
 }
 
@@ -137,10 +140,9 @@ static int snd_virmidi_remove(struct platform_device *devptr)
 
 static struct platform_driver snd_virmidi_driver = {
 	.probe		= snd_virmidi_probe,
-	.remove		= snd_virmidi_remove,
+	.remove		= __devexit_p(snd_virmidi_remove),
 	.driver		= {
-		.name	= SND_VIRMIDI_DRIVER,
-		.owner	= THIS_MODULE,
+		.name	= SND_VIRMIDI_DRIVER
 	},
 };
 

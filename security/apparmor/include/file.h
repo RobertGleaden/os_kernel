@@ -71,7 +71,7 @@ struct path;
 
 /* need to make conditional which ones are being set */
 struct path_cond {
-	kuid_t uid;
+	uid_t uid;
 	umode_t mode;
 };
 
@@ -117,7 +117,7 @@ static inline u16 dfa_map_xindex(u16 mask)
 		index |= AA_X_NAME;
 	} else if (old_index == 3) {
 		index |= AA_X_NAME | AA_X_CHILD;
-	} else if (old_index) {
+	} else {
 		index |= AA_X_TABLE;
 		index |= old_index - 4;
 	}
@@ -146,7 +146,7 @@ static inline u16 dfa_map_xindex(u16 mask)
 
 int aa_audit_file(struct aa_profile *profile, struct file_perms *perms,
 		  gfp_t gfp, int op, u32 request, const char *name,
-		  const char *target, kuid_t ouid, const char *info, int error);
+		  const char *target, uid_t ouid, const char *info, int error);
 
 /**
  * struct aa_file_rules - components used for file rule permissions
@@ -186,6 +186,11 @@ static inline void aa_free_file_rules(struct aa_file_rules *rules)
 	aa_free_domain_entries(&rules->trans);
 }
 
+#define ACC_FMODE(x) (("\000\004\002\006"[(x)&O_ACCMODE]) | (((x) << 1) & 0x40))
+
+/* from namei.c */
+#define MAP_OPEN_FLAGS(x) ((((x) + 1) & O_ACCMODE) ? (x) + 1 : (x))
+
 /**
  * aa_map_file_perms - map file flags to AppArmor permissions
  * @file: open file to map flags to AppArmor permissions
@@ -194,13 +199,8 @@ static inline void aa_free_file_rules(struct aa_file_rules *rules)
  */
 static inline u32 aa_map_file_to_perms(struct file *file)
 {
-	int flags = file->f_flags;
-	u32 perms = 0;
-
-	if (file->f_mode & FMODE_WRITE)
-		perms |= MAY_WRITE;
-	if (file->f_mode & FMODE_READ)
-		perms |= MAY_READ;
+	int flags = MAP_OPEN_FLAGS(file->f_flags);
+	u32 perms = ACC_FMODE(file->f_mode);
 
 	if ((flags & O_APPEND) && (perms & MAY_WRITE))
 		perms = (perms & ~MAY_WRITE) | MAY_APPEND;

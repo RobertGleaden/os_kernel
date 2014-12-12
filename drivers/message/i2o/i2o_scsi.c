@@ -57,6 +57,7 @@
 #include <linux/scatterlist.h>
 
 #include <asm/dma.h>
+#include <asm/system.h>
 #include <asm/io.h>
 #include <linux/atomic.h>
 

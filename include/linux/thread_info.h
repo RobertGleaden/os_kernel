@@ -8,7 +8,6 @@
 #define _LINUX_THREAD_INFO_H
 
 #include <linux/types.h>
-#include <linux/bug.h>
 
 struct timespec;
 struct compat_timespec;
@@ -55,12 +54,6 @@ extern long do_no_restart_syscall(struct restart_block *parm);
 
 #ifdef __KERNEL__
 
-#ifdef CONFIG_DEBUG_STACK_USAGE
-# define THREADINFO_GFP		(GFP_KERNEL | __GFP_NOTRACK | __GFP_ZERO)
-#else
-# define THREADINFO_GFP		(GFP_KERNEL | __GFP_NOTRACK)
-#endif
-
 /*
  * flag set/clear/test wrappers
  * - pass TIF_xxxx constants to these functions
@@ -102,7 +95,8 @@ static inline int test_ti_thread_flag(struct thread_info *ti, int flag)
 #define test_thread_flag(flag) \
 	test_ti_thread_flag(current_thread_info(), flag)
 
-#define tif_need_resched() test_thread_flag(TIF_NEED_RESCHED)
+#define set_need_resched()	set_thread_flag(TIF_NEED_RESCHED)
+#define clear_need_resched()	clear_thread_flag(TIF_NEED_RESCHED)
 
 #if defined TIF_RESTORE_SIGMASK && !defined HAVE_SET_RESTORE_SIGMASK
 /*
@@ -125,25 +119,9 @@ static inline int test_ti_thread_flag(struct thread_info *ti, int flag)
 static inline void set_restore_sigmask(void)
 {
 	set_thread_flag(TIF_RESTORE_SIGMASK);
-	WARN_ON(!test_thread_flag(TIF_SIGPENDING));
-}
-static inline void clear_restore_sigmask(void)
-{
-	clear_thread_flag(TIF_RESTORE_SIGMASK);
-}
-static inline bool test_restore_sigmask(void)
-{
-	return test_thread_flag(TIF_RESTORE_SIGMASK);
-}
-static inline bool test_and_clear_restore_sigmask(void)
-{
-	return test_and_clear_thread_flag(TIF_RESTORE_SIGMASK);
+	set_thread_flag(TIF_SIGPENDING);
 }
 #endif	/* TIF_RESTORE_SIGMASK && !HAVE_SET_RESTORE_SIGMASK */
-
-#ifndef HAVE_SET_RESTORE_SIGMASK
-#error "no set_restore_sigmask() provided and default one won't work"
-#endif
 
 #endif	/* __KERNEL__ */
 

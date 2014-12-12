@@ -15,7 +15,7 @@
 #include <linux/mtd/partitions.h>
 #include <linux/regulator/machine.h>
 #include <linux/i2c.h>
-#include <linux/platform_data/at24.h>
+#include <linux/i2c/at24.h>
 #include <linux/etherdevice.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/flash.h>
@@ -26,10 +26,9 @@
 #include <mach/common.h>
 #include <mach/cp_intc.h>
 #include <mach/da8xx.h>
-#include <linux/platform_data/mtd-davinci.h>
-#include <linux/platform_data/mtd-davinci-aemif.h>
+#include <mach/nand.h>
 #include <mach/mux.h>
-#include <linux/platform_data/spi-davinci.h>
+#include <mach/spi.h>
 
 #define MITYOMAPL138_PHY_ID		""
 
@@ -397,8 +396,7 @@ static struct davinci_nand_pdata mityomapl138_nandflash_data = {
 	.parts		= mityomapl138_nandflash_partition,
 	.nr_parts	= ARRAY_SIZE(mityomapl138_nandflash_partition),
 	.ecc_mode	= NAND_ECC_HW,
-	.bbt_options	= NAND_BBT_USE_FLASH,
-	.options	= NAND_BUSWIDTH_16,
+	.options	= NAND_USE_FLASH_BBT | NAND_BUSWIDTH_16,
 	.ecc_bits	= 1, /* 4 bit mode is not supported with 16 bit NAND */
 };
 
@@ -433,10 +431,11 @@ static void __init mityomapl138_setup_nand(void)
 {
 	platform_add_devices(mityomapl138_devices,
 				 ARRAY_SIZE(mityomapl138_devices));
-
-	if (davinci_aemif_setup(&mityomapl138_nandflash_device))
-		pr_warn("%s: Cannot configure AEMIF.\n", __func__);
 }
+
+static struct davinci_uart_config mityomapl138_uart_config __initdata = {
+	.enabled_uarts = 0x7,
+};
 
 static const short mityomap_mii_pins[] = {
 	DA850_MII_TXEN, DA850_MII_TXCLK, DA850_MII_COL, DA850_MII_TXD_3,
@@ -517,7 +516,7 @@ static void __init mityomapl138_init(void)
 	if (ret)
 		pr_warning("watchdog registration failed: %d\n", ret);
 
-	davinci_serial_init(da8xx_serial_device);
+	davinci_serial_init(&mityomapl138_uart_config);
 
 	ret = da8xx_register_i2c(0, &mityomap_i2c_0_pdata);
 	if (ret)
@@ -529,13 +528,8 @@ static void __init mityomapl138_init(void)
 
 	mityomapl138_setup_nand();
 
-	ret = spi_register_board_info(mityomapl138_spi_flash_info,
-				      ARRAY_SIZE(mityomapl138_spi_flash_info));
-	if (ret)
-		pr_warn("spi info registration failed: %d\n", ret);
-
-	ret = da8xx_register_spi_bus(1,
-				     ARRAY_SIZE(mityomapl138_spi_flash_info));
+	ret = da8xx_register_spi(1, mityomapl138_spi_flash_info,
+			       ARRAY_SIZE(mityomapl138_spi_flash_info));
 	if (ret)
 		pr_warning("spi 1 registration failed: %d\n", ret);
 
@@ -572,12 +566,10 @@ static void __init mityomapl138_map_io(void)
 }
 
 MACHINE_START(MITYOMAPL138, "MityDSP-L138/MityARM-1808")
-	.atag_offset	= 0x100,
+	.boot_params	= (DA8XX_DDR_BASE + 0x100),
 	.map_io		= mityomapl138_map_io,
 	.init_irq	= cp_intc_init,
-	.init_time	= davinci_timer_init,
+	.timer		= &davinci_timer,
 	.init_machine	= mityomapl138_init,
-	.init_late	= davinci_init_late,
 	.dma_zone_size	= SZ_128M,
-	.restart	= da8xx_restart,
 MACHINE_END

@@ -52,6 +52,7 @@
 #include <linux/signal.h>
 #include <linux/errno.h>
 #include <linux/poll.h>
+#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/fcntl.h>
 #include <linux/spinlock.h>
@@ -100,10 +101,24 @@ static struct ez_usb_fw firmware = {
 	.code = NULL,
 };
 
+#ifdef CONFIG_USB_DEBUG
+static int debug = 1;
+#else
+static int debug;
+#endif
+
 /* Debugging macros */
+#undef dbg
+#define dbg(format, arg...) \
+	do { if (debug) printk(KERN_DEBUG PFX "%s: " format "\n", \
+			       __func__ , ## arg); } while (0)
 #undef err
 #define err(format, arg...) \
 	do { printk(KERN_ERR PFX format "\n", ## arg); } while (0)
+
+/* Module paramaters */
+module_param(debug, int, 0644);
+MODULE_PARM_DESC(debug, "Debug enabled or not");
 
 MODULE_FIRMWARE("orinoco_ezusb_fw");
 
@@ -327,7 +342,7 @@ static void ezusb_request_timerfn(u_long _ctx)
 		ctx->state = EZUSB_CTX_REQ_TIMEOUT;
 	} else {
 		ctx->state = EZUSB_CTX_RESP_TIMEOUT;
-		dev_dbg(&ctx->outurb->dev->dev, "couldn't unlink\n");
+		dbg("couldn't unlink");
 		atomic_inc(&ctx->refcount);
 		ctx->killed = 1;
 		ezusb_ctx_complete(ctx);
@@ -620,9 +635,9 @@ static void ezusb_request_in_callback(struct ezusb_priv *upriv,
 				ctx = c;
 				break;
 			}
-			netdev_dbg(upriv->dev, "Skipped (0x%x/0x%x) (%d/%d)\n",
-				   le16_to_cpu(ans->hermes_rid), c->in_rid,
-				   ans->ans_reply_count, reply_count);
+			dbg("Skipped (0x%x/0x%x) (%d/%d)",
+			    le16_to_cpu(ans->hermes_rid),
+			    c->in_rid, ans->ans_reply_count, reply_count);
 		}
 	}
 
@@ -754,7 +769,7 @@ static int ezusb_submit_in_urb(struct ezusb_priv *upriv)
 	void *cur_buf = upriv->read_urb->transfer_buffer;
 
 	if (upriv->read_urb->status == -EINPROGRESS) {
-		netdev_dbg(upriv->dev, "urb busy, not resubmiting\n");
+		dbg("urb busy, not resubmiting");
 		retval = -EBUSY;
 		goto exit;
 	}
@@ -789,15 +804,10 @@ static inline int ezusb_8051_cpucs(struct ezusb_priv *upriv, int reset)
 static int ezusb_firmware_download(struct ezusb_priv *upriv,
 				   struct ez_usb_fw *fw)
 {
-	u8 *fw_buffer;
+	u8 fw_buffer[FW_BUF_SIZE];
 	int retval, addr;
 	int variant_offset;
 
-	fw_buffer = kmalloc(FW_BUF_SIZE, GFP_KERNEL);
-	if (!fw_buffer) {
-		printk(KERN_ERR PFX "Out of memory for firmware buffer.\n");
-		return -ENOMEM;
-	}
 	/*
 	 * This byte is 1 and should be replaced with 0.  The offset is
 	 * 0x10AD in version 0.0.6.  The byte in question should follow
@@ -824,9 +834,8 @@ static int ezusb_firmware_download(struct ezusb_priv *upriv,
 		memcpy(fw_buffer, &fw->code[addr], FW_BUF_SIZE);
 		if (variant_offset >= addr &&
 		    variant_offset < addr + FW_BUF_SIZE) {
-			netdev_dbg(upriv->dev,
-				   "Patching card_variant byte at 0x%04X\n",
-				   variant_offset);
+			dbg("Patching card_variant byte at 0x%04X",
+			    variant_offset);
 			fw_buffer[variant_offset - addr] = FW_VAR_VALUE;
 		}
 		retval = usb_control_msg(upriv->udev,
@@ -850,14 +859,13 @@ static int ezusb_firmware_download(struct ezusb_priv *upriv,
 	printk(KERN_ERR PFX "Firmware download failed, error %d\n",
 	       retval);
  exit:
-	kfree(fw_buffer);
 	return retval;
 }
 
 static int ezusb_access_ltv(struct ezusb_priv *upriv,
 			    struct request_context *ctx,
 			    u16 length, const void *data, u16 frame_type,
-			    void *ans_buff, unsigned ans_size, u16 *ans_length)
+			    void *ans_buff, int ans_size, u16 *ans_length)
 {
 	int req_size;
 	int retval = 0;
@@ -866,8 +874,8 @@ static int ezusb_access_ltv(struct ezusb_priv *upriv,
 	BUG_ON(in_irq());
 
 	if (!upriv->udev) {
-		retval = -ENODEV;
-		goto exit;
+		dbg("Device disconnected");
+		return -ENODEV;
 	}
 
 	if (upriv->read_urb->status != -EINPROGRESS)
@@ -925,7 +933,7 @@ static int ezusb_access_ltv(struct ezusb_priv *upriv,
 	}
 	if (ctx->in_rid) {
 		struct ezusb_packet *ans = ctx->buf;
-		unsigned exp_len;
+		int exp_len;
 
 		if (ans->hermes_len != 0)
 			exp_len = le16_to_cpu(ans->hermes_len) * 2 + 12;
@@ -941,7 +949,8 @@ static int ezusb_access_ltv(struct ezusb_priv *upriv,
 		}
 
 		if (ans_buff)
-			memcpy(ans_buff, ans->data, min(exp_len, ans_size));
+			memcpy(ans_buff, ans->data,
+			       min_t(int, exp_len, ans_size));
 		if (ans_length)
 			*ans_length = le16_to_cpu(ans->hermes_len);
 	}
@@ -986,7 +995,7 @@ static int ezusb_read_ltv(struct hermes *hw, int bap, u16 rid,
 	struct ezusb_priv *upriv = hw->priv;
 	struct request_context *ctx;
 
-	if (bufsize % 2)
+	if ((bufsize < 0) || (bufsize % 2))
 		return -EINVAL;
 
 	ctx = ezusb_alloc_ctx(upriv, rid, rid);
@@ -1009,9 +1018,8 @@ static int ezusb_doicmd_wait(struct hermes *hw, u16 cmd, u16 parm0, u16 parm1,
 		cpu_to_le16(parm1),
 		cpu_to_le16(parm2),
 	};
-	netdev_dbg(upriv->dev,
-		   "0x%04X, parm0 0x%04X, parm1 0x%04X, parm2 0x%04X\n", cmd,
-		   parm0, parm1, parm2);
+	dbg("0x%04X, parm0 0x%04X, parm1 0x%04X, parm2 0x%04X",
+	    cmd, parm0, parm1, parm2);
 	ctx = ezusb_alloc_ctx(upriv, EZUSB_RID_DOCMD, EZUSB_RID_ACK);
 	if (!ctx)
 		return -ENOMEM;
@@ -1032,7 +1040,7 @@ static int ezusb_docmd_wait(struct hermes *hw, u16 cmd, u16 parm0,
 		0,
 		0,
 	};
-	netdev_dbg(upriv->dev, "0x%04X, parm0 0x%04X\n", cmd, parm0);
+	dbg("0x%04X, parm0 0x%04X", cmd, parm0);
 	ctx = ezusb_alloc_ctx(upriv, EZUSB_RID_DOCMD, EZUSB_RID_ACK);
 	if (!ctx)
 		return -ENOMEM;
@@ -1319,7 +1327,7 @@ static int ezusb_hard_reset(struct orinoco_private *priv)
 		return retval;
 	}
 
-	netdev_dbg(upriv->dev, "sending control message\n");
+	dbg("sending control message");
 	retval = usb_control_msg(upriv->udev,
 				 usb_sndctrlpipe(upriv->udev, 0),
 				 EZUSB_REQUEST_TRIGER,
@@ -1388,8 +1396,10 @@ static void ezusb_bulk_in_callback(struct urb *urb)
 	u16 crc;
 	u16 hermes_rid;
 
-	if (upriv->udev == NULL)
+	if (upriv->udev == NULL) {
+		dbg("disconnected");
 		return;
+	}
 
 	if (urb->status == -ETIMEDOUT) {
 		/* When a device gets unplugged we get this every time
@@ -1406,13 +1416,12 @@ static void ezusb_bulk_in_callback(struct urb *urb)
 	if ((urb->status == -EILSEQ)
 	    || (urb->status == -ENOENT)
 	    || (urb->status == -ECONNRESET)) {
-		netdev_dbg(upriv->dev, "status %d, not resubmiting\n",
-			   urb->status);
+		dbg("status %d, not resubmiting", urb->status);
 		return;
 	}
 	if (urb->status)
-		netdev_dbg(upriv->dev, "status: %d length: %d\n",
-			   urb->status, urb->actual_length);
+		dbg("status: %d length: %d",
+		    urb->status, urb->actual_length);
 	if (urb->actual_length < sizeof(*ans)) {
 		err("%s: short read, ignoring", __func__);
 		goto resubmit;
@@ -1553,7 +1562,7 @@ static const struct net_device_ops ezusb_netdev_ops = {
 	.ndo_open		= orinoco_open,
 	.ndo_stop		= orinoco_stop,
 	.ndo_start_xmit		= ezusb_xmit,
-	.ndo_set_rx_mode	= orinoco_set_multicast_list,
+	.ndo_set_multicast_list	= orinoco_set_multicast_list,
 	.ndo_change_mtu		= orinoco_change_mtu,
 	.ndo_set_mac_address	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
@@ -1570,7 +1579,7 @@ static int ezusb_probe(struct usb_interface *interface,
 	struct ezusb_priv *upriv = NULL;
 	struct usb_interface_descriptor *iface_desc;
 	struct usb_endpoint_descriptor *ep;
-	const struct firmware *fw_entry = NULL;
+	const struct firmware *fw_entry;
 	int retval = 0;
 	int i;
 
@@ -1673,8 +1682,7 @@ static int ezusb_probe(struct usb_interface *interface,
 		firmware.code = fw_entry->data;
 	}
 	if (firmware.size && firmware.code) {
-		if (ezusb_firmware_download(upriv, &firmware) < 0)
-			goto error;
+		ezusb_firmware_download(upriv, &firmware);
 	} else {
 		err("No firmware to download");
 		goto error;
@@ -1744,10 +1752,39 @@ static struct usb_driver orinoco_driver = {
 	.probe = ezusb_probe,
 	.disconnect = ezusb_disconnect,
 	.id_table = ezusb_table,
-	.disable_hub_initiated_lpm = 1,
 };
 
-module_usb_driver(orinoco_driver);
+/* Can't be declared "const" or the whole __initdata section will
+ * become const */
+static char version[] __initdata = DRIVER_NAME " " DRIVER_VERSION
+	" (Manuel Estrada Sainz)";
+
+static int __init ezusb_module_init(void)
+{
+	int err;
+
+	printk(KERN_DEBUG "%s\n", version);
+
+	/* register this driver with the USB subsystem */
+	err = usb_register(&orinoco_driver);
+	if (err < 0) {
+		printk(KERN_ERR PFX "usb_register failed, error %d\n",
+		       err);
+		return err;
+	}
+
+	return 0;
+}
+
+static void __exit ezusb_module_exit(void)
+{
+	/* deregister this driver with the USB subsystem */
+	usb_deregister(&orinoco_driver);
+}
+
+
+module_init(ezusb_module_init);
+module_exit(ezusb_module_exit);
 
 MODULE_AUTHOR("Manuel Estrada Sainz");
 MODULE_DESCRIPTION("Driver for Orinoco wireless LAN cards using EZUSB bridge");

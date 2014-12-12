@@ -26,14 +26,11 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/err.h>
 #include <linux/i2c.h>
 #include <linux/pm_runtime.h>
 #include <linux/delay.h>
-#include <linux/of.h>
-#include <linux/of_platform.h>
-#include <linux/of_device.h>
-
 #include "lis3lv02d.h"
 
 #define DRV_NAME	"lis3lv02d_i2c"
@@ -82,7 +79,8 @@ static int lis3_i2c_init(struct lis3lv02d *lis3)
 	u8 reg;
 	int ret;
 
-	lis3_reg_ctrl(lis3, LIS3_REG_ON);
+	if (lis3->reg_ctrl)
+		lis3_reg_ctrl(lis3, LIS3_REG_ON);
 
 	lis3->read(lis3, WHO_AM_I, &reg);
 	if (reg != lis3->whoami)
@@ -93,11 +91,7 @@ static int lis3_i2c_init(struct lis3lv02d *lis3)
 	if (ret < 0)
 		return ret;
 
-	if (lis3->whoami == WAI_3DLH)
-		reg |= CTRL1_PM0 | CTRL1_Xen | CTRL1_Yen | CTRL1_Zen;
-	else
-		reg |= CTRL1_PD0 | CTRL1_Xen | CTRL1_Yen | CTRL1_Zen;
-
+	reg |= CTRL1_PD0 | CTRL1_Xen | CTRL1_Yen | CTRL1_Zen;
 	return lis3->write(lis3, CTRL_REG1, reg);
 }
 
@@ -105,31 +99,17 @@ static int lis3_i2c_init(struct lis3lv02d *lis3)
 static union axis_conversion lis3lv02d_axis_map =
 	{ .as_array = { LIS3_DEV_X, LIS3_DEV_Y, LIS3_DEV_Z } };
 
-#ifdef CONFIG_OF
-static struct of_device_id lis3lv02d_i2c_dt_ids[] = {
-	{ .compatible = "st,lis3lv02d" },
-	{}
-};
-MODULE_DEVICE_TABLE(of, lis3lv02d_i2c_dt_ids);
-#endif
-
-static int lis3lv02d_i2c_probe(struct i2c_client *client,
+static int __devinit lis3lv02d_i2c_probe(struct i2c_client *client,
 					const struct i2c_device_id *id)
 {
 	int ret = 0;
 	struct lis3lv02d_platform_data *pdata = client->dev.platform_data;
 
-#ifdef CONFIG_OF
-	if (of_match_device(lis3lv02d_i2c_dt_ids, &client->dev)) {
-		lis3_dev.of_node = client->dev.of_node;
-		ret = lis3lv02d_init_dt(&lis3_dev);
-		if (ret)
-			return ret;
-		pdata = lis3_dev.pdata;
-	}
-#endif
-
 	if (pdata) {
+		/* Regulator control is optional */
+		if (pdata->driver_features & LIS3_USE_REGULATOR_CTRL)
+			lis3_dev.reg_ctrl = lis3_reg_ctrl;
+
 		if ((pdata->driver_features & LIS3_USE_BLOCK_READ) &&
 			(i2c_check_functionality(client->adapter,
 						I2C_FUNC_SMBUS_I2C_BLOCK)))
@@ -151,13 +131,15 @@ static int lis3lv02d_i2c_probe(struct i2c_client *client,
 			goto fail;
 	}
 
-	lis3_dev.regulators[0].supply = reg_vdd;
-	lis3_dev.regulators[1].supply = reg_vdd_io;
-	ret = regulator_bulk_get(&client->dev,
-				 ARRAY_SIZE(lis3_dev.regulators),
-				 lis3_dev.regulators);
-	if (ret < 0)
-		goto fail;
+	if (lis3_dev.reg_ctrl) {
+		lis3_dev.regulators[0].supply = reg_vdd;
+		lis3_dev.regulators[1].supply = reg_vdd_io;
+		ret = regulator_bulk_get(&client->dev,
+					ARRAY_SIZE(lis3_dev.regulators),
+					lis3_dev.regulators);
+		if (ret < 0)
+			goto fail;
+	}
 
 	lis3_dev.pdata	  = pdata;
 	lis3_dev.bus_priv = client;
@@ -171,26 +153,23 @@ static int lis3lv02d_i2c_probe(struct i2c_client *client,
 	i2c_set_clientdata(client, &lis3_dev);
 
 	/* Provide power over the init call */
-	lis3_reg_ctrl(&lis3_dev, LIS3_REG_ON);
+	if (lis3_dev.reg_ctrl)
+		lis3_reg_ctrl(&lis3_dev, LIS3_REG_ON);
 
 	ret = lis3lv02d_init_device(&lis3_dev);
 
-	lis3_reg_ctrl(&lis3_dev, LIS3_REG_OFF);
+	if (lis3_dev.reg_ctrl)
+		lis3_reg_ctrl(&lis3_dev, LIS3_REG_OFF);
 
-	if (ret)
-		goto fail2;
-	return 0;
-
-fail2:
-	regulator_bulk_free(ARRAY_SIZE(lis3_dev.regulators),
-				lis3_dev.regulators);
+	if (ret == 0)
+		return 0;
 fail:
 	if (pdata && pdata->release_resources)
 		pdata->release_resources();
 	return ret;
 }
 
-static int lis3lv02d_i2c_remove(struct i2c_client *client)
+static int __devexit lis3lv02d_i2c_remove(struct i2c_client *client)
 {
 	struct lis3lv02d *lis3 = i2c_get_clientdata(client);
 	struct lis3lv02d_platform_data *pdata = client->dev.platform_data;
@@ -198,11 +177,12 @@ static int lis3lv02d_i2c_remove(struct i2c_client *client)
 	if (pdata && pdata->release_resources)
 		pdata->release_resources();
 
-	lis3lv02d_joystick_disable(lis3);
+	lis3lv02d_joystick_disable();
 	lis3lv02d_remove_fs(&lis3_dev);
 
-	regulator_bulk_free(ARRAY_SIZE(lis3->regulators),
-			    lis3_dev.regulators);
+	if (lis3_dev.reg_ctrl)
+		regulator_bulk_free(ARRAY_SIZE(lis3->regulators),
+				lis3_dev.regulators);
 	return 0;
 }
 
@@ -256,8 +236,7 @@ static int lis3_i2c_runtime_resume(struct device *dev)
 #endif /* CONFIG_PM_RUNTIME */
 
 static const struct i2c_device_id lis3lv02d_id[] = {
-	{"lis3lv02d", LIS3LV02D},
-	{"lis331dlh", LIS331DLH},
+	{"lis3lv02d", 0 },
 	{}
 };
 
@@ -276,15 +255,25 @@ static struct i2c_driver lis3lv02d_i2c_driver = {
 		.name   = DRV_NAME,
 		.owner  = THIS_MODULE,
 		.pm     = &lis3_pm_ops,
-		.of_match_table = of_match_ptr(lis3lv02d_i2c_dt_ids),
 	},
 	.probe	= lis3lv02d_i2c_probe,
-	.remove	= lis3lv02d_i2c_remove,
+	.remove	= __devexit_p(lis3lv02d_i2c_remove),
 	.id_table = lis3lv02d_id,
 };
 
-module_i2c_driver(lis3lv02d_i2c_driver);
+static int __init lis3lv02d_init(void)
+{
+	return i2c_add_driver(&lis3lv02d_i2c_driver);
+}
+
+static void __exit lis3lv02d_exit(void)
+{
+	i2c_del_driver(&lis3lv02d_i2c_driver);
+}
 
 MODULE_AUTHOR("Nokia Corporation");
 MODULE_DESCRIPTION("lis3lv02d I2C interface");
 MODULE_LICENSE("GPL");
+
+module_init(lis3lv02d_init);
+module_exit(lis3lv02d_exit);

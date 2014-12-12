@@ -46,11 +46,14 @@ void __init udbg_early_init(void)
 #elif defined(CONFIG_PPC_EARLY_DEBUG_MAPLE)
 	/* Maple real mode debug */
 	udbg_init_maple_realmode();
+#elif defined(CONFIG_PPC_EARLY_DEBUG_ISERIES)
+	/* For iSeries - hit Ctrl-x Ctrl-x to see the output */
+	udbg_init_iseries();
 #elif defined(CONFIG_PPC_EARLY_DEBUG_BEAT)
 	udbg_init_debug_beat();
 #elif defined(CONFIG_PPC_EARLY_DEBUG_PAS_REALMODE)
 	udbg_init_pas_realmode();
-#elif defined(CONFIG_PPC_EARLY_DEBUG_BOOTX)
+#elif defined(CONFIG_BOOTX_TEXT)
 	udbg_init_btext();
 #elif defined(CONFIG_PPC_EARLY_DEBUG_44x)
 	/* PPC44x debug */
@@ -62,17 +65,8 @@ void __init udbg_early_init(void)
 	udbg_init_cpm();
 #elif defined(CONFIG_PPC_EARLY_DEBUG_USBGECKO)
 	udbg_init_usbgecko();
-#elif defined(CONFIG_PPC_EARLY_DEBUG_MEMCONS)
-	/* In memory console */
-	udbg_init_memcons();
-#elif defined(CONFIG_PPC_EARLY_DEBUG_EHV_BC)
-	udbg_init_ehv_bc();
-#elif defined(CONFIG_PPC_EARLY_DEBUG_PS3GELIC)
-	udbg_init_ps3gelic();
-#elif defined(CONFIG_PPC_EARLY_DEBUG_OPAL_RAW)
-	udbg_init_debug_opal_raw();
-#elif defined(CONFIG_PPC_EARLY_DEBUG_OPAL_HVSI)
-	udbg_init_debug_opal_hvsi();
+#elif defined(CONFIG_PPC_EARLY_DEBUG_WSP)
+	udbg_init_wsp();
 #endif
 
 #ifdef CONFIG_PPC_EARLY_DEBUG
@@ -123,6 +117,29 @@ int udbg_write(const char *s, int n)
 	return n - remain;
 }
 
+int udbg_read(char *buf, int buflen)
+{
+	char *p = buf;
+	int i, c;
+
+	if (!udbg_getc)
+		return 0;
+
+	for (i = 0; i < buflen; ++i) {
+		do {
+			c = udbg_getc();
+			if (c == -1 && i == 0)
+				return -1;
+
+		} while (c == 0x11 || c == 0x13);
+		if (c == 0 || c == -1)
+			break;
+		*p++ = c;
+	}
+
+	return i;
+}
+
 #define UDBG_BUFSIZE 256
 void udbg_printf(const char *fmt, ...)
 {
@@ -157,13 +174,15 @@ static struct console udbg_console = {
 	.index	= 0,
 };
 
+static int early_console_initialized;
+
 /*
  * Called by setup_system after ppc_md->probe and ppc_md->early_init.
  * Call it again after setting udbg_putc in ppc_md->setup_arch.
  */
 void __init register_early_udbg_console(void)
 {
-	if (early_console)
+	if (early_console_initialized)
 		return;
 
 	if (!udbg_putc)
@@ -173,7 +192,7 @@ void __init register_early_udbg_console(void)
 		printk(KERN_INFO "early console immortal !\n");
 		udbg_console.flags &= ~CON_BOOT;
 	}
-	early_console = &udbg_console;
+	early_console_initialized = 1;
 	register_console(&udbg_console);
 }
 

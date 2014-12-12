@@ -115,6 +115,7 @@
 
 #include <asm/dma.h>
 #include <asm/io.h>
+#include <asm/system.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_cmnd.h>
@@ -1615,7 +1616,7 @@ struct ncb {
 	spinlock_t	smp_lock;	/* Lock for SMP threading       */
 
 	/*----------------------------------------------------------------
-	**	Chip and controller identification.
+	**	Chip and controller indentification.
 	**----------------------------------------------------------------
 	*/
 	int		unit;		/* Unit number			*/

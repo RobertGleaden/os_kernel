@@ -20,7 +20,6 @@
 #include <asm/io.h>
 #include <asm/jazz.h>
 #include <asm/pgtable.h>
-#include <asm/tlbmisc.h>
 
 static DEFINE_RAW_SPINLOCK(r4030_lock);
 
@@ -111,7 +110,7 @@ asmlinkage void plat_irq_dispatch(void)
 }
 
 static void r4030_set_mode(enum clock_event_mode mode,
-			   struct clock_event_device *evt)
+                           struct clock_event_device *evt)
 {
 	/* Nothing to do ...  */
 }
@@ -134,7 +133,7 @@ static irqreturn_t r4030_timer_interrupt(int irq, void *dev_id)
 
 static struct irqaction r4030_timer_irqaction = {
 	.handler	= r4030_timer_interrupt,
-	.flags		= IRQF_TIMER,
+	.flags		= IRQF_DISABLED | IRQF_TIMER,
 	.name		= "R4030 timer",
 };
 
@@ -146,7 +145,7 @@ void __init plat_time_init(void)
 
 	BUG_ON(HZ != 100);
 
-	cd->cpumask		= cpumask_of(cpu);
+	cd->cpumask             = cpumask_of(cpu);
 	clockevents_register_device(cd);
 	action->dev_id = cd;
 	setup_irq(JAZZ_TIMER_IRQ, action);

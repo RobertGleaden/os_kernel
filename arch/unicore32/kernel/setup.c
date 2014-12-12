@@ -37,7 +37,6 @@
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
 #include <asm/traps.h>
-#include <asm/memblock.h>
 
 #include "setup.h"
 
@@ -53,10 +52,6 @@ struct stack {
 
 static struct stack stacks[NR_CPUS];
 
-#ifdef CONFIG_VGA_CONSOLE
-struct screen_info screen_info;
-#endif
-
 char elf_platform[ELF_PLATFORM_SIZE];
 EXPORT_SYMBOL(elf_platform);
 
@@ -69,7 +64,7 @@ static char default_command_line[COMMAND_LINE_SIZE] __initdata = CONFIG_CMDLINE;
  */
 static struct resource mem_res[] = {
 	{
-		.name = "Kernel code",
+		.name = "Kernel text",
 		.start = 0,
 		.end = 0,
 		.flags = IORESOURCE_MEM

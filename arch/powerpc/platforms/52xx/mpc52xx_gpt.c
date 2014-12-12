@@ -67,7 +67,6 @@
 #include <linux/watchdog.h>
 #include <linux/miscdevice.h>
 #include <linux/uaccess.h>
-#include <linux/module.h>
 #include <asm/div64.h>
 #include <asm/mpc52xx.h>
 
@@ -81,7 +80,7 @@ MODULE_LICENSE("GPL");
  * @regs: virtual address of GPT registers
  * @lock: spinlock to coordinate between different functions.
  * @gc: gpio_chip instance structure; used when GPIO is enabled
- * @irqhost: Pointer to irq_domain instance; used when IRQ mode is supported
+ * @irqhost: Pointer to irq_host instance; used when IRQ mode is supported
  * @wdt_mode: only relevant for gpt0: bit 0 (MPC52xx_GPT_CAN_WDT) indicates
  *   if the gpt may be used as wdt, bit 1 (MPC52xx_GPT_IS_WDT) indicates
  *   if the timer is actively used as wdt which blocks gpt functions
@@ -91,7 +90,7 @@ struct mpc52xx_gpt_priv {
 	struct device *dev;
 	struct mpc52xx_gpt __iomem *regs;
 	spinlock_t lock;
-	struct irq_domain *irqhost;
+	struct irq_host *irqhost;
 	u32 ipb_freq;
 	u8 wdt_mode;
 
@@ -204,7 +203,7 @@ void mpc52xx_gpt_irq_cascade(unsigned int virq, struct irq_desc *desc)
 	}
 }
 
-static int mpc52xx_gpt_irq_map(struct irq_domain *h, unsigned int virq,
+static int mpc52xx_gpt_irq_map(struct irq_host *h, unsigned int virq,
 			       irq_hw_number_t hw)
 {
 	struct mpc52xx_gpt_priv *gpt = h->host_data;
@@ -216,7 +215,7 @@ static int mpc52xx_gpt_irq_map(struct irq_domain *h, unsigned int virq,
 	return 0;
 }
 
-static int mpc52xx_gpt_irq_xlate(struct irq_domain *h, struct device_node *ct,
+static int mpc52xx_gpt_irq_xlate(struct irq_host *h, struct device_node *ct,
 				 const u32 *intspec, unsigned int intsize,
 				 irq_hw_number_t *out_hwirq,
 				 unsigned int *out_flags)
@@ -236,7 +235,7 @@ static int mpc52xx_gpt_irq_xlate(struct irq_domain *h, struct device_node *ct,
 	return 0;
 }
 
-static const struct irq_domain_ops mpc52xx_gpt_irq_ops = {
+static struct irq_host_ops mpc52xx_gpt_irq_ops = {
 	.map = mpc52xx_gpt_irq_map,
 	.xlate = mpc52xx_gpt_irq_xlate,
 };
@@ -252,12 +251,14 @@ mpc52xx_gpt_irq_setup(struct mpc52xx_gpt_priv *gpt, struct device_node *node)
 	if (!cascade_virq)
 		return;
 
-	gpt->irqhost = irq_domain_add_linear(node, 1, &mpc52xx_gpt_irq_ops, gpt);
+	gpt->irqhost = irq_alloc_host(node, IRQ_HOST_MAP_LINEAR, 1,
+				      &mpc52xx_gpt_irq_ops, -1);
 	if (!gpt->irqhost) {
-		dev_err(gpt->dev, "irq_domain_add_linear() failed\n");
+		dev_err(gpt->dev, "irq_alloc_host() failed\n");
 		return;
 	}
 
+	gpt->irqhost->host_data = gpt;
 	irq_set_handler_data(cascade_virq, gpt);
 	irq_set_chained_handler(cascade_virq, mpc52xx_gpt_irq_cascade);
 
@@ -526,7 +527,7 @@ EXPORT_SYMBOL(mpc52xx_gpt_timer_period);
 
 #define WDT_IDENTITY	    "mpc52xx watchdog on GPT0"
 
-/* wdt_is_active stores whether or not the /dev/watchdog device is opened */
+/* wdt_is_active stores wether or not the /dev/watchdog device is opened */
 static unsigned long wdt_is_active;
 
 /* wdt-capable gpt */
@@ -669,7 +670,7 @@ static struct miscdevice mpc52xx_wdt_miscdev = {
 	.fops		= &mpc52xx_wdt_fops,
 };
 
-static int mpc52xx_gpt_wdt_init(void)
+static int __devinit mpc52xx_gpt_wdt_init(void)
 {
 	int err;
 
@@ -704,7 +705,7 @@ static int mpc52xx_gpt_wdt_setup(struct mpc52xx_gpt_priv *gpt,
 
 #else
 
-static int mpc52xx_gpt_wdt_init(void)
+static int __devinit mpc52xx_gpt_wdt_init(void)
 {
 	return 0;
 }
@@ -720,7 +721,7 @@ static inline int mpc52xx_gpt_wdt_setup(struct mpc52xx_gpt_priv *gpt,
 /* ---------------------------------------------------------------------
  * of_platform bus binding code
  */
-static int mpc52xx_gpt_probe(struct platform_device *ofdev)
+static int __devinit mpc52xx_gpt_probe(struct platform_device *ofdev)
 {
 	struct mpc52xx_gpt_priv *gpt;
 

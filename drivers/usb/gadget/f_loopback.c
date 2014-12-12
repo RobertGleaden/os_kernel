@@ -8,6 +8,15 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 /* #define VERBOSE_DEBUG */
@@ -15,12 +24,10 @@
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
-#include <linux/module.h>
-#include <linux/err.h>
-#include <linux/usb/composite.h>
 
 #include "g_zero.h"
-#include "u_f.h"
+#include "gadget_chips.h"
+
 
 /*
  * LOOPBACK FUNCTION ... a testing vehicle for USB peripherals,
@@ -46,8 +53,9 @@ static inline struct f_loopback *func_to_loop(struct usb_function *f)
 	return container_of(f, struct f_loopback, function);
 }
 
-static unsigned qlen;
-static unsigned buflen;
+static unsigned qlen = 32;
+module_param(qlen, uint, 0);
+MODULE_PARM_DESC(qlenn, "depth of loopback queue");
 
 /*-------------------------------------------------------------------------*/
 
@@ -120,7 +128,7 @@ static struct usb_endpoint_descriptor ss_loop_source_desc = {
 	.wMaxPacketSize =	cpu_to_le16(1024),
 };
 
-static struct usb_ss_ep_comp_descriptor ss_loop_source_comp_desc = {
+struct usb_ss_ep_comp_descriptor ss_loop_source_comp_desc = {
 	.bLength =		USB_DT_SS_EP_COMP_SIZE,
 	.bDescriptorType =	USB_DT_SS_ENDPOINT_COMP,
 	.bMaxBurst =		0,
@@ -136,7 +144,7 @@ static struct usb_endpoint_descriptor ss_loop_sink_desc = {
 	.wMaxPacketSize =	cpu_to_le16(1024),
 };
 
-static struct usb_ss_ep_comp_descriptor ss_loop_sink_comp_desc = {
+struct usb_ss_ep_comp_descriptor ss_loop_sink_comp_desc = {
 	.bLength =		USB_DT_SS_EP_COMP_SIZE,
 	.bDescriptorType =	USB_DT_SS_ENDPOINT_COMP,
 	.bMaxBurst =		0,
@@ -172,24 +180,18 @@ static struct usb_gadget_strings *loopback_strings[] = {
 
 /*-------------------------------------------------------------------------*/
 
-static int loopback_bind(struct usb_configuration *c, struct usb_function *f)
+static int __init
+loopback_bind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct usb_composite_dev *cdev = c->cdev;
 	struct f_loopback	*loop = func_to_loop(f);
 	int			id;
-	int ret;
 
 	/* allocate interface ID(s) */
 	id = usb_interface_id(c, f);
 	if (id < 0)
 		return id;
 	loopback_intf.bInterfaceNumber = id;
-
-	id = usb_string_id(cdev);
-	if (id < 0)
-		return id;
-	strings_loopback[0].id = id;
-	loopback_intf.iInterface = id;
 
 	/* allocate endpoints */
 
@@ -208,19 +210,22 @@ autoconf_fail:
 	loop->out_ep->driver_data = cdev;	/* claim */
 
 	/* support high speed hardware */
-	hs_loop_source_desc.bEndpointAddress =
-		fs_loop_source_desc.bEndpointAddress;
-	hs_loop_sink_desc.bEndpointAddress = fs_loop_sink_desc.bEndpointAddress;
+	if (gadget_is_dualspeed(c->cdev->gadget)) {
+		hs_loop_source_desc.bEndpointAddress =
+				fs_loop_source_desc.bEndpointAddress;
+		hs_loop_sink_desc.bEndpointAddress =
+				fs_loop_sink_desc.bEndpointAddress;
+		f->hs_descriptors = hs_loopback_descs;
+	}
 
 	/* support super speed hardware */
-	ss_loop_source_desc.bEndpointAddress =
-		fs_loop_source_desc.bEndpointAddress;
-	ss_loop_sink_desc.bEndpointAddress = fs_loop_sink_desc.bEndpointAddress;
-
-	ret = usb_assign_descriptors(f, fs_loopback_descs, hs_loopback_descs,
-			ss_loopback_descs);
-	if (ret)
-		return ret;
+	if (gadget_is_superspeed(c->cdev->gadget)) {
+		ss_loop_source_desc.bEndpointAddress =
+				fs_loop_source_desc.bEndpointAddress;
+		ss_loop_sink_desc.bEndpointAddress =
+				fs_loop_sink_desc.bEndpointAddress;
+		f->ss_descriptors = ss_loopback_descs;
+	}
 
 	DBG(cdev, "%s speed %s: IN/%s, OUT/%s\n",
 	    (gadget_is_superspeed(c->cdev->gadget) ? "super" :
@@ -229,17 +234,9 @@ autoconf_fail:
 	return 0;
 }
 
-static void lb_free_func(struct usb_function *f)
+static void
+loopback_unbind(struct usb_configuration *c, struct usb_function *f)
 {
-	struct f_lb_opts *opts;
-
-	opts = container_of(f->fi, struct f_lb_opts, func_inst);
-
-	mutex_lock(&opts->lock);
-	opts->refcnt--;
-	mutex_unlock(&opts->lock);
-
-	usb_free_all_descriptors(f);
 	kfree(func_to_loop(f));
 }
 
@@ -298,13 +295,8 @@ static void disable_loopback(struct f_loopback *loop)
 	struct usb_composite_dev	*cdev;
 
 	cdev = loop->function.config->cdev;
-	disable_endpoints(cdev, loop->in_ep, loop->out_ep, NULL, NULL);
+	disable_endpoints(cdev, loop->in_ep, loop->out_ep);
 	VDBG(cdev, "%s disabled\n", loop->function.name);
-}
-
-static inline struct usb_request *lb_alloc_ep_req(struct usb_ep *ep, int len)
-{
-	return alloc_ep_req(ep, len, buflen);
 }
 
 static int
@@ -346,7 +338,7 @@ fail0:
 	 * than 'buflen' bytes each.
 	 */
 	for (i = 0; i < qlen && result == 0; i++) {
-		req = lb_alloc_ep_req(ep, 0);
+		req = alloc_ep_req(ep);
 		if (req) {
 			req->complete = loopback_complete;
 			result = usb_ep_queue(ep, req, GFP_ATOMIC);
@@ -384,188 +376,64 @@ static void loopback_disable(struct usb_function *f)
 	disable_loopback(loop);
 }
 
-static struct usb_function *loopback_alloc(struct usb_function_instance *fi)
+/*-------------------------------------------------------------------------*/
+
+static int __init loopback_bind_config(struct usb_configuration *c)
 {
 	struct f_loopback	*loop;
-	struct f_lb_opts	*lb_opts;
+	int			status;
 
 	loop = kzalloc(sizeof *loop, GFP_KERNEL);
 	if (!loop)
-		return ERR_PTR(-ENOMEM);
-
-	lb_opts = container_of(fi, struct f_lb_opts, func_inst);
-
-	mutex_lock(&lb_opts->lock);
-	lb_opts->refcnt++;
-	mutex_unlock(&lb_opts->lock);
-
-	buflen = lb_opts->bulk_buflen;
-	qlen = lb_opts->qlen;
-	if (!qlen)
-		qlen = 32;
+		return -ENOMEM;
 
 	loop->function.name = "loopback";
+	loop->function.descriptors = fs_loopback_descs;
 	loop->function.bind = loopback_bind;
+	loop->function.unbind = loopback_unbind;
 	loop->function.set_alt = loopback_set_alt;
 	loop->function.disable = loopback_disable;
-	loop->function.strings = loopback_strings;
 
-	loop->function.free_func = lb_free_func;
-
-	return &loop->function;
+	status = usb_add_function(c, &loop->function);
+	if (status)
+		kfree(loop);
+	return status;
 }
 
-static inline struct f_lb_opts *to_f_lb_opts(struct config_item *item)
-{
-	return container_of(to_config_group(item), struct f_lb_opts,
-			    func_inst.group);
-}
-
-CONFIGFS_ATTR_STRUCT(f_lb_opts);
-CONFIGFS_ATTR_OPS(f_lb_opts);
-
-static void lb_attr_release(struct config_item *item)
-{
-	struct f_lb_opts *lb_opts = to_f_lb_opts(item);
-
-	usb_put_function_instance(&lb_opts->func_inst);
-}
-
-static struct configfs_item_operations lb_item_ops = {
-	.release		= lb_attr_release,
-	.show_attribute		= f_lb_opts_attr_show,
-	.store_attribute	= f_lb_opts_attr_store,
+static struct usb_configuration loopback_driver = {
+	.label		= "loopback",
+	.strings	= loopback_strings,
+	.bConfigurationValue = 2,
+	.bmAttributes	= USB_CONFIG_ATT_SELFPOWER,
+	/* .iConfiguration = DYNAMIC */
 };
 
-static ssize_t f_lb_opts_qlen_show(struct f_lb_opts *opts, char *page)
+/**
+ * loopback_add - add a loopback testing configuration to a device
+ * @cdev: the device to support the loopback configuration
+ */
+int __init loopback_add(struct usb_composite_dev *cdev, bool autoresume)
 {
-	int result;
+	int id;
 
-	mutex_lock(&opts->lock);
-	result = sprintf(page, "%d", opts->qlen);
-	mutex_unlock(&opts->lock);
+	/* allocate string ID(s) */
+	id = usb_string_id(cdev);
+	if (id < 0)
+		return id;
+	strings_loopback[0].id = id;
 
-	return result;
-}
+	loopback_intf.iInterface = id;
+	loopback_driver.iConfiguration = id;
 
-static ssize_t f_lb_opts_qlen_store(struct f_lb_opts *opts,
-				    const char *page, size_t len)
-{
-	int ret;
-	u32 num;
+	/* support autoresume for remote wakeup testing */
+	if (autoresume)
+		sourcesink_driver.bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 
-	mutex_lock(&opts->lock);
-	if (opts->refcnt) {
-		ret = -EBUSY;
-		goto end;
+	/* support OTG systems */
+	if (gadget_is_otg(cdev->gadget)) {
+		loopback_driver.descriptors = otg_desc;
+		loopback_driver.bmAttributes |= USB_CONFIG_ATT_WAKEUP;
 	}
 
-	ret = kstrtou32(page, 0, &num);
-	if (ret)
-		goto end;
-
-	opts->qlen = num;
-	ret = len;
-end:
-	mutex_unlock(&opts->lock);
-	return ret;
+	return usb_add_config(cdev, &loopback_driver, loopback_bind_config);
 }
-
-static struct f_lb_opts_attribute f_lb_opts_qlen =
-	__CONFIGFS_ATTR(qlen, S_IRUGO | S_IWUSR,
-			f_lb_opts_qlen_show,
-			f_lb_opts_qlen_store);
-
-static ssize_t f_lb_opts_bulk_buflen_show(struct f_lb_opts *opts, char *page)
-{
-	int result;
-
-	mutex_lock(&opts->lock);
-	result = sprintf(page, "%d", opts->bulk_buflen);
-	mutex_unlock(&opts->lock);
-
-	return result;
-}
-
-static ssize_t f_lb_opts_bulk_buflen_store(struct f_lb_opts *opts,
-				    const char *page, size_t len)
-{
-	int ret;
-	u32 num;
-
-	mutex_lock(&opts->lock);
-	if (opts->refcnt) {
-		ret = -EBUSY;
-		goto end;
-	}
-
-	ret = kstrtou32(page, 0, &num);
-	if (ret)
-		goto end;
-
-	opts->bulk_buflen = num;
-	ret = len;
-end:
-	mutex_unlock(&opts->lock);
-	return ret;
-}
-
-static struct f_lb_opts_attribute f_lb_opts_bulk_buflen =
-	__CONFIGFS_ATTR(buflen, S_IRUGO | S_IWUSR,
-			f_lb_opts_bulk_buflen_show,
-			f_lb_opts_bulk_buflen_store);
-
-static struct configfs_attribute *lb_attrs[] = {
-	&f_lb_opts_qlen.attr,
-	&f_lb_opts_bulk_buflen.attr,
-	NULL,
-};
-
-static struct config_item_type lb_func_type = {
-	.ct_item_ops    = &lb_item_ops,
-	.ct_attrs	= lb_attrs,
-	.ct_owner       = THIS_MODULE,
-};
-
-static void lb_free_instance(struct usb_function_instance *fi)
-{
-	struct f_lb_opts *lb_opts;
-
-	lb_opts = container_of(fi, struct f_lb_opts, func_inst);
-	kfree(lb_opts);
-}
-
-static struct usb_function_instance *loopback_alloc_instance(void)
-{
-	struct f_lb_opts *lb_opts;
-
-	lb_opts = kzalloc(sizeof(*lb_opts), GFP_KERNEL);
-	if (!lb_opts)
-		return ERR_PTR(-ENOMEM);
-	mutex_init(&lb_opts->lock);
-	lb_opts->func_inst.free_func_inst = lb_free_instance;
-	lb_opts->bulk_buflen = GZERO_BULK_BUFLEN;
-	lb_opts->qlen = GZERO_QLEN;
-
-	config_group_init_type_name(&lb_opts->func_inst.group, "",
-				    &lb_func_type);
-
-	return  &lb_opts->func_inst;
-}
-DECLARE_USB_FUNCTION(Loopback, loopback_alloc_instance, loopback_alloc);
-
-int __init lb_modinit(void)
-{
-	int ret;
-
-	ret = usb_function_register(&Loopbackusb_func);
-	if (ret)
-		return ret;
-	return ret;
-}
-void __exit lb_modexit(void)
-{
-	usb_function_unregister(&Loopbackusb_func);
-}
-
-MODULE_LICENSE("GPL");

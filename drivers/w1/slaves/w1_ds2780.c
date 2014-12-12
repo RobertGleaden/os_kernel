@@ -26,14 +26,20 @@
 #include "../w1_family.h"
 #include "w1_ds2780.h"
 
-static int w1_ds2780_do_io(struct device *dev, char *buf, int addr,
-			size_t count, int io)
+int w1_ds2780_io(struct device *dev, char *buf, int addr, size_t count,
+			int io)
 {
 	struct w1_slave *sl = container_of(dev, struct w1_slave, dev);
 
-	if (addr > DS2780_DATA_SIZE || addr < 0)
-		return 0;
+	if (!dev)
+		return -ENODEV;
 
+	mutex_lock(&sl->master->mutex);
+
+	if (addr > DS2780_DATA_SIZE || addr < 0) {
+		count = 0;
+		goto out;
+	}
 	count = min_t(int, count, DS2780_DATA_SIZE - addr);
 
 	if (w1_reset_select_slave(sl) == 0) {
@@ -41,6 +47,7 @@ static int w1_ds2780_do_io(struct device *dev, char *buf, int addr,
 			w1_write_8(sl->master, W1_DS2780_WRITE_DATA);
 			w1_write_8(sl->master, addr);
 			w1_write_block(sl->master, buf, count);
+			/* XXX w1_write_block returns void, not n_written */
 		} else {
 			w1_write_8(sl->master, W1_DS2780_READ_DATA);
 			w1_write_8(sl->master, addr);
@@ -48,25 +55,10 @@ static int w1_ds2780_do_io(struct device *dev, char *buf, int addr,
 		}
 	}
 
+out:
+	mutex_unlock(&sl->master->mutex);
+
 	return count;
-}
-
-int w1_ds2780_io(struct device *dev, char *buf, int addr, size_t count,
-			int io)
-{
-	struct w1_slave *sl = container_of(dev, struct w1_slave, dev);
-	int ret;
-
-	if (!dev)
-		return -ENODEV;
-
-	mutex_lock(&sl->master->bus_mutex);
-
-	ret = w1_ds2780_do_io(dev, buf, addr, count, io);
-
-	mutex_unlock(&sl->master->bus_mutex);
-
-	return ret;
 }
 EXPORT_SYMBOL(w1_ds2780_io);
 
@@ -77,43 +69,73 @@ int w1_ds2780_eeprom_cmd(struct device *dev, int addr, int cmd)
 	if (!dev)
 		return -EINVAL;
 
-	mutex_lock(&sl->master->bus_mutex);
+	mutex_lock(&sl->master->mutex);
 
 	if (w1_reset_select_slave(sl) == 0) {
 		w1_write_8(sl->master, cmd);
 		w1_write_8(sl->master, addr);
 	}
 
-	mutex_unlock(&sl->master->bus_mutex);
+	mutex_unlock(&sl->master->mutex);
 	return 0;
 }
 EXPORT_SYMBOL(w1_ds2780_eeprom_cmd);
 
-static ssize_t w1_slave_read(struct file *filp, struct kobject *kobj,
-			     struct bin_attribute *bin_attr, char *buf,
-			     loff_t off, size_t count)
+static ssize_t w1_ds2780_read_bin(struct file *filp,
+				  struct kobject *kobj,
+				  struct bin_attribute *bin_attr,
+				  char *buf, loff_t off, size_t count)
 {
 	struct device *dev = container_of(kobj, struct device, kobj);
 	return w1_ds2780_io(dev, buf, off, count, 0);
 }
 
-static BIN_ATTR_RO(w1_slave, DS2780_DATA_SIZE);
-
-static struct bin_attribute *w1_ds2780_bin_attrs[] = {
-	&bin_attr_w1_slave,
-	NULL,
+static struct bin_attribute w1_ds2780_bin_attr = {
+	.attr = {
+		.name = "w1_slave",
+		.mode = S_IRUGO,
+	},
+	.size = DS2780_DATA_SIZE,
+	.read = w1_ds2780_read_bin,
 };
 
-static const struct attribute_group w1_ds2780_group = {
-	.bin_attrs = w1_ds2780_bin_attrs,
-};
+static DEFINE_IDR(bat_idr);
+static DEFINE_MUTEX(bat_idr_lock);
 
-static const struct attribute_group *w1_ds2780_groups[] = {
-	&w1_ds2780_group,
-	NULL,
-};
+static int new_bat_id(void)
+{
+	int ret;
 
-static DEFINE_IDA(bat_ida);
+	while (1) {
+		int id;
+
+		ret = idr_pre_get(&bat_idr, GFP_KERNEL);
+		if (ret == 0)
+			return -ENOMEM;
+
+		mutex_lock(&bat_idr_lock);
+		ret = idr_get_new(&bat_idr, NULL, &id);
+		mutex_unlock(&bat_idr_lock);
+
+		if (ret == 0) {
+			ret = id & MAX_ID_MASK;
+			break;
+		} else if (ret == -EAGAIN) {
+			continue;
+		} else {
+			break;
+		}
+	}
+
+	return ret;
+}
+
+static void release_bat_id(int id)
+{
+	mutex_lock(&bat_idr_lock);
+	idr_remove(&bat_idr, id);
+	mutex_unlock(&bat_idr_lock);
+}
 
 static int w1_ds2780_add_slave(struct w1_slave *sl)
 {
@@ -121,7 +143,7 @@ static int w1_ds2780_add_slave(struct w1_slave *sl)
 	int id;
 	struct platform_device *pdev;
 
-	id = ida_simple_get(&bat_ida, 0, 0, GFP_KERNEL);
+	id = new_bat_id();
 	if (id < 0) {
 		ret = id;
 		goto noid;
@@ -138,14 +160,19 @@ static int w1_ds2780_add_slave(struct w1_slave *sl)
 	if (ret)
 		goto pdev_add_failed;
 
+	ret = sysfs_create_bin_file(&sl->dev.kobj, &w1_ds2780_bin_attr);
+	if (ret)
+		goto bin_attr_failed;
+
 	dev_set_drvdata(&sl->dev, pdev);
 
 	return 0;
 
+bin_attr_failed:
 pdev_add_failed:
-	platform_device_put(pdev);
+	platform_device_unregister(pdev);
 pdev_alloc_failed:
-	ida_simple_remove(&bat_ida, id);
+	release_bat_id(id);
 noid:
 	return ret;
 }
@@ -156,13 +183,13 @@ static void w1_ds2780_remove_slave(struct w1_slave *sl)
 	int id = pdev->id;
 
 	platform_device_unregister(pdev);
-	ida_simple_remove(&bat_ida, id);
+	release_bat_id(id);
+	sysfs_remove_bin_file(&sl->dev.kobj, &w1_ds2780_bin_attr);
 }
 
 static struct w1_family_ops w1_ds2780_fops = {
 	.add_slave    = w1_ds2780_add_slave,
 	.remove_slave = w1_ds2780_remove_slave,
-	.groups       = w1_ds2780_groups,
 };
 
 static struct w1_family w1_ds2780_family = {
@@ -172,14 +199,14 @@ static struct w1_family w1_ds2780_family = {
 
 static int __init w1_ds2780_init(void)
 {
-	ida_init(&bat_ida);
+	idr_init(&bat_idr);
 	return w1_register_family(&w1_ds2780_family);
 }
 
 static void __exit w1_ds2780_exit(void)
 {
 	w1_unregister_family(&w1_ds2780_family);
-	ida_destroy(&bat_ida);
+	idr_destroy(&bat_idr);
 }
 
 module_init(w1_ds2780_init);
@@ -188,4 +215,3 @@ module_exit(w1_ds2780_exit);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Clifton Barnes <cabarnes@indesign-llc.com>");
 MODULE_DESCRIPTION("1-wire Driver for Maxim/Dallas DS2780 Stand-Alone Fuel Gauge IC");
-MODULE_ALIAS("w1-family-" __stringify(W1_FAMILY_DS2780));

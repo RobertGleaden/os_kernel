@@ -6,7 +6,7 @@
  *
  * See Documentation/trace/tracepoints.txt.
  *
- * Copyright (C) 2008-2014 Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
+ * (C) Copyright 2008 Mathieu Desnoyers <mathieu.desnoyers@polymtl.ca>
  *
  * Heavily inspired from the Linux Kernel Markers.
  *
@@ -17,11 +17,10 @@
 #include <linux/errno.h>
 #include <linux/types.h>
 #include <linux/rcupdate.h>
-#include <linux/static_key.h>
+#include <linux/jump_label.h>
 
 struct module;
 struct tracepoint;
-struct notifier_block;
 
 struct tracepoint_func {
 	void *func;
@@ -30,45 +29,42 @@ struct tracepoint_func {
 
 struct tracepoint {
 	const char *name;		/* Tracepoint name */
-	struct static_key key;
+	struct jump_label_key key;
 	void (*regfunc)(void);
 	void (*unregfunc)(void);
 	struct tracepoint_func __rcu *funcs;
 };
 
-extern int
-tracepoint_probe_register(struct tracepoint *tp, void *probe, void *data);
-extern int
-tracepoint_probe_unregister(struct tracepoint *tp, void *probe, void *data);
-extern void
-for_each_kernel_tracepoint(void (*fct)(struct tracepoint *tp, void *priv),
-		void *priv);
+/*
+ * Connect a probe to a tracepoint.
+ * Internal API, should not be used directly.
+ */
+extern int tracepoint_probe_register(const char *name, void *probe, void *data);
 
-#ifdef CONFIG_MODULES
-struct tp_module {
-	struct list_head list;
-	struct module *mod;
+/*
+ * Disconnect a probe from a tracepoint.
+ * Internal API, should not be used directly.
+ */
+extern int
+tracepoint_probe_unregister(const char *name, void *probe, void *data);
+
+extern int tracepoint_probe_register_noupdate(const char *name, void *probe,
+					      void *data);
+extern int tracepoint_probe_unregister_noupdate(const char *name, void *probe,
+						void *data);
+extern void tracepoint_probe_update_all(void);
+
+struct tracepoint_iter {
+	struct module *module;
+	struct tracepoint * const *tracepoint;
 };
 
-bool trace_module_has_bad_taint(struct module *mod);
-extern int register_tracepoint_module_notifier(struct notifier_block *nb);
-extern int unregister_tracepoint_module_notifier(struct notifier_block *nb);
-#else
-static inline bool trace_module_has_bad_taint(struct module *mod)
-{
-	return false;
-}
-static inline
-int register_tracepoint_module_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-static inline
-int unregister_tracepoint_module_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-#endif /* CONFIG_MODULES */
+extern void tracepoint_iter_start(struct tracepoint_iter *iter);
+extern void tracepoint_iter_next(struct tracepoint_iter *iter);
+extern void tracepoint_iter_stop(struct tracepoint_iter *iter);
+extern void tracepoint_iter_reset(struct tracepoint_iter *iter);
+extern int tracepoint_get_iter_range(struct tracepoint * const **tracepoint,
+	struct tracepoint * const *begin, struct tracepoint * const *end);
 
 /*
  * tracepoint_synchronize_unregister must be called between the last tracepoint
@@ -80,12 +76,18 @@ static inline void tracepoint_synchronize_unregister(void)
 	synchronize_sched();
 }
 
-#ifdef CONFIG_HAVE_SYSCALL_TRACEPOINTS
-extern void syscall_regfunc(void);
-extern void syscall_unregfunc(void);
-#endif /* CONFIG_HAVE_SYSCALL_TRACEPOINTS */
-
 #define PARAMS(args...) args
+
+#ifdef CONFIG_TRACEPOINTS
+extern
+void tracepoint_update_probe_range(struct tracepoint * const *begin,
+	struct tracepoint * const *end);
+#else
+static inline
+void tracepoint_update_probe_range(struct tracepoint * const *begin,
+	struct tracepoint * const *end)
+{ }
+#endif /* CONFIG_TRACEPOINTS */
 
 #endif /* _LINUX_TRACEPOINT_H */
 
@@ -115,7 +117,7 @@ extern void syscall_unregfunc(void);
  * as "(void *, void)". The DECLARE_TRACE_NOARGS() will pass in just
  * "void *data", where as the DECLARE_TRACE() will pass in "void *data, proto".
  */
-#define __DO_TRACE(tp, proto, args, cond, prercu, postrcu)		\
+#define __DO_TRACE(tp, proto, args, cond)				\
 	do {								\
 		struct tracepoint_func *it_func_ptr;			\
 		void *it_func;						\
@@ -123,7 +125,6 @@ extern void syscall_unregfunc(void);
 									\
 		if (!(cond))						\
 			return;						\
-		prercu;							\
 		rcu_read_lock_sched_notrace();				\
 		it_func_ptr = rcu_dereference_sched((tp)->funcs);	\
 		if (it_func_ptr) {					\
@@ -134,62 +135,38 @@ extern void syscall_unregfunc(void);
 			} while ((++it_func_ptr)->func);		\
 		}							\
 		rcu_read_unlock_sched_notrace();			\
-		postrcu;						\
 	} while (0)
-
-#ifndef MODULE
-#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args)	\
-	static inline void trace_##name##_rcuidle(proto)		\
-	{								\
-		if (static_key_false(&__tracepoint_##name.key))		\
-			__DO_TRACE(&__tracepoint_##name,		\
-				TP_PROTO(data_proto),			\
-				TP_ARGS(data_args),			\
-				TP_CONDITION(cond),			\
-				rcu_irq_enter(),			\
-				rcu_irq_exit());			\
-	}
-#else
-#define __DECLARE_TRACE_RCU(name, proto, args, cond, data_proto, data_args)
-#endif
 
 /*
  * Make sure the alignment of the structure in the __tracepoints section will
  * not add unwanted padding between the beginning of the section and the
  * structure. Force alignment to the same alignment as the section start.
  */
-#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args) \
+#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args)	\
 	extern struct tracepoint __tracepoint_##name;			\
 	static inline void trace_##name(proto)				\
 	{								\
-		if (static_key_false(&__tracepoint_##name.key))		\
+		if (static_branch(&__tracepoint_##name.key))		\
 			__DO_TRACE(&__tracepoint_##name,		\
 				TP_PROTO(data_proto),			\
 				TP_ARGS(data_args),			\
-				TP_CONDITION(cond),,);			\
+				TP_CONDITION(cond));			\
 	}								\
-	__DECLARE_TRACE_RCU(name, PARAMS(proto), PARAMS(args),		\
-		PARAMS(cond), PARAMS(data_proto), PARAMS(data_args))	\
 	static inline int						\
 	register_trace_##name(void (*probe)(data_proto), void *data)	\
 	{								\
-		return tracepoint_probe_register(&__tracepoint_##name,	\
-						(void *)probe, data);	\
+		return tracepoint_probe_register(#name, (void *)probe,	\
+						 data);			\
 	}								\
 	static inline int						\
 	unregister_trace_##name(void (*probe)(data_proto), void *data)	\
 	{								\
-		return tracepoint_probe_unregister(&__tracepoint_##name,\
-						(void *)probe, data);	\
+		return tracepoint_probe_unregister(#name, (void *)probe, \
+						   data);		\
 	}								\
 	static inline void						\
 	check_trace_callback_type_##name(void (*cb)(data_proto))	\
 	{								\
-	}								\
-	static inline bool						\
-	trace_##name##_enabled(void)					\
-	{								\
-		return static_key_false(&__tracepoint_##name.key);	\
 	}
 
 /*
@@ -202,7 +179,7 @@ extern void syscall_unregfunc(void);
 	__attribute__((section("__tracepoints_strings"))) = #name;	 \
 	struct tracepoint __tracepoint_##name				 \
 	__attribute__((section("__tracepoints"))) =			 \
-		{ __tpstrtab_##name, STATIC_KEY_INIT_FALSE, reg, unreg, NULL };\
+		{ __tpstrtab_##name, JUMP_LABEL_INIT, reg, unreg, NULL };\
 	static struct tracepoint * const __tracepoint_ptr_##name __used	 \
 	__attribute__((section("__tracepoints_ptrs"))) =		 \
 		&__tracepoint_##name;
@@ -216,10 +193,8 @@ extern void syscall_unregfunc(void);
 	EXPORT_SYMBOL(__tracepoint_##name)
 
 #else /* !CONFIG_TRACEPOINTS */
-#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args) \
+#define __DECLARE_TRACE(name, proto, args, cond, data_proto, data_args)	\
 	static inline void trace_##name(proto)				\
-	{ }								\
-	static inline void trace_##name##_rcuidle(proto)		\
 	{ }								\
 	static inline int						\
 	register_trace_##name(void (*probe)(data_proto),		\
@@ -235,11 +210,6 @@ extern void syscall_unregfunc(void);
 	}								\
 	static inline void check_trace_callback_type_##name(void (*cb)(data_proto)) \
 	{								\
-	}								\
-	static inline bool						\
-	trace_##name##_enabled(void)					\
-	{								\
-		return false;						\
 	}
 
 #define DEFINE_TRACE_FN(name, reg, unreg)
@@ -278,8 +248,6 @@ extern void syscall_unregfunc(void);
 
 #define TRACE_EVENT_FLAGS(event, flag)
 
-#define TRACE_EVENT_PERF_PERM(event, expr...)
-
 #endif /* DECLARE_TRACE */
 
 #ifndef TRACE_EVENT
@@ -287,7 +255,7 @@ extern void syscall_unregfunc(void);
  * For use with the TRACE_EVENT macro:
  *
  * We define a tracepoint, its arguments, its printk format
- * and its 'fast binary record' layout.
+ * and its 'fast binay record' layout.
  *
  * Firstly, name your tracepoint via TRACE_EVENT(name : the
  * 'subsystem_event' notation is fine.
@@ -391,8 +359,6 @@ extern void syscall_unregfunc(void);
 #define DECLARE_EVENT_CLASS(name, proto, args, tstruct, assign, print)
 #define DEFINE_EVENT(template, name, proto, args)		\
 	DECLARE_TRACE(name, PARAMS(proto), PARAMS(args))
-#define DEFINE_EVENT_FN(template, name, proto, args, reg, unreg)\
-	DECLARE_TRACE(name, PARAMS(proto), PARAMS(args))
 #define DEFINE_EVENT_PRINT(template, name, proto, args, print)	\
 	DECLARE_TRACE(name, PARAMS(proto), PARAMS(args))
 #define DEFINE_EVENT_CONDITION(template, name, proto,		\
@@ -411,7 +377,5 @@ extern void syscall_unregfunc(void);
 				PARAMS(args), PARAMS(cond))
 
 #define TRACE_EVENT_FLAGS(event, flag)
-
-#define TRACE_EVENT_PERF_PERM(event, expr...)
 
 #endif /* ifdef TRACE_EVENT (see note above) */

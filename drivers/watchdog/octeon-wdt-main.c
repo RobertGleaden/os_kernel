@@ -52,8 +52,6 @@
  *
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/miscdevice.h>
 #include <linux/interrupt.h>
 #include <linux/watchdog.h>
@@ -97,8 +95,8 @@ MODULE_PARM_DESC(heartbeat,
 	"Watchdog heartbeat in seconds. (0 < heartbeat, default="
 				__MODULE_STRING(WD_TIMO) ")");
 
-static bool nowayout = WATCHDOG_NOWAYOUT;
-module_param(nowayout, bool, S_IRUGO);
+static int nowayout = WATCHDOG_NOWAYOUT;
+module_param(nowayout, int, S_IRUGO);
 MODULE_PARM_DESC(nowayout,
 	"Watchdog cannot be stopped once started (default="
 				__MODULE_STRING(WATCHDOG_NOWAYOUT) ")");
@@ -203,7 +201,7 @@ static void __init octeon_wdt_build_stage1(void)
 	uasm_resolve_relocs(relocs, labels);
 
 	len = (int)(p - nmi_stage1_insns);
-	pr_debug("Synthesized NMI stage 1 handler (%d instructions)\n", len);
+	pr_debug("Synthesized NMI stage 1 handler (%d instructions).\n", len);
 
 	pr_debug("\t.set push\n");
 	pr_debug("\t.set noreorder\n");
@@ -404,7 +402,7 @@ static void octeon_wdt_setup_interrupt(int cpu)
 	irq = OCTEON_IRQ_WDOG0 + core;
 
 	if (request_irq(irq, octeon_wdt_poke_irq,
-			IRQF_NO_THREAD, "octeon_wdt", octeon_wdt_poke_irq))
+			IRQF_DISABLED, "octeon_wdt", octeon_wdt_poke_irq))
 		panic("octeon_wdt: Couldn't obtain irq %d", irq);
 
 	cpumask_set_cpu(cpu, &irq_enabled_cpus);
@@ -629,7 +627,7 @@ static int octeon_wdt_release(struct inode *inode, struct file *file)
 		do_coundown = 0;
 		octeon_wdt_ping();
 	} else {
-		pr_crit("WDT device closed unexpectedly.  WDT will not stop!\n");
+		pr_crit("octeon_wdt: WDT device closed unexpectedly.  WDT will not stop!\n");
 	}
 	clear_bit(0, &octeon_wdt_is_open);
 	expect_close = 0;
@@ -686,12 +684,12 @@ static int __init octeon_wdt_init(void)
 
 	octeon_wdt_calc_parameters(heartbeat);
 
-	pr_info("Initial granularity %d Sec\n", timeout_sec);
+	pr_info("octeon_wdt: Initial granularity %d Sec.\n", timeout_sec);
 
 	ret = misc_register(&octeon_wdt_miscdev);
 	if (ret) {
-		pr_err("cannot register miscdev on minor=%d (err=%d)\n",
-		       WATCHDOG_MINOR, ret);
+		pr_err("octeon_wdt: cannot register miscdev on minor=%d (err=%d)\n",
+			WATCHDOG_MINOR, ret);
 		goto out;
 	}
 
@@ -708,13 +706,10 @@ static int __init octeon_wdt_init(void)
 
 	cpumask_clear(&irq_enabled_cpus);
 
-	cpu_notifier_register_begin();
 	for_each_online_cpu(cpu)
 		octeon_wdt_setup_interrupt(cpu);
 
-	__register_hotcpu_notifier(&octeon_wdt_cpu_notifier);
-	cpu_notifier_register_done();
-
+	register_hotcpu_notifier(&octeon_wdt_cpu_notifier);
 out:
 	return ret;
 }
@@ -728,8 +723,7 @@ static void __exit octeon_wdt_cleanup(void)
 
 	misc_deregister(&octeon_wdt_miscdev);
 
-	cpu_notifier_register_begin();
-	__unregister_hotcpu_notifier(&octeon_wdt_cpu_notifier);
+	unregister_hotcpu_notifier(&octeon_wdt_cpu_notifier);
 
 	for_each_online_cpu(cpu) {
 		int core = cpu2core(cpu);
@@ -738,9 +732,6 @@ static void __exit octeon_wdt_cleanup(void)
 		/* Free the interrupt handler */
 		free_irq(OCTEON_IRQ_WDOG0 + core, octeon_wdt_poke_irq);
 	}
-
-	cpu_notifier_register_done();
-
 	/*
 	 * Disable the boot-bus memory, the code it points to is soon
 	 * to go missing.

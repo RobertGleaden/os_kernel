@@ -32,7 +32,6 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <linux/module.h>
 #include <sound/core.h>
 #include <sound/seq_kernel.h>
 #include <sound/seq_midi_emul.h>
@@ -89,7 +88,7 @@ snd_midi_process_event(struct snd_midi_op *ops,
 	int dest_channel = 0;
 
 	if (ev == NULL || chanset == NULL) {
-		pr_debug("ALSA: seq_midi_emul: ev or chanbase NULL (snd_midi_process_event)\n");
+		snd_printd("ev or chanbase NULL (snd_midi_process_event)\n");
 		return;
 	}
 	if (chanset->channels == NULL)
@@ -98,7 +97,7 @@ snd_midi_process_event(struct snd_midi_op *ops,
 	if (snd_seq_ev_is_channel_type(ev)) {
 		dest_channel = ev->data.note.channel;
 		if (dest_channel >= chanset->max_channels) {
-			pr_debug("ALSA: seq_midi_emul: dest channel is %d, max is %d\n",
+			snd_printd("dest channel is %d, max is %d\n",
 				   dest_channel, chanset->max_channels);
 			return;
 		}
@@ -232,7 +231,7 @@ snd_midi_process_event(struct snd_midi_op *ops,
 	case SNDRV_SEQ_EVENT_ECHO:
 	not_yet:
 	default:
-		/*pr_debug("ALSA: seq_midi_emul: Unimplemented event %d\n", ev->type);*/
+		/*snd_printd("Unimplemented event %d\n", ev->type);*/
 		break;
 	}
 }

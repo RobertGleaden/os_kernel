@@ -133,23 +133,21 @@ static __init int reset_init_affinity(void)
 }
 late_initcall(reset_init_affinity);
 
-static struct cpumask cpu_started;
+static struct cpumask cpu_started __cpuinitdata;
 
 /*
  * Activate a secondary processor.  Very minimal; don't add anything
  * to this path without knowing what you're doing, since SMP booting
  * is pretty fragile.
  */
-static void start_secondary(void)
+static void __cpuinit start_secondary(void)
 {
-	int cpuid;
-
-	preempt_disable();
-
-	cpuid = smp_processor_id();
+	int cpuid = smp_processor_id();
 
 	/* Set our thread pointer appropriately. */
 	set_my_cpu_offset(__per_cpu_offset[cpuid]);
+
+	preempt_disable();
 
 	/*
 	 * In large machines even this will slow us down, since we
@@ -185,7 +183,7 @@ static void start_secondary(void)
 /*
  * Bring a secondary processor online.
  */
-void online_secondary(void)
+void __cpuinit online_secondary(void)
 {
 	/*
 	 * low-memory mappings have been cleared, flush them from
@@ -198,9 +196,17 @@ void online_secondary(void)
 	/* This must be done before setting cpu_online_mask */
 	wmb();
 
-	notify_cpu_starting(smp_processor_id());
-
+	/*
+	 * We need to hold call_lock, so there is no inconsistency
+	 * between the time smp_call_function() determines number of
+	 * IPI recipients, and the time when the determination is made
+	 * for which cpus receive the IPI. Holding this
+	 * lock helps us to not include this cpu in a currently in progress
+	 * smp_call_function().
+	 */
+	ipi_call_lock();
 	set_cpu_online(smp_processor_id(), 1);
+	ipi_call_unlock();
 	__get_cpu_var(cpu_state) = CPU_ONLINE;
 
 	/* Set up tile-specific state for this cpu. */
@@ -209,10 +215,12 @@ void online_secondary(void)
 	/* Set up tile-timer clock-event device on this cpu */
 	setup_tile_timer();
 
-	cpu_startup_entry(CPUHP_ONLINE);
+	preempt_enable();
+
+	cpu_idle();
 }
 
-int __cpu_up(unsigned int cpu, struct task_struct *tidle)
+int __cpuinit __cpu_up(unsigned int cpu)
 {
 	/* Wait 5s total for all CPUs for them to come online */
 	static int timeout;

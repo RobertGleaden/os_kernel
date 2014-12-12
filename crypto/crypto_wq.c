@@ -12,7 +12,6 @@
  */
 
 #include <linux/workqueue.h>
-#include <linux/module.h>
 #include <crypto/algapi.h>
 #include <crypto/crypto_wq.h>
 
@@ -33,7 +32,7 @@ static void __exit crypto_wq_exit(void)
 	destroy_workqueue(kcrypto_wq);
 }
 
-subsys_initcall(crypto_wq_init);
+module_init(crypto_wq_init);
 module_exit(crypto_wq_exit);
 
 MODULE_LICENSE("GPL");

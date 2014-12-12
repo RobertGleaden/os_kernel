@@ -295,13 +295,6 @@ static void carl9170_usb_rx_irq_complete(struct urb *urb)
 		goto resubmit;
 	}
 
-	/*
-	 * While the carl9170 firmware does not use this EP, the
-	 * firmware loader in the EEPROM unfortunately does.
-	 * Therefore we need to be ready to handle out-of-band
-	 * responses and traps in case the firmware crashed and
-	 * the loader took over again.
-	 */
 	carl9170_handle_command_response(ar, urb->transfer_buffer,
 					 urb->actual_length);
 
@@ -773,7 +766,7 @@ void carl9170_usb_stop(struct ar9170 *ar)
 	complete_all(&ar->cmd_wait);
 
 	/* This is required to prevent an early completion on _start */
-	reinit_completion(&ar->cmd_wait);
+	INIT_COMPLETION(ar->cmd_wait);
 
 	/*
 	 * Note:
@@ -1076,14 +1069,8 @@ static int carl9170_usb_probe(struct usb_interface *intf,
 
 	carl9170_set_state(ar, CARL9170_STOPPED);
 
-	err = request_firmware_nowait(THIS_MODULE, 1, CARL9170FW_NAME,
+	return request_firmware_nowait(THIS_MODULE, 1, CARL9170FW_NAME,
 		&ar->udev->dev, GFP_KERNEL, ar, carl9170_usb_firmware_step2);
-	if (err) {
-		usb_put_dev(udev);
-		usb_put_dev(udev);
-		carl9170_free(ar);
-	}
-	return err;
 }
 
 static void carl9170_usb_disconnect(struct usb_interface *intf)
@@ -1172,7 +1159,17 @@ static struct usb_driver carl9170_driver = {
 	.resume = carl9170_usb_resume,
 	.reset_resume = carl9170_usb_resume,
 #endif /* CONFIG_PM */
-	.disable_hub_initiated_lpm = 1,
 };
 
-module_usb_driver(carl9170_driver);
+static int __init carl9170_usb_init(void)
+{
+	return usb_register(&carl9170_driver);
+}
+
+static void __exit carl9170_usb_exit(void)
+{
+	usb_deregister(&carl9170_driver);
+}
+
+module_init(carl9170_usb_init);
+module_exit(carl9170_usb_exit);

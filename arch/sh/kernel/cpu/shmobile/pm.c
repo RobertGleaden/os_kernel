@@ -16,7 +16,6 @@
 #include <asm/suspend.h>
 #include <asm/uaccess.h>
 #include <asm/cacheflush.h>
-#include <asm/bl_bit.h>
 
 /*
  * Notifier lists for pre/post sleep notification
@@ -150,7 +149,8 @@ static const struct platform_suspend_ops sh_pm_ops = {
 static int __init sh_pm_init(void)
 {
 	suspend_set_ops(&sh_pm_ops);
-	return sh_mobile_setup_cpuidle();
+	sh_mobile_setup_cpuidle();
+	return 0;
 }
 
 late_initcall(sh_pm_init);

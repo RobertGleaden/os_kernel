@@ -10,7 +10,7 @@
 
 #include "numa_internal.h"
 
-static int emu_nid_to_phys[MAX_NUMNODES];
+static int emu_nid_to_phys[MAX_NUMNODES] __cpuinitdata;
 static char *emu_cmdline __initdata;
 
 void __init numa_emu_cmdline(char *str)
@@ -26,16 +26,6 @@ static int __init emu_find_memblk_by_nid(int nid, const struct numa_meminfo *mi)
 		if (mi->blk[i].nid == nid)
 			return i;
 	return -ENOENT;
-}
-
-static u64 __init mem_hole_size(u64 start, u64 end)
-{
-	unsigned long start_pfn = PFN_UP(start);
-	unsigned long end_pfn = PFN_DOWN(end);
-
-	if (start_pfn < end_pfn)
-		return PFN_PHYS(absent_pages_in_range(start_pfn, end_pfn));
-	return 0;
 }
 
 /*
@@ -60,7 +50,7 @@ static int __init emu_setup_memblk(struct numa_meminfo *ei,
 	eb->nid = nid;
 
 	if (emu_nid_to_phys[nid] == NUMA_NO_NODE)
-		emu_nid_to_phys[nid] = nid;
+		emu_nid_to_phys[nid] = pb->nid;
 
 	pb->start += size;
 	if (pb->start >= pb->end) {
@@ -68,8 +58,8 @@ static int __init emu_setup_memblk(struct numa_meminfo *ei,
 		numa_remove_memblk_from(phys_blk, pi);
 	}
 
-	printk(KERN_INFO "Faking node %d at [mem %#018Lx-%#018Lx] (%LuMB)\n",
-	       nid, eb->start, eb->end - 1, (eb->end - eb->start) >> 20);
+	printk(KERN_INFO "Faking node %d at %016Lx-%016Lx (%LuMB)\n", nid,
+	       eb->start, eb->end, (eb->end - eb->start) >> 20);
 	return 0;
 }
 
@@ -99,7 +89,7 @@ static int __init split_nodes_interleave(struct numa_meminfo *ei,
 	 * Calculate target node size.  x86_32 freaks on __udivdi3() so do
 	 * the division in ulong number of pages and convert back.
 	 */
-	size = max_addr - addr - mem_hole_size(addr, max_addr);
+	size = max_addr - addr - memblock_x86_hole_size(addr, max_addr);
 	size = PFN_PHYS((unsigned long)(size >> PAGE_SHIFT) / nr_nodes);
 
 	/*
@@ -145,7 +135,8 @@ static int __init split_nodes_interleave(struct numa_meminfo *ei,
 			 * Continue to add memory to this fake node if its
 			 * non-reserved memory is less than the per-node size.
 			 */
-			while (end - start - mem_hole_size(start, end) < size) {
+			while (end - start -
+			       memblock_x86_hole_size(start, end) < size) {
 				end += FAKE_NODE_MIN_SIZE;
 				if (end > limit) {
 					end = limit;
@@ -159,7 +150,7 @@ static int __init split_nodes_interleave(struct numa_meminfo *ei,
 			 * this one must extend to the boundary.
 			 */
 			if (end < dma32_end && dma32_end - end -
-			    mem_hole_size(end, dma32_end) < FAKE_NODE_MIN_SIZE)
+			    memblock_x86_hole_size(end, dma32_end) < FAKE_NODE_MIN_SIZE)
 				end = dma32_end;
 
 			/*
@@ -167,7 +158,8 @@ static int __init split_nodes_interleave(struct numa_meminfo *ei,
 			 * next node, this one must extend to the end of the
 			 * physical node.
 			 */
-			if (limit - end - mem_hole_size(end, limit) < size)
+			if (limit - end -
+			    memblock_x86_hole_size(end, limit) < size)
 				end = limit;
 
 			ret = emu_setup_memblk(ei, pi, nid++ % nr_nodes,
@@ -188,7 +180,7 @@ static u64 __init find_end_of_node(u64 start, u64 max_addr, u64 size)
 {
 	u64 end = start + size;
 
-	while (end - start - mem_hole_size(start, end) < size) {
+	while (end - start - memblock_x86_hole_size(start, end) < size) {
 		end += FAKE_NODE_MIN_SIZE;
 		if (end > max_addr) {
 			end = max_addr;
@@ -219,7 +211,8 @@ static int __init split_nodes_size_interleave(struct numa_meminfo *ei,
 	 * creates a uniform distribution of node sizes across the entire
 	 * machine (but not necessarily over physical nodes).
 	 */
-	min_size = (max_addr - addr - mem_hole_size(addr, max_addr)) / MAX_NUMNODES;
+	min_size = (max_addr - addr - memblock_x86_hole_size(addr, max_addr)) /
+						MAX_NUMNODES;
 	min_size = max(min_size, FAKE_NODE_MIN_SIZE);
 	if ((min_size & FAKE_NODE_MIN_HASH_MASK) < min_size)
 		min_size = (min_size + FAKE_NODE_MIN_SIZE) &
@@ -259,7 +252,7 @@ static int __init split_nodes_size_interleave(struct numa_meminfo *ei,
 			 * this one must extend to the boundary.
 			 */
 			if (end < dma32_end && dma32_end - end -
-			    mem_hole_size(end, dma32_end) < FAKE_NODE_MIN_SIZE)
+			    memblock_x86_hole_size(end, dma32_end) < FAKE_NODE_MIN_SIZE)
 				end = dma32_end;
 
 			/*
@@ -267,7 +260,8 @@ static int __init split_nodes_size_interleave(struct numa_meminfo *ei,
 			 * next node, this one must extend to the end of the
 			 * physical node.
 			 */
-			if (limit - end - mem_hole_size(end, limit) < size)
+			if (limit - end -
+			    memblock_x86_hole_size(end, limit) < size)
 				end = limit;
 
 			ret = emu_setup_memblk(ei, pi, nid++ % MAX_NUMNODES,
@@ -339,11 +333,9 @@ void __init numa_emulation(struct numa_meminfo *numa_meminfo, int numa_dist_cnt)
 	} else {
 		unsigned long n;
 
-		n = simple_strtoul(emu_cmdline, &emu_cmdline, 0);
+		n = simple_strtoul(emu_cmdline, NULL, 0);
 		ret = split_nodes_interleave(&ei, &pi, 0, max_addr, n);
 	}
-	if (*emu_cmdline == ':')
-		emu_cmdline++;
 
 	if (ret < 0)
 		goto no_emu;
@@ -359,11 +351,11 @@ void __init numa_emulation(struct numa_meminfo *numa_meminfo, int numa_dist_cnt)
 
 		phys = memblock_find_in_range(0, PFN_PHYS(max_pfn_mapped),
 					      phys_size, PAGE_SIZE);
-		if (!phys) {
+		if (phys == MEMBLOCK_ERROR) {
 			pr_warning("NUMA: Warning: can't allocate copy of distance table, disabling emulation\n");
 			goto no_emu;
 		}
-		memblock_reserve(phys, phys_size);
+		memblock_x86_reserve_range(phys, phys + phys_size, "TMP NUMA DIST");
 		phys_dist = __va(phys);
 
 		for (i = 0; i < numa_dist_cnt; i++)
@@ -420,9 +412,7 @@ void __init numa_emulation(struct numa_meminfo *numa_meminfo, int numa_dist_cnt)
 			int physj = emu_nid_to_phys[j];
 			int dist;
 
-			if (get_option(&emu_cmdline, &dist) == 2)
-				;
-			else if (physi >= numa_dist_cnt || physj >= numa_dist_cnt)
+			if (physi >= numa_dist_cnt || physj >= numa_dist_cnt)
 				dist = physi == physj ?
 					LOCAL_DISTANCE : REMOTE_DISTANCE;
 			else
@@ -434,7 +424,7 @@ void __init numa_emulation(struct numa_meminfo *numa_meminfo, int numa_dist_cnt)
 
 	/* free the copied physical distance table */
 	if (phys_dist)
-		memblock_free(__pa(phys_dist), phys_size);
+		memblock_x86_free_range(__pa(phys_dist), __pa(phys_dist) + phys_size);
 	return;
 
 no_emu:
@@ -444,7 +434,7 @@ no_emu:
 }
 
 #ifndef CONFIG_DEBUG_PER_CPU_MAPS
-void numa_add_cpu(int cpu)
+void __cpuinit numa_add_cpu(int cpu)
 {
 	int physnid, nid;
 
@@ -462,7 +452,7 @@ void numa_add_cpu(int cpu)
 			cpumask_set_cpu(cpu, node_to_cpumask_map[nid]);
 }
 
-void numa_remove_cpu(int cpu)
+void __cpuinit numa_remove_cpu(int cpu)
 {
 	int i;
 
@@ -470,7 +460,7 @@ void numa_remove_cpu(int cpu)
 		cpumask_clear_cpu(cpu, node_to_cpumask_map[i]);
 }
 #else	/* !CONFIG_DEBUG_PER_CPU_MAPS */
-static void numa_set_cpumask(int cpu, bool enable)
+static void __cpuinit numa_set_cpumask(int cpu, bool enable)
 {
 	int nid, physnid;
 
@@ -490,12 +480,12 @@ static void numa_set_cpumask(int cpu, bool enable)
 	}
 }
 
-void numa_add_cpu(int cpu)
+void __cpuinit numa_add_cpu(int cpu)
 {
 	numa_set_cpumask(cpu, true);
 }
 
-void numa_remove_cpu(int cpu)
+void __cpuinit numa_remove_cpu(int cpu)
 {
 	numa_set_cpumask(cpu, false);
 }

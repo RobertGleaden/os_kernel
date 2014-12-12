@@ -1,7 +1,7 @@
 /***************************************************************************
  * Copyright (c) 2005-2009, Broadcom Corporation.
  *
- *  Name: crystalhd_lnx . h
+ *  Name: crystalhd_lnx . c
  *
  *  Description:
  *		BCM70012 Linux driver
@@ -37,6 +37,7 @@
 #include <linux/delay.h>
 #include <linux/fb.h>
 #include <linux/pci.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
@@ -44,25 +45,27 @@
 #include <linux/io.h>
 #include <asm/irq.h>
 #include <asm/pgtable.h>
+#include <asm/system.h>
 #include <linux/uaccess.h>
 
-#include "crystalhd.h"
+#include "crystalhd_cmds.h"
 
 #define CRYSTAL_HD_NAME		"Broadcom Crystal HD Decoder (BCM70012) Driver"
 
+
 /* OS specific PCI information structure and adapter information. */
 struct crystalhd_adp {
-	/* Hardware board/PCI specifics */
+	/* Hardware borad/PCI specifics */
 	char			name[32];
 	struct pci_dev		*pdev;
 
 	unsigned long		pci_mem_start;
 	uint32_t		pci_mem_len;
-	void __iomem		*addr;
+	void			*addr;
 
 	unsigned long		pci_i2o_start;
 	uint32_t		pci_i2o_len;
-	void __iomem		*i2o_addr;
+	void			*i2o_addr;
 
 	unsigned int		drv_data;
 	unsigned int		dmabits;	/* 32 | 64 */
@@ -76,8 +79,8 @@ struct crystalhd_adp {
 	int		chd_dec_major;
 	unsigned int		cfg_users;
 
-	struct crystalhd_ioctl_data	*idata_free_head; /* ioctl data pool */
-	struct crystalhd_elem	*elem_pool_head; /* Queue element pool */
+	struct crystalhd_ioctl_data	*idata_free_head;	/* ioctl data pool */
+	struct crystalhd_elem		*elem_pool_head;	/* Queue element pool */
 
 	struct crystalhd_cmd	cmds;
 

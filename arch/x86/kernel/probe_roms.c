@@ -10,10 +10,9 @@
 #include <linux/dmi.h>
 #include <linux/pfn.h>
 #include <linux/pci.h>
-#include <linux/export.h>
-
-#include <asm/probe_roms.h>
 #include <asm/pci-direct.h>
+
+
 #include <asm/e820.h>
 #include <asm/mmzone.h>
 #include <asm/setup.h>
@@ -150,7 +149,7 @@ static struct resource *find_oprom(struct pci_dev *pdev)
 	return oprom;
 }
 
-void __iomem *pci_map_biosrom(struct pci_dev *pdev)
+void *pci_map_biosrom(struct pci_dev *pdev)
 {
 	struct resource *oprom = find_oprom(pdev);
 

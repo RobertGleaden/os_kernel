@@ -4,7 +4,7 @@
 
 
 /***************************************************************************
-Define Definition
+Define Difinetion
 ***************************************************************************/
 #define SMSUCCESS           0x0000 /* SUCCESS */
 #define ERROR               0xFFFF /* ERROR */
@@ -25,5 +25,7 @@ Define Definition
 #define ERR_NoSmartMedia    0x003A /* Medium Not Present */
 
 /***************************************************************************/
+void StringCopy(char *, char *, int);
+int  StringCmp(char *, char *, int);
 
 #endif

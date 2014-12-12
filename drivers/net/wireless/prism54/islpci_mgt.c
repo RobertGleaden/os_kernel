@@ -12,7 +12,8 @@
  *  GNU General Public License for more details.
  *
  *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, see <http://www.gnu.org/licenses/>.
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  *
  */
 
@@ -23,6 +24,7 @@
 #include <linux/slab.h>
 
 #include <asm/io.h>
+#include <asm/system.h>
 #include <linux/if_arp.h>
 
 #include "prismcompat.h"
@@ -122,8 +124,11 @@ islpci_mgmt_rx_fill(struct net_device *ndev)
 
 		if (buf->mem == NULL) {
 			buf->mem = kmalloc(MGMT_FRAME_SIZE, GFP_ATOMIC);
-			if (!buf->mem)
+			if (!buf->mem) {
+				printk(KERN_WARNING
+				       "Error allocating management frame.\n");
 				return -ENOMEM;
+			}
 			buf->size = MGMT_FRAME_SIZE;
 		}
 		if (buf->pci_addr == 0) {
@@ -187,9 +192,11 @@ islpci_mgt_transmit(struct net_device *ndev, int operation, unsigned long oid,
 
 	err = -ENOMEM;
 	p = buf.mem = kmalloc(frag_len, GFP_KERNEL);
-	if (!buf.mem)
+	if (!buf.mem) {
+		printk(KERN_DEBUG "%s: cannot allocate mgmt frame\n",
+		       ndev->name);
 		goto error;
-
+	}
 	buf.size = frag_len;
 
 	/* create the header directly in the fragment data area */
@@ -352,11 +359,14 @@ islpci_mgt_receive(struct net_device *ndev)
 
 		/* Determine frame size, skipping OID_INL_TUNNEL headers. */
 		size = PIMFOR_HEADER_SIZE + header->length;
-		frame = kmalloc(sizeof(struct islpci_mgmtframe) + size,
+		frame = kmalloc(sizeof (struct islpci_mgmtframe) + size,
 				GFP_ATOMIC);
-		if (!frame)
+		if (!frame) {
+			printk(KERN_WARNING
+			       "%s: Out of memory, cannot handle oid 0x%08x\n",
+			       ndev->name, header->oid);
 			continue;
-
+		}
 		frame->ndev = ndev;
 		memcpy(&frame->buf, header, size);
 		frame->header = (pimfor_header_t *) frame->buf;

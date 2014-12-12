@@ -6,26 +6,23 @@
 #include "spk_priv.h"
 #include "serialio.h"
 
-#ifndef SERIAL_PORT_DFNS
-#define SERIAL_PORT_DFNS
-#endif
-
 static void start_serial_interrupt(int irq);
 
-static const struct old_serial_port rs_table[] = {
+static struct serial_state rs_table[] = {
 	SERIAL_PORT_DFNS
 };
-static const struct old_serial_port *serstate;
+static struct serial_state *serstate;
 static int timeouts;
 
-const struct old_serial_port *spk_serial_init(int index)
+struct serial_state *spk_serial_init(int index)
 {
 	int baud = 9600, quot = 0;
 	unsigned int cval = 0;
 	int cflag = CREAD | HUPCL | CLOCAL | B9600 | CS8;
-	const struct old_serial_port *ser = rs_table + index;
+	struct serial_state *ser = NULL;
 	int err;
 
+	ser = rs_table + index;
 	/*	Divisor, bytesize and parity */
 	quot = ser->baud_base / baud;
 	cval = cflag & (CSIZE | CSTOPB);
@@ -40,11 +37,11 @@ const struct old_serial_port *spk_serial_init(int index)
 		cval |= UART_LCR_EPAR;
 	if (synth_request_region(ser->port, 8)) {
 		/* try to take it back. */
-		pr_info("Ports not available, trying to steal them\n");
+		printk(KERN_INFO "Ports not available, trying to steal them\n");
 		__release_region(&ioport_resource, ser->port, 8);
 		err = synth_request_region(ser->port, 8);
 		if (err) {
-			pr_warn("Unable to allocate port at %x, errno %i",
+			pr_warn("Unable to allocate port at %lx, errno %i",
 				ser->port, err);
 			return NULL;
 		}
@@ -83,7 +80,7 @@ static irqreturn_t synth_readbuf_handler(int irq, void *dev_id)
 /*printk(KERN_ERR "in irq\n"); */
 /*pr_warn("in IRQ\n"); */
 	int c;
-	spin_lock_irqsave(&speakup_info.spinlock, flags);
+	spk_lock(flags);
 	while (inb_p(speakup_info.port_tts + UART_LSR) & UART_LSR_DR) {
 
 		c = inb_p(speakup_info.port_tts+UART_RX);
@@ -91,7 +88,7 @@ static irqreturn_t synth_readbuf_handler(int irq, void *dev_id)
 /*printk(KERN_ERR "c = %d\n", c); */
 /*pr_warn("C = %d\n", c); */
 	}
-	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
+	spk_unlock(flags);
 	return IRQ_HANDLED;
 }
 
@@ -106,7 +103,7 @@ static void start_serial_interrupt(int irq)
 			 "serial", (void *) synth_readbuf_handler);
 
 	if (rv)
-		pr_err("Unable to request Speakup serial I R Q\n");
+		printk(KERN_ERR "Unable to request Speakup serial I R Q\n");
 	/* Set MCR */
 	outb(UART_MCR_DTR | UART_MCR_RTS | UART_MCR_OUT2,
 			speakup_info.port_tts + UART_MCR);
@@ -120,7 +117,7 @@ static void start_serial_interrupt(int irq)
 	outb(1, speakup_info.port_tts + UART_FCR);	/* Turn FIFO On */
 }
 
-void spk_stop_serial_interrupt(void)
+void stop_serial_interrupt(void)
 {
 	if (speakup_info.port_tts == 0)
 		return;
@@ -134,7 +131,7 @@ void spk_stop_serial_interrupt(void)
 	free_irq(serstate->irq, (void *) synth_readbuf_handler);
 }
 
-int spk_wait_for_xmitr(void)
+int wait_for_xmitr(void)
 {
 	int tmout = SPK_XMITR_TIMEOUT;
 	if ((synth->alive) && (timeouts >= NUM_DISABLE_TIMEOUTS)) {
@@ -199,7 +196,7 @@ EXPORT_SYMBOL_GPL(spk_serial_in_nowait);
 
 int spk_serial_out(const char ch)
 {
-	if (synth->alive && spk_wait_for_xmitr()) {
+	if (synth->alive && wait_for_xmitr()) {
 		outb_p(ch, speakup_info.port_tts);
 		return 1;
 	}

@@ -80,7 +80,7 @@ extern unsigned long search_exception_table(unsigned long);
 static inline int ___range_ok(unsigned long addr, unsigned long size)
 {
 	return ((addr < memory_start) ||
-		((addr + size - 1) > (memory_start + memory_size - 1)));
+		((addr + size) > memory_end));
 }
 
 #define __range_ok(addr, size) \
@@ -90,25 +90,17 @@ static inline int ___range_ok(unsigned long addr, unsigned long size)
 
 #else
 
-static inline int access_ok(int type, const void __user *addr,
-							unsigned long size)
-{
-	if (!size)
-		goto ok;
+/*
+ * Address is valid if:
+ *  - "addr", "addr + size" and "size" are all below the limit
+ */
+#define access_ok(type, addr, size) \
+	(get_fs().seg > (((unsigned long)(addr)) | \
+		(size) | ((unsigned long)(addr) + (size))))
 
-	if ((get_fs().seg < ((unsigned long)addr)) ||
-			(get_fs().seg < ((unsigned long)addr + size - 1))) {
-		pr_debug("ACCESS fail: %s at 0x%08x (size 0x%x), seg 0x%08x\n",
-			type ? "WRITE" : "READ ", (__force u32)addr, (u32)size,
-			(u32)get_fs().seg);
-		return 0;
-	}
-ok:
-	pr_debug("ACCESS OK: %s at 0x%08x (size 0x%x), seg 0x%08x\n",
-			type ? "WRITE" : "READ ", (__force u32)addr, (u32)size,
-			(u32)get_fs().seg);
-	return 1;
-}
+/* || printk("access_ok failed for %s at 0x%08lx (size %d), seg 0x%08x\n",
+ type?"WRITE":"READ",addr,size,get_fs().seg)) */
+
 #endif
 
 #ifdef CONFIG_MMU
@@ -116,7 +108,7 @@ ok:
 # define __EX_TABLE_SECTION	".section __ex_table,\"a\"\n"
 #else
 # define __FIXUP_SECTION	".section .discard,\"ax\"\n"
-# define __EX_TABLE_SECTION	".section .discard,\"ax\"\n"
+# define __EX_TABLE_SECTION	".section .discard,\"a\"\n"
 #endif
 
 extern unsigned long __copy_tofrom_user(void __user *to,
@@ -145,7 +137,7 @@ static inline unsigned long __must_check __clear_user(void __user *to,
 static inline unsigned long __must_check clear_user(void __user *to,
 							unsigned long n)
 {
-	might_fault();
+	might_sleep();
 	if (unlikely(!access_ok(VERIFY_WRITE, to, n)))
 		return n;
 
@@ -306,10 +298,11 @@ extern long __user_bad(void);
 
 #define __put_user_check(x, ptr, size)					\
 ({									\
-	typeof(*(ptr)) volatile __pu_val = x;					\
+	typeof(*(ptr)) __pu_val;					\
 	typeof(*(ptr)) __user *__pu_addr = (ptr);			\
 	int __pu_err = 0;						\
 									\
+	__pu_val = (x);							\
 	if (access_ok(VERIFY_WRITE, __pu_addr, size)) {			\
 		switch (size) {						\
 		case 1:							\
@@ -371,7 +364,7 @@ extern long __user_bad(void);
 static inline long copy_from_user(void *to,
 		const void __user *from, unsigned long n)
 {
-	might_fault();
+	might_sleep();
 	if (access_ok(VERIFY_READ, from, n))
 		return __copy_from_user(to, from, n);
 	return n;
@@ -385,7 +378,7 @@ static inline long copy_from_user(void *to,
 static inline long copy_to_user(void __user *to,
 		const void *from, unsigned long n)
 {
-	might_fault();
+	might_sleep();
 	if (access_ok(VERIFY_WRITE, to, n))
 		return __copy_to_user(to, from, n);
 	return n;

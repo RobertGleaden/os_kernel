@@ -5,25 +5,21 @@
 #include <linux/seq_file.h>
 #include <linux/time.h>
 #include <linux/kernel_stat.h>
-#include <linux/cputime.h>
+#include <asm/cputime.h>
 
 static int uptime_proc_show(struct seq_file *m, void *v)
 {
 	struct timespec uptime;
 	struct timespec idle;
-	u64 idletime;
-	u64 nsec;
-	u32 rem;
 	int i;
+	cputime_t idletime = cputime_zero;
 
-	idletime = 0;
 	for_each_possible_cpu(i)
-		idletime += (__force u64) kcpustat_cpu(i).cpustat[CPUTIME_IDLE];
+		idletime = cputime64_add(idletime, kstat_cpu(i).cpustat.idle);
 
-	get_monotonic_boottime(&uptime);
-	nsec = cputime64_to_jiffies64(idletime) * TICK_NSEC;
-	idle.tv_sec = div_u64_rem(nsec, NSEC_PER_SEC, &rem);
-	idle.tv_nsec = rem;
+	do_posix_clock_monotonic_gettime(&uptime);
+	monotonic_to_bootbased(&uptime);
+	cputime_to_timespec(idletime, &idle);
 	seq_printf(m, "%lu.%02lu %lu.%02lu\n",
 			(unsigned long) uptime.tv_sec,
 			(uptime.tv_nsec / (NSEC_PER_SEC / 100)),
@@ -49,4 +45,4 @@ static int __init proc_uptime_init(void)
 	proc_create("uptime", 0, NULL, &uptime_proc_fops);
 	return 0;
 }
-fs_initcall(proc_uptime_init);
+module_init(proc_uptime_init);

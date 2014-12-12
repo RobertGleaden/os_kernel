@@ -19,7 +19,6 @@
  */
 
 #include <linux/types.h>
-#include <linux/gpio.h>
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -34,12 +33,12 @@
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
 
+#include <mach/board.h>
+#include <mach/gpio.h>
 #include <mach/cpu.h>
 
-#include "at91_aic.h"
-#include "board.h"
 #include "generic.h"
-#include "gpio.h"
+
 
 static void __init onearm_init_early(void)
 {
@@ -48,27 +47,7 @@ static void __init onearm_init_early(void)
 
 	/* Initialize processor: 18.432 MHz crystal */
 	at91_initialize(18432000);
-}
 
-static struct macb_platform_data __initdata onearm_eth_data = {
-	.phy_irq_pin	= AT91_PIN_PC4,
-	.is_rmii	= 1,
-};
-
-static struct at91_usbh_data __initdata onearm_usbh_data = {
-	.ports		= 1,
-	.vbus_pin	= {-EINVAL, -EINVAL},
-	.overcurrent_pin= {-EINVAL, -EINVAL},
-};
-
-static struct at91_udc_data __initdata onearm_udc_data = {
-	.vbus_pin	= AT91_PIN_PC2,
-	.pullup_pin	= AT91_PIN_PC3,
-};
-
-static void __init onearm_board_init(void)
-{
-	/* Serial */
 	/* DBGU on ttyS0. (Rx & Tx only) */
 	at91_register_uart(0, 0, 0);
 
@@ -79,6 +58,28 @@ static void __init onearm_board_init(void)
 	at91_register_uart(AT91RM9200_ID_US1, 2, ATMEL_UART_CTS | ATMEL_UART_RTS
 			   | ATMEL_UART_DTR | ATMEL_UART_DSR | ATMEL_UART_DCD
 			   | ATMEL_UART_RI);
+
+	/* set serial console to ttyS0 (ie, DBGU) */
+	at91_set_serial_console(0);
+}
+
+static struct at91_eth_data __initdata onearm_eth_data = {
+	.phy_irq_pin	= AT91_PIN_PC4,
+	.is_rmii	= 1,
+};
+
+static struct at91_usbh_data __initdata onearm_usbh_data = {
+	.ports		= 1,
+};
+
+static struct at91_udc_data __initdata onearm_udc_data = {
+	.vbus_pin	= AT91_PIN_PC2,
+	.pullup_pin	= AT91_PIN_PC3,
+};
+
+static void __init onearm_board_init(void)
+{
+	/* Serial */
 	at91_add_device_serial();
 	/* Ethernet */
 	at91_add_device_eth(&onearm_eth_data);
@@ -90,9 +91,8 @@ static void __init onearm_board_init(void)
 
 MACHINE_START(ONEARM, "Ajeco 1ARM single board computer")
 	/* Maintainer: Lennert Buytenhek <buytenh@wantstofly.org> */
-	.init_time	= at91rm9200_timer_init,
+	.timer		= &at91rm9200_timer,
 	.map_io		= at91_map_io,
-	.handle_irq	= at91_aic_handle_irq,
 	.init_early	= onearm_init_early,
 	.init_irq	= at91_init_irq_default,
 	.init_machine	= onearm_board_init,

@@ -40,7 +40,7 @@ struct inode *bfs_iget(struct super_block *sb, unsigned long ino)
 	int block, off;
 
 	inode = iget_locked(sb, ino);
-	if (!inode)
+	if (IS_ERR(inode))
 		return ERR_PTR(-ENOMEM);
 	if (!(inode->i_state & I_NEW))
 		return inode;
@@ -76,9 +76,9 @@ struct inode *bfs_iget(struct super_block *sb, unsigned long ino)
 	BFS_I(inode)->i_sblock =  le32_to_cpu(di->i_sblock);
 	BFS_I(inode)->i_eblock =  le32_to_cpu(di->i_eblock);
 	BFS_I(inode)->i_dsk_ino = le16_to_cpu(di->i_ino);
-	i_uid_write(inode, le32_to_cpu(di->i_uid));
-	i_gid_write(inode,  le32_to_cpu(di->i_gid));
-	set_nlink(inode, le32_to_cpu(di->i_nlink));
+	inode->i_uid =  le32_to_cpu(di->i_uid);
+	inode->i_gid =  le32_to_cpu(di->i_gid);
+	inode->i_nlink =  le32_to_cpu(di->i_nlink);
 	inode->i_size = BFS_FILESIZE(di);
 	inode->i_blocks = BFS_FILEBLOCKS(di);
 	inode->i_atime.tv_sec =  le32_to_cpu(di->i_atime);
@@ -139,8 +139,8 @@ static int bfs_write_inode(struct inode *inode, struct writeback_control *wbc)
 
 	di->i_ino = cpu_to_le16(ino);
 	di->i_mode = cpu_to_le32(inode->i_mode);
-	di->i_uid = cpu_to_le32(i_uid_read(inode));
-	di->i_gid = cpu_to_le32(i_gid_read(inode));
+	di->i_uid = cpu_to_le32(inode->i_uid);
+	di->i_gid = cpu_to_le32(inode->i_gid);
 	di->i_nlink = cpu_to_le32(inode->i_nlink);
 	di->i_atime = cpu_to_le32(inode->i_atime.tv_sec);
 	di->i_mtime = cpu_to_le32(inode->i_mtime.tv_sec);
@@ -172,9 +172,9 @@ static void bfs_evict_inode(struct inode *inode)
 
 	dprintf("ino=%08lx\n", ino);
 
-	truncate_inode_pages_final(&inode->i_data);
+	truncate_inode_pages(&inode->i_data, 0);
 	invalidate_inode_buffers(inode);
-	clear_inode(inode);
+	end_writeback(inode);
 
 	if (inode->i_nlink)
 		return;
@@ -251,6 +251,7 @@ static struct inode *bfs_alloc_inode(struct super_block *sb)
 static void bfs_i_callback(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
+	INIT_LIST_HEAD(&inode->i_dentry);
 	kmem_cache_free(bfs_inode_cachep, BFS_I(inode));
 }
 
@@ -266,7 +267,7 @@ static void init_once(void *foo)
 	inode_init_once(&bi->vfs_inode);
 }
 
-static int __init init_inodecache(void)
+static int init_inodecache(void)
 {
 	bfs_inode_cachep = kmem_cache_create("bfs_inode_cache",
 					     sizeof(struct bfs_inode_info),
@@ -280,11 +281,6 @@ static int __init init_inodecache(void)
 
 static void destroy_inodecache(void)
 {
-	/*
-	 * Make sure all delayed rcu free inodes are flushed before we
-	 * destroy cache.
-	 */
-	rcu_barrier();
 	kmem_cache_destroy(bfs_inode_cachep);
 }
 
@@ -372,8 +368,9 @@ static int bfs_fill_super(struct super_block *s, void *data, int silent)
 		ret = PTR_ERR(inode);
 		goto out2;
 	}
-	s->s_root = d_make_root(inode);
+	s->s_root = d_alloc_root(inode);
 	if (!s->s_root) {
+		iput(inode);
 		ret = -ENOMEM;
 		goto out2;
 	}
@@ -473,7 +470,6 @@ static struct file_system_type bfs_fs_type = {
 	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV,
 };
-MODULE_ALIAS_FS("bfs");
 
 static int __init init_bfs_fs(void)
 {

@@ -161,115 +161,6 @@ void fcoe_ctlr_init(struct fcoe_ctlr *fip, enum fip_state mode)
 EXPORT_SYMBOL(fcoe_ctlr_init);
 
 /**
- * fcoe_sysfs_fcf_add() - Add a fcoe_fcf{,_device} to a fcoe_ctlr{,_device}
- * @new: The newly discovered FCF
- *
- * Called with fip->ctlr_mutex held
- */
-static int fcoe_sysfs_fcf_add(struct fcoe_fcf *new)
-{
-	struct fcoe_ctlr *fip = new->fip;
-	struct fcoe_ctlr_device *ctlr_dev;
-	struct fcoe_fcf_device *temp, *fcf_dev;
-	int rc = -ENOMEM;
-
-	LIBFCOE_FIP_DBG(fip, "New FCF fab %16.16llx mac %pM\n",
-			new->fabric_name, new->fcf_mac);
-
-	temp = kzalloc(sizeof(*temp), GFP_KERNEL);
-	if (!temp)
-		goto out;
-
-	temp->fabric_name = new->fabric_name;
-	temp->switch_name = new->switch_name;
-	temp->fc_map = new->fc_map;
-	temp->vfid = new->vfid;
-	memcpy(temp->mac, new->fcf_mac, ETH_ALEN);
-	temp->priority = new->pri;
-	temp->fka_period = new->fka_period;
-	temp->selected = 0; /* default to unselected */
-
-	/*
-	 * If ctlr_dev doesn't exist then it means we're a libfcoe user
-	 * who doesn't use fcoe_syfs and didn't allocate a fcoe_ctlr_device.
-	 * fnic would be an example of a driver with this behavior. In this
-	 * case we want to add the fcoe_fcf to the fcoe_ctlr list, but we
-	 * don't want to make sysfs changes.
-	 */
-
-	ctlr_dev = fcoe_ctlr_to_ctlr_dev(fip);
-	if (ctlr_dev) {
-		mutex_lock(&ctlr_dev->lock);
-		fcf_dev = fcoe_fcf_device_add(ctlr_dev, temp);
-		if (unlikely(!fcf_dev)) {
-			rc = -ENOMEM;
-			mutex_unlock(&ctlr_dev->lock);
-			goto out;
-		}
-
-		/*
-		 * The fcoe_sysfs layer can return a CONNECTED fcf that
-		 * has a priv (fcf was never deleted) or a CONNECTED fcf
-		 * that doesn't have a priv (fcf was deleted). However,
-		 * libfcoe will always delete FCFs before trying to add
-		 * them. This is ensured because both recv_adv and
-		 * age_fcfs are protected by the the fcoe_ctlr's mutex.
-		 * This means that we should never get a FCF with a
-		 * non-NULL priv pointer.
-		 */
-		BUG_ON(fcf_dev->priv);
-
-		fcf_dev->priv = new;
-		new->fcf_dev = fcf_dev;
-		mutex_unlock(&ctlr_dev->lock);
-	}
-
-	list_add(&new->list, &fip->fcfs);
-	fip->fcf_count++;
-	rc = 0;
-
-out:
-	kfree(temp);
-	return rc;
-}
-
-/**
- * fcoe_sysfs_fcf_del() - Remove a fcoe_fcf{,_device} to a fcoe_ctlr{,_device}
- * @new: The FCF to be removed
- *
- * Called with fip->ctlr_mutex held
- */
-static void fcoe_sysfs_fcf_del(struct fcoe_fcf *new)
-{
-	struct fcoe_ctlr *fip = new->fip;
-	struct fcoe_ctlr_device *cdev;
-	struct fcoe_fcf_device *fcf_dev;
-
-	list_del(&new->list);
-	fip->fcf_count--;
-
-	/*
-	 * If ctlr_dev doesn't exist then it means we're a libfcoe user
-	 * who doesn't use fcoe_syfs and didn't allocate a fcoe_ctlr_device
-	 * or a fcoe_fcf_device.
-	 *
-	 * fnic would be an example of a driver with this behavior. In this
-	 * case we want to remove the fcoe_fcf from the fcoe_ctlr list (above),
-	 * but we don't want to make sysfs changes.
-	 */
-	cdev = fcoe_ctlr_to_ctlr_dev(fip);
-	if (cdev) {
-		mutex_lock(&cdev->lock);
-		fcf_dev = fcoe_fcf_to_fcf_dev(new);
-		WARN_ON(!fcf_dev);
-		new->fcf_dev = NULL;
-		fcoe_fcf_device_delete(fcf_dev);
-		kfree(new);
-		mutex_unlock(&cdev->lock);
-	}
-}
-
-/**
  * fcoe_ctlr_reset_fcfs() - Reset and free all FCFs for a controller
  * @fip: The FCoE controller whose FCFs are to be reset
  *
@@ -282,10 +173,10 @@ static void fcoe_ctlr_reset_fcfs(struct fcoe_ctlr *fip)
 
 	fip->sel_fcf = NULL;
 	list_for_each_entry_safe(fcf, next, &fip->fcfs, list) {
-		fcoe_sysfs_fcf_del(fcf);
+		list_del(&fcf->list);
+		kfree(fcf);
 	}
-	WARN_ON(fip->fcf_count);
-
+	fip->fcf_count = 0;
 	fip->sel_time = 0;
 }
 
@@ -339,7 +230,7 @@ static void fcoe_ctlr_announce(struct fcoe_ctlr *fip)
 	spin_unlock_bh(&fip->ctlr_lock);
 	sel = fip->sel_fcf;
 
-	if (sel && ether_addr_equal(sel->fcf_mac, fip->dest_addr))
+	if (sel && !compare_ether_addr(sel->fcf_mac, fip->dest_addr))
 		goto unlock;
 	if (!is_zero_ether_addr(fip->dest_addr)) {
 		printk(KERN_NOTICE "libfcoe: host%d: "
@@ -351,7 +242,7 @@ static void fcoe_ctlr_announce(struct fcoe_ctlr *fip)
 		printk(KERN_INFO "libfcoe: host%d: FIP selected "
 		       "Fibre-Channel Forwarder MAC %pM\n",
 		       fip->lp->host->host_no, sel->fcf_mac);
-		memcpy(fip->dest_addr, sel->fcoe_mac, ETH_ALEN);
+		memcpy(fip->dest_addr, sel->fcf_mac, ETH_ALEN);
 		fip->map_dest = 0;
 	}
 unlock:
@@ -429,7 +320,6 @@ static void fcoe_ctlr_solicit(struct fcoe_ctlr *fip, struct fcoe_fcf *fcf)
 
 	skb_put(skb, sizeof(*sol));
 	skb->protocol = htons(ETH_P_FIP);
-	skb->priority = fip->priority;
 	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
 	fip->send(fip, skb);
@@ -584,7 +474,6 @@ static void fcoe_ctlr_send_keep_alive(struct fcoe_ctlr *fip,
 	}
 	skb_put(skb, len);
 	skb->protocol = htons(ETH_P_FIP);
-	skb->priority = fip->priority;
 	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
 	fip->send(fip, skb);
@@ -677,7 +566,6 @@ static int fcoe_ctlr_encaps(struct fcoe_ctlr *fip, struct fc_lport *lport,
 	cap->fip.fip_dl_len = htons(dlen / FIP_BPW);
 
 	skb->protocol = htons(ETH_P_FIP);
-	skb->priority = fip->priority;
 	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
 	return 0;
@@ -826,12 +714,9 @@ static unsigned long fcoe_ctlr_age_fcfs(struct fcoe_ctlr *fip)
 	unsigned long next_timer = jiffies + msecs_to_jiffies(FIP_VN_KA_PERIOD);
 	unsigned long deadline;
 	unsigned long sel_time = 0;
-	struct list_head del_list;
-	struct fc_stats *stats;
+	struct fcoe_dev_stats *stats;
 
-	INIT_LIST_HEAD(&del_list);
-
-	stats = per_cpu_ptr(fip->lp->stats, get_cpu());
+	stats = per_cpu_ptr(fip->lp->dev_stats, get_cpu());
 
 	list_for_each_entry_safe(fcf, next, &fip->fcfs, list) {
 		deadline = fcf->time + fcf->fka_period + fcf->fka_period / 2;
@@ -851,13 +736,10 @@ static unsigned long fcoe_ctlr_age_fcfs(struct fcoe_ctlr *fip)
 		if (time_after_eq(jiffies, deadline)) {
 			if (fip->sel_fcf == fcf)
 				fip->sel_fcf = NULL;
-			/*
-			 * Move to delete list so we can call
-			 * fcoe_sysfs_fcf_del (which can sleep)
-			 * after the put_cpu().
-			 */
 			list_del(&fcf->list);
-			list_add(&fcf->list, &del_list);
+			WARN_ON(!fip->fcf_count);
+			fip->fcf_count--;
+			kfree(fcf);
 			stats->VLinkFailureCount++;
 		} else {
 			if (time_after(next_timer, deadline))
@@ -868,12 +750,6 @@ static unsigned long fcoe_ctlr_age_fcfs(struct fcoe_ctlr *fip)
 		}
 	}
 	put_cpu();
-
-	list_for_each_entry_safe(fcf, next, &del_list, list) {
-		/* Removes fcf from current list */
-		fcoe_sysfs_fcf_del(fcf);
-	}
-
 	if (sel_time && !fip->sel_fcf && !fip->sel_time) {
 		sel_time += msecs_to_jiffies(FCOE_CTLR_START_DELAY);
 		fip->sel_time = sel_time;
@@ -945,7 +821,6 @@ static int fcoe_ctlr_parse_adv(struct fcoe_ctlr *fip,
 			memcpy(fcf->fcf_mac,
 			       ((struct fip_mac_desc *)desc)->fd_mac,
 			       ETH_ALEN);
-			memcpy(fcf->fcoe_mac, fcf->fcf_mac, ETH_ALEN);
 			if (!is_valid_ether_addr(fcf->fcf_mac)) {
 				LIBFCOE_FIP_DBG(fip,
 					"Invalid MAC addr %pM in FIP adv\n",
@@ -1024,23 +899,23 @@ static void fcoe_ctlr_recv_adv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 {
 	struct fcoe_fcf *fcf;
 	struct fcoe_fcf new;
+	struct fcoe_fcf *found;
 	unsigned long sol_tov = msecs_to_jiffies(FCOE_CTRL_SOL_TOV);
 	int first = 0;
 	int mtu_valid;
-	int found = 0;
-	int rc = 0;
 
 	if (fcoe_ctlr_parse_adv(fip, skb, &new))
 		return;
 
 	mutex_lock(&fip->ctlr_mutex);
 	first = list_empty(&fip->fcfs);
+	found = NULL;
 	list_for_each_entry(fcf, &fip->fcfs, list) {
 		if (fcf->switch_name == new.switch_name &&
 		    fcf->fabric_name == new.fabric_name &&
 		    fcf->fc_map == new.fc_map &&
-		    ether_addr_equal(fcf->fcf_mac, new.fcf_mac)) {
-			found = 1;
+		    compare_ether_addr(fcf->fcf_mac, new.fcf_mac) == 0) {
+			found = fcf;
 			break;
 		}
 	}
@@ -1052,16 +927,9 @@ static void fcoe_ctlr_recv_adv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 		if (!fcf)
 			goto out;
 
+		fip->fcf_count++;
 		memcpy(fcf, &new, sizeof(new));
-		fcf->fip = fip;
-		rc = fcoe_sysfs_fcf_add(fcf);
-		if (rc) {
-			printk(KERN_ERR "Failed to allocate sysfs instance "
-			       "for FCF, fab %16.16llx mac %pM\n",
-			       new.fabric_name, new.fcf_mac);
-			kfree(fcf);
-			goto out;
-		}
+		list_add(&fcf->list, &fip->fcfs);
 	} else {
 		/*
 		 * Update the FCF's keep-alive descriptor flags.
@@ -1082,7 +950,6 @@ static void fcoe_ctlr_recv_adv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 		fcf->fka_period = new.fka_period;
 		memcpy(fcf->fcf_mac, new.fcf_mac, ETH_ALEN);
 	}
-
 	mtu_valid = fcoe_ctlr_mtu_valid(fcf);
 	fcf->time = jiffies;
 	if (!found)
@@ -1125,7 +992,6 @@ static void fcoe_ctlr_recv_adv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 		    time_before(fip->sel_time, fip->timer.expires))
 			mod_timer(&fip->timer, fip->sel_time);
 	}
-
 out:
 	mutex_unlock(&fip->ctlr_mutex);
 }
@@ -1143,8 +1009,7 @@ static void fcoe_ctlr_recv_els(struct fcoe_ctlr *fip, struct sk_buff *skb)
 	struct fc_frame_header *fh = NULL;
 	struct fip_desc *desc;
 	struct fip_encaps *els;
-	struct fcoe_fcf *sel;
-	struct fc_stats *stats;
+	struct fcoe_dev_stats *stats;
 	enum fip_desc_type els_dtype = 0;
 	u8 els_op;
 	u8 sub;
@@ -1172,8 +1037,7 @@ static void fcoe_ctlr_recv_els(struct fcoe_ctlr *fip, struct sk_buff *skb)
 			goto drop;
 		/* Drop ELS if there are duplicate critical descriptors */
 		if (desc->fip_dtype < 32) {
-			if ((desc->fip_dtype != FIP_DT_MAC) &&
-			    (desc_mask & 1U << desc->fip_dtype)) {
+			if (desc_mask & 1U << desc->fip_dtype) {
 				LIBFCOE_FIP_DBG(fip, "Duplicate Critical "
 						"Descriptors in FIP ELS\n");
 				goto drop;
@@ -1182,32 +1046,17 @@ static void fcoe_ctlr_recv_els(struct fcoe_ctlr *fip, struct sk_buff *skb)
 		}
 		switch (desc->fip_dtype) {
 		case FIP_DT_MAC:
-			sel = fip->sel_fcf;
 			if (desc_cnt == 1) {
 				LIBFCOE_FIP_DBG(fip, "FIP descriptors "
 						"received out of order\n");
 				goto drop;
 			}
-			/*
-			 * Some switch implementations send two MAC descriptors,
-			 * with first MAC(granted_mac) being the FPMA, and the
-			 * second one(fcoe_mac) is used as destination address
-			 * for sending/receiving FCoE packets. FIP traffic is
-			 * sent using fip_mac. For regular switches, both
-			 * fip_mac and fcoe_mac would be the same.
-			 */
-			if (desc_cnt == 2)
-				memcpy(granted_mac,
-				       ((struct fip_mac_desc *)desc)->fd_mac,
-				       ETH_ALEN);
 
 			if (dlen != sizeof(struct fip_mac_desc))
 				goto len_err;
-
-			if ((desc_cnt == 3) && (sel))
-				memcpy(sel->fcoe_mac,
-				       ((struct fip_mac_desc *)desc)->fd_mac,
-				       ETH_ALEN);
+			memcpy(granted_mac,
+			       ((struct fip_mac_desc *)desc)->fd_mac,
+			       ETH_ALEN);
 			break;
 		case FIP_DT_FLOGI:
 		case FIP_DT_FDISC:
@@ -1288,7 +1137,7 @@ static void fcoe_ctlr_recv_els(struct fcoe_ctlr *fip, struct sk_buff *skb)
 	fr_dev(fp) = lport;
 	fr_encaps(fp) = els_dtype;
 
-	stats = per_cpu_ptr(lport->stats, get_cpu());
+	stats = per_cpu_ptr(lport->dev_stats, get_cpu());
 	stats->RxFrames++;
 	stats->RxWords += skb->len / FIP_BPW;
 	put_cpu();
@@ -1330,16 +1179,8 @@ static void fcoe_ctlr_recv_clr_vlink(struct fcoe_ctlr *fip,
 
 	LIBFCOE_FIP_DBG(fip, "Clear Virtual Link received\n");
 
-	if (!fcf || !lport->port_id) {
-		/*
-		 * We are yet to select best FCF, but we got CVL in the
-		 * meantime. reset the ctlr and let it rediscover the FCF
-		 */
-		mutex_lock(&fip->ctlr_mutex);
-		fcoe_ctlr_reset(fip);
-		mutex_unlock(&fip->ctlr_mutex);
+	if (!fcf || !lport->port_id)
 		return;
-	}
 
 	/*
 	 * mask of required descriptors.  Validating each one clears its bit.
@@ -1379,7 +1220,7 @@ static void fcoe_ctlr_recv_clr_vlink(struct fcoe_ctlr *fip,
 			mp = (struct fip_mac_desc *)desc;
 			if (dlen < sizeof(*mp))
 				goto err;
-			if (!ether_addr_equal(mp->fd_mac, fcf->fcf_mac))
+			if (compare_ether_addr(mp->fd_mac, fcf->fcf_mac))
 				goto err;
 			desc_mask &= ~BIT(FIP_DT_MAC);
 			break;
@@ -1400,7 +1241,7 @@ static void fcoe_ctlr_recv_clr_vlink(struct fcoe_ctlr *fip,
 						      ntoh24(vp->fd_fc_id));
 			if (vn_port && (vn_port == lport)) {
 				mutex_lock(&fip->ctlr_mutex);
-				per_cpu_ptr(lport->stats,
+				per_cpu_ptr(lport->dev_stats,
 					    get_cpu())->VLinkFailureCount++;
 				put_cpu();
 				fcoe_ctlr_reset(fip);
@@ -1429,16 +1270,17 @@ static void fcoe_ctlr_recv_clr_vlink(struct fcoe_ctlr *fip,
 		 * No Vx_Port description. Clear all NPIV ports,
 		 * followed by physical port
 		 */
-		mutex_lock(&fip->ctlr_mutex);
-		per_cpu_ptr(lport->stats, get_cpu())->VLinkFailureCount++;
-		put_cpu();
-		fcoe_ctlr_reset(fip);
-		mutex_unlock(&fip->ctlr_mutex);
-
 		mutex_lock(&lport->lp_mutex);
 		list_for_each_entry(vn_port, &lport->vports, list)
 			fc_lport_reset(vn_port);
 		mutex_unlock(&lport->lp_mutex);
+
+		mutex_lock(&fip->ctlr_mutex);
+		per_cpu_ptr(lport->dev_stats,
+			    get_cpu())->VLinkFailureCount++;
+		put_cpu();
+		fcoe_ctlr_reset(fip);
+		mutex_unlock(&fip->ctlr_mutex);
 
 		fc_lport_reset(fip->lp);
 		fcoe_ctlr_solicit(fip, NULL);
@@ -1457,8 +1299,8 @@ static void fcoe_ctlr_recv_clr_vlink(struct fcoe_ctlr *fip,
 			 * 'port_id' is already validated, check MAC address and
 			 * wwpn
 			 */
-			if (!ether_addr_equal(fip->get_src_addr(vn_port),
-					      vp->fd_mac) ||
+			if (compare_ether_addr(fip->get_src_addr(vn_port),
+						vp->fd_mac) != 0 ||
 				get_unaligned_be64(&vp->fd_wwpn) !=
 							vn_port->wwpn)
 				continue;
@@ -1492,9 +1334,6 @@ err:
  */
 void fcoe_ctlr_recv(struct fcoe_ctlr *fip, struct sk_buff *skb)
 {
-	skb = skb_share_check(skb, GFP_ATOMIC);
-	if (!skb)
-		return;
 	skb_queue_tail(&fip->fip_recv_list, skb);
 	schedule_work(&fip->recv_work);
 }
@@ -1521,12 +1360,12 @@ static int fcoe_ctlr_recv_handler(struct fcoe_ctlr *fip, struct sk_buff *skb)
 		goto drop;
 	eh = eth_hdr(skb);
 	if (fip->mode == FIP_MODE_VN2VN) {
-		if (!ether_addr_equal(eh->h_dest, fip->ctl_src_addr) &&
-		    !ether_addr_equal(eh->h_dest, fcoe_all_vn2vn) &&
-		    !ether_addr_equal(eh->h_dest, fcoe_all_p2p))
+		if (compare_ether_addr(eh->h_dest, fip->ctl_src_addr) &&
+		    compare_ether_addr(eh->h_dest, fcoe_all_vn2vn) &&
+		    compare_ether_addr(eh->h_dest, fcoe_all_p2p))
 			goto drop;
-	} else if (!ether_addr_equal(eh->h_dest, fip->ctl_src_addr) &&
-		   !ether_addr_equal(eh->h_dest, fcoe_all_enode))
+	} else if (compare_ether_addr(eh->h_dest, fip->ctl_src_addr) &&
+		   compare_ether_addr(eh->h_dest, fcoe_all_enode))
 		goto drop;
 	fiph = (struct fip_header *)skb->data;
 	op = ntohs(fiph->fip_op);
@@ -1590,6 +1429,9 @@ static struct fcoe_fcf *fcoe_ctlr_select(struct fcoe_ctlr *fip)
 {
 	struct fcoe_fcf *fcf;
 	struct fcoe_fcf *best = fip->sel_fcf;
+	struct fcoe_fcf *first;
+
+	first = list_first_entry(&fip->fcfs, struct fcoe_fcf, list);
 
 	list_for_each_entry(fcf, &fip->fcfs, list) {
 		LIBFCOE_FIP_DBG(fip, "consider FCF fab %16.16llx "
@@ -1598,6 +1440,15 @@ static struct fcoe_fcf *fcoe_ctlr_select(struct fcoe_ctlr *fip)
 				fcf->fabric_name, fcf->vfid, fcf->fcf_mac,
 				fcf->fc_map, fcoe_ctlr_mtu_valid(fcf),
 				fcf->flogi_sent, fcf->pri);
+		if (fcf->fabric_name != first->fabric_name ||
+		    fcf->vfid != first->vfid ||
+		    fcf->fc_map != first->fc_map) {
+			LIBFCOE_FIP_DBG(fip, "Conflicting fabric, VFID, "
+					"or FC-MAP\n");
+			return NULL;
+		}
+		if (fcf->flogi_sent)
+			continue;
 		if (!fcoe_ctlr_fcf_usable(fcf)) {
 			LIBFCOE_FIP_DBG(fip, "FCF for fab %16.16llx "
 					"map %x %svalid %savailable\n",
@@ -1609,13 +1460,6 @@ static struct fcoe_fcf *fcoe_ctlr_select(struct fcoe_ctlr *fip)
 		}
 		if (!best || fcf->pri < best->pri || best->flogi_sent)
 			best = fcf;
-		if (fcf->fabric_name != best->fabric_name ||
-		    fcf->vfid != best->vfid ||
-		    fcf->fc_map != best->fc_map) {
-			LIBFCOE_FIP_DBG(fip, "Conflicting fabric, VFID, "
-					"or FC-MAP\n");
-			return NULL;
-		}
 	}
 	fip->sel_fcf = best;
 	if (best) {
@@ -1898,7 +1742,7 @@ int fcoe_ctlr_recv_flogi(struct fcoe_ctlr *fip, struct fc_lport *lport,
 		 * address_mode flag to use FC_OUI-based Ethernet DA.
 		 * Otherwise we use the FCoE gateway addr
 		 */
-		if (ether_addr_equal(sa, (u8[6])FC_FCOE_FLOGI_MAC)) {
+		if (!compare_ether_addr(sa, (u8[6])FC_FCOE_FLOGI_MAC)) {
 			fcoe_ctlr_map_dest(fip);
 		} else {
 			memcpy(fip->dest_addr, sa, ETH_ALEN);
@@ -2018,13 +1862,7 @@ static void fcoe_ctlr_vn_send(struct fcoe_ctlr *fip,
 	frame = (struct fip_frame *)skb->data;
 	memset(frame, 0, len);
 	memcpy(frame->eth.h_dest, dest, ETH_ALEN);
-
-	if (sub == FIP_SC_VN_BEACON) {
-		hton24(frame->eth.h_source, FIP_VN_FC_MAP);
-		hton24(frame->eth.h_source + 3, fip->port_id);
-	} else {
-		memcpy(frame->eth.h_source, fip->ctl_src_addr, ETH_ALEN);
-	}
+	memcpy(frame->eth.h_source, fip->ctl_src_addr, ETH_ALEN);
 	frame->eth.h_proto = htons(ETH_P_FIP);
 
 	frame->fip.fip_ver = FIP_VER_ENCAPS(FIP_VER);
@@ -2073,7 +1911,6 @@ static void fcoe_ctlr_vn_send(struct fcoe_ctlr *fip,
 
 	skb_put(skb, len);
 	skb->protocol = htons(ETH_P_FIP);
-	skb->priority = fip->priority;
 	skb_reset_mac_header(skb);
 	skb_reset_network_header(skb);
 
@@ -2132,11 +1969,7 @@ static struct fc_rport_operations fcoe_ctlr_vn_rport_ops = {
  */
 static void fcoe_ctlr_disc_stop_locked(struct fc_lport *lport)
 {
-	struct fc_rport_priv *rdata;
-
 	mutex_lock(&lport->disc.disc_mutex);
-	list_for_each_entry_rcu(rdata, &lport->disc.rports, peers)
-		lport->tt.rport_logoff(rdata);
 	lport->disc.disc_callback = NULL;
 	mutex_unlock(&lport->disc.disc_mutex);
 }
@@ -2193,7 +2026,7 @@ static void fcoe_ctlr_vn_restart(struct fcoe_ctlr *fip)
 	 */
 	port_id = fip->port_id;
 	if (fip->probe_tries)
-		port_id = prandom_u32_state(&fip->rnd_state) & 0xffff;
+		port_id = prandom32(&fip->rnd_state) & 0xffff;
 	else if (!port_id)
 		port_id = fip->lp->wwpn & 0xffff;
 	if (!port_id || port_id == 0xffff)
@@ -2202,7 +2035,7 @@ static void fcoe_ctlr_vn_restart(struct fcoe_ctlr *fip)
 
 	if (fip->probe_tries < FIP_VN_RLIM_COUNT) {
 		fip->probe_tries++;
-		wait = prandom_u32() % FIP_VN_PROBE_WAIT;
+		wait = random32() % FIP_VN_PROBE_WAIT;
 	} else
 		wait = FIP_VN_RLIM_INT;
 	mod_timer(&fip->timer, jiffies + msecs_to_jiffies(wait));
@@ -2218,7 +2051,7 @@ static void fcoe_ctlr_vn_restart(struct fcoe_ctlr *fip)
 static void fcoe_ctlr_vn_start(struct fcoe_ctlr *fip)
 {
 	fip->probe_tries = 0;
-	prandom_seed_state(&fip->rnd_state, fip->lp->wwpn);
+	prandom32_seed(&fip->rnd_state, fip->lp->wwpn);
 	fcoe_ctlr_vn_restart(fip);
 }
 
@@ -2835,7 +2668,7 @@ static void fcoe_ctlr_vn_timeout(struct fcoe_ctlr *fip)
 					  fcoe_all_vn2vn, 0);
 			fip->port_ka_time = jiffies +
 				 msecs_to_jiffies(FIP_VN_BEACON_INT +
-					(prandom_u32() % FIP_VN_BEACON_FUZZ));
+					(random32() % FIP_VN_BEACON_FUZZ));
 		}
 		if (time_before(fip->port_ka_time, next_time))
 			next_time = fip->port_ka_time;
@@ -2856,51 +2689,10 @@ unlock:
 }
 
 /**
- * fcoe_ctlr_mode_set() - Set or reset the ctlr's mode
- * @lport: The local port to be (re)configured
- * @fip:   The FCoE controller whose mode is changing
- * @fip_mode: The new fip mode
- *
- * Note that the we shouldn't be changing the libfc discovery settings
- * (fc_disc_config) while an lport is going through the libfc state
- * machine. The mode can only be changed when a fcoe_ctlr device is
- * disabled, so that should ensure that this routine is only called
- * when nothing is happening.
- */
-static void fcoe_ctlr_mode_set(struct fc_lport *lport, struct fcoe_ctlr *fip,
-			       enum fip_state fip_mode)
-{
-	void *priv;
-
-	WARN_ON(lport->state != LPORT_ST_RESET &&
-		lport->state != LPORT_ST_DISABLED);
-
-	if (fip_mode == FIP_MODE_VN2VN) {
-		lport->rport_priv_size = sizeof(struct fcoe_rport);
-		lport->point_to_multipoint = 1;
-		lport->tt.disc_recv_req = fcoe_ctlr_disc_recv;
-		lport->tt.disc_start = fcoe_ctlr_disc_start;
-		lport->tt.disc_stop = fcoe_ctlr_disc_stop;
-		lport->tt.disc_stop_final = fcoe_ctlr_disc_stop_final;
-		priv = fip;
-	} else {
-		lport->rport_priv_size = 0;
-		lport->point_to_multipoint = 0;
-		lport->tt.disc_recv_req = NULL;
-		lport->tt.disc_start = NULL;
-		lport->tt.disc_stop = NULL;
-		lport->tt.disc_stop_final = NULL;
-		priv = lport;
-	}
-
-	fc_disc_config(lport, priv);
-}
-
-/**
  * fcoe_libfc_config() - Sets up libfc related properties for local port
- * @lport:    The local port to configure libfc for
- * @fip:      The FCoE controller in use by the local port
- * @tt:       The libfc function template
+ * @lp: The local port to configure libfc for
+ * @fip: The FCoE controller in use by the local port
+ * @tt: The libfc function template
  * @init_fcp: If non-zero, the FCP portion of libfc should be initialized
  *
  * Returns : 0 for success
@@ -2915,51 +2707,21 @@ int fcoe_libfc_config(struct fc_lport *lport, struct fcoe_ctlr *fip,
 	fc_exch_init(lport);
 	fc_elsct_init(lport);
 	fc_lport_init(lport);
+	if (fip->mode == FIP_MODE_VN2VN)
+		lport->rport_priv_size = sizeof(struct fcoe_rport);
 	fc_rport_init(lport);
-	fc_disc_init(lport);
-	fcoe_ctlr_mode_set(lport, fip, fip->mode);
+	if (fip->mode == FIP_MODE_VN2VN) {
+		lport->point_to_multipoint = 1;
+		lport->tt.disc_recv_req = fcoe_ctlr_disc_recv;
+		lport->tt.disc_start = fcoe_ctlr_disc_start;
+		lport->tt.disc_stop = fcoe_ctlr_disc_stop;
+		lport->tt.disc_stop_final = fcoe_ctlr_disc_stop_final;
+		mutex_init(&lport->disc.disc_mutex);
+		INIT_LIST_HEAD(&lport->disc.rports);
+		lport->disc.priv = fip;
+	} else {
+		fc_disc_init(lport);
+	}
 	return 0;
 }
 EXPORT_SYMBOL_GPL(fcoe_libfc_config);
-
-void fcoe_fcf_get_selected(struct fcoe_fcf_device *fcf_dev)
-{
-	struct fcoe_ctlr_device *ctlr_dev = fcoe_fcf_dev_to_ctlr_dev(fcf_dev);
-	struct fcoe_ctlr *fip = fcoe_ctlr_device_priv(ctlr_dev);
-	struct fcoe_fcf *fcf;
-
-	mutex_lock(&fip->ctlr_mutex);
-	mutex_lock(&ctlr_dev->lock);
-
-	fcf = fcoe_fcf_device_priv(fcf_dev);
-	if (fcf)
-		fcf_dev->selected = (fcf == fip->sel_fcf) ? 1 : 0;
-	else
-		fcf_dev->selected = 0;
-
-	mutex_unlock(&ctlr_dev->lock);
-	mutex_unlock(&fip->ctlr_mutex);
-}
-EXPORT_SYMBOL(fcoe_fcf_get_selected);
-
-void fcoe_ctlr_set_fip_mode(struct fcoe_ctlr_device *ctlr_dev)
-{
-	struct fcoe_ctlr *ctlr = fcoe_ctlr_device_priv(ctlr_dev);
-	struct fc_lport *lport = ctlr->lp;
-
-	mutex_lock(&ctlr->ctlr_mutex);
-	switch (ctlr_dev->mode) {
-	case FIP_CONN_TYPE_VN2VN:
-		ctlr->mode = FIP_MODE_VN2VN;
-		break;
-	case FIP_CONN_TYPE_FABRIC:
-	default:
-		ctlr->mode = FIP_MODE_FABRIC;
-		break;
-	}
-
-	mutex_unlock(&ctlr->ctlr_mutex);
-
-	fcoe_ctlr_mode_set(lport, ctlr, ctlr->mode);
-}
-EXPORT_SYMBOL(fcoe_ctlr_set_fip_mode);

@@ -14,7 +14,7 @@
  */
 
 /**
- * struct ad7606_platform_data - platform/board specific information
+ * struct ad7606_platform_data - platform/board specifc information
  * @default_os:		default oversampling value {0, 2, 4, 8, 16, 32, 64}
  * @default_range:	default range +/-{5000, 10000} mVolt
  * @gpio_convst:	number of gpio connected to the CONVST pin
@@ -41,8 +41,8 @@ struct ad7606_platform_data {
 };
 
 /**
- * struct ad7606_chip_info - chip specific information
- * @name:		identification string for chip
+ * struct ad7606_chip_info - chip specifc information
+ * @name:		indentification string for chip
  * @int_vref_mv:	the internal reference voltage
  * @channels:		channel specification
  * @num_channels:	number of channels
@@ -50,8 +50,10 @@ struct ad7606_platform_data {
 
 struct ad7606_chip_info {
 	const char			*name;
+	u8				bits;
+	char				sign;
 	u16				int_vref_mv;
-	const struct iio_chan_spec	*channels;
+	struct iio_chan_spec		*channels;
 	unsigned			num_channels;
 };
 
@@ -66,10 +68,18 @@ struct ad7606_state {
 	struct regulator		*reg;
 	struct work_struct		poll_work;
 	wait_queue_head_t		wq_data_avail;
+	size_t				d_size;
 	const struct ad7606_bus_ops	*bops;
+	int				irq;
+	unsigned			id;
 	unsigned			range;
 	unsigned			oversampling;
 	bool				done;
+	bool				have_frstdata;
+	bool				have_os;
+	bool				have_stby;
+	bool				have_reset;
+	bool				have_range;
 	void __iomem			*base_address;
 
 	/*
@@ -90,7 +100,7 @@ void ad7606_resume(struct iio_dev *indio_dev);
 struct iio_dev *ad7606_probe(struct device *dev, int irq,
 			      void __iomem *base_address, unsigned id,
 			      const struct ad7606_bus_ops *bops);
-int ad7606_remove(struct iio_dev *indio_dev, int irq);
+int ad7606_remove(struct iio_dev *indio_dev);
 int ad7606_reset(struct ad7606_state *st);
 
 enum ad7606_supported_device_ids {
@@ -99,6 +109,7 @@ enum ad7606_supported_device_ids {
 	ID_AD7606_4
 };
 
+int ad7606_scan_from_ring(struct iio_dev *indio_dev, unsigned ch);
 int ad7606_register_ring_funcs_and_init(struct iio_dev *indio_dev);
 void ad7606_ring_cleanup(struct iio_dev *indio_dev);
 #endif /* IIO_ADC_AD7606_H_ */

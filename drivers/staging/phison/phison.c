@@ -12,6 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/init.h>
 #include <linux/blkdev.h>
 #include <linux/delay.h>
 #include <linux/device.h>
@@ -68,8 +69,8 @@ static int phison_init_one(struct pci_dev *pdev, const struct pci_device_id *id)
 	return ret;
 }
 
-static const struct pci_device_id phison_pci_tbl[] = {
-	{ PCI_DEVICE(PCI_VENDOR_ID_PHISON, PCI_DEVICE_ID_PS5000),
+static DEFINE_PCI_DEVICE_TABLE(phison_pci_tbl) = {
+	{ PCI_VENDOR_ID_PHISON, PCI_DEVICE_ID_PS5000, PCI_ANY_ID, PCI_ANY_ID,
 	  PCI_CLASS_STORAGE_IDE << 8, 0xffff00, 0 },
 	{ 0, },
 };
@@ -86,7 +87,18 @@ static struct pci_driver phison_pci_driver = {
 #endif
 };
 
-module_pci_driver(phison_pci_driver);
+static int __init phison_ide_init(void)
+{
+	return pci_register_driver(&phison_pci_driver);
+}
+
+static void __exit phison_ide_exit(void)
+{
+	pci_unregister_driver(&phison_pci_driver);
+}
+
+module_init(phison_ide_init);
+module_exit(phison_ide_exit);
 
 MODULE_AUTHOR("Evan Ko");
 MODULE_DESCRIPTION("PCIE driver module for PHISON PS5000 E-BOX");

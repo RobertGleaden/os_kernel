@@ -26,8 +26,8 @@
  *
  */
 
-#include <linux/export.h>
 #include <linux/kernel.h>
+#include <linux/module.h>
 #include <linux/types.h>
 #include <linux/vmalloc.h>
 #include <linux/init.h>
@@ -37,11 +37,17 @@
 #include <linux/io.h>
 #include <asm/mmu.h>
 #include <asm/sections.h>
-#include <asm/fixmap.h>
+
+#define flush_HPTE(X, va, pg)	_tlbie(va)
 
 unsigned long ioremap_base;
 unsigned long ioremap_bot;
 EXPORT_SYMBOL(ioremap_bot);
+
+/* The maximum lowmem defaults to 768Mb, but this can be configured to
+ * another value.
+ */
+#define MAX_LOW_MEM	CONFIG_LOWMEM_SIZE
 
 #ifndef CONFIG_SMP
 struct pgtable_cache_struct quicklists;
@@ -69,13 +75,13 @@ static void __iomem *__ioremap(phys_addr_t addr, unsigned long size,
 	 *
 	 * However, allow remap of rootfs: TBD
 	 */
-
 	if (mem_init_done &&
 		p >= memory_start && p < virt_to_phys(high_memory) &&
-		!(p >= __virt_to_phys((phys_addr_t)__bss_stop) &&
-		p < __virt_to_phys((phys_addr_t)__bss_stop))) {
-		pr_warn("__ioremap(): phys addr "PTE_FMT" is RAM lr %pf\n",
-			(unsigned long)p, __builtin_return_address(0));
+		!(p >= virt_to_phys((unsigned long)&__bss_stop) &&
+		p < virt_to_phys((unsigned long)__bss_stop))) {
+		printk(KERN_WARNING "__ioremap(): phys addr "PTE_FMT
+			" is RAM lr %p\n", (unsigned long)p,
+			__builtin_return_address(0));
 		return NULL;
 	}
 
@@ -126,10 +132,9 @@ void __iomem *ioremap(phys_addr_t addr, unsigned long size)
 }
 EXPORT_SYMBOL(ioremap);
 
-void iounmap(void __iomem *addr)
+void iounmap(void *addr)
 {
-	if ((__force void *)addr > high_memory &&
-					(unsigned long) addr < ioremap_bot)
+	if (addr > high_memory && (unsigned long) addr < ioremap_bot)
 		vfree((void *) (PAGE_MASK & (unsigned long) addr));
 }
 EXPORT_SYMBOL(iounmap);
@@ -151,7 +156,8 @@ int map_page(unsigned long va, phys_addr_t pa, int flags)
 		set_pte_at(&init_mm, va, pg, pfn_pte(pa >> PAGE_SHIFT,
 				__pgprot(flags)));
 		if (unlikely(mem_init_done))
-			_tlbie(va);
+			flush_HPTE(0, va, pmd_val(*pd));
+			/* flush_HPTE(0, va, pg); */
 	}
 	return err;
 }
@@ -165,7 +171,7 @@ void __init mapin_ram(void)
 
 	v = CONFIG_KERNEL_START;
 	p = memory_start;
-	for (s = 0; s < lowmem_size; s += PAGE_SIZE) {
+	for (s = 0; s < memory_size; s += PAGE_SIZE) {
 		f = _PAGE_PRESENT | _PAGE_ACCESSED |
 				_PAGE_SHARED | _PAGE_HWEXEC;
 		if ((char *) v < _stext || (char *) v >= _etext)
@@ -247,14 +253,4 @@ __init_refok pte_t *pte_alloc_one_kernel(struct mm_struct *mm,
 			clear_page(pte);
 	}
 	return pte;
-}
-
-void __set_fixmap(enum fixed_addresses idx, phys_addr_t phys, pgprot_t flags)
-{
-	unsigned long address = __fix_to_virt(idx);
-
-	if (idx >= __end_of_fixed_addresses)
-		BUG();
-
-	map_page(address, phys, pgprot_val(flags));
 }

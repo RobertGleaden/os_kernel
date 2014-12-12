@@ -9,14 +9,14 @@
  */
 
 #include <linux/fs.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/stat.h>
 #include <linux/time.h>
 #include <linux/namei.h>
 #include <linux/poll.h>
 
 
-static loff_t bad_file_llseek(struct file *file, loff_t offset, int whence)
+static loff_t bad_file_llseek(struct file *file, loff_t offset, int origin)
 {
 	return -EIO;
 }
@@ -45,7 +45,7 @@ static ssize_t bad_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	return -EIO;
 }
 
-static int bad_file_readdir(struct file *file, struct dir_context *ctx)
+static int bad_file_readdir(struct file *filp, void *dirent, filldir_t filldir)
 {
 	return -EIO;
 }
@@ -152,7 +152,7 @@ static const struct file_operations bad_file_ops =
 	.write		= bad_file_write,
 	.aio_read	= bad_file_aio_read,
 	.aio_write	= bad_file_aio_write,
-	.iterate	= bad_file_readdir,
+	.readdir	= bad_file_readdir,
 	.poll		= bad_file_poll,
 	.unlocked_ioctl	= bad_file_unlocked_ioctl,
 	.compat_ioctl	= bad_file_compat_ioctl,
@@ -173,13 +173,13 @@ static const struct file_operations bad_file_ops =
 };
 
 static int bad_inode_create (struct inode *dir, struct dentry *dentry,
-		umode_t mode, bool excl)
+		int mode, struct nameidata *nd)
 {
 	return -EIO;
 }
 
 static struct dentry *bad_inode_lookup(struct inode *dir,
-			struct dentry *dentry, unsigned int flags)
+			struct dentry *dentry, struct nameidata *nd)
 {
 	return ERR_PTR(-EIO);
 }
@@ -202,7 +202,7 @@ static int bad_inode_symlink (struct inode *dir, struct dentry *dentry,
 }
 
 static int bad_inode_mkdir(struct inode *dir, struct dentry *dentry,
-			umode_t mode)
+			int mode)
 {
 	return -EIO;
 }
@@ -213,7 +213,7 @@ static int bad_inode_rmdir (struct inode *dir, struct dentry *dentry)
 }
 
 static int bad_inode_mknod (struct inode *dir, struct dentry *dentry,
-			umode_t mode, dev_t rdev)
+			int mode, dev_t rdev)
 {
 	return -EIO;
 }
@@ -292,6 +292,7 @@ static const struct inode_operations bad_inode_ops =
 	.getxattr	= bad_inode_getxattr,
 	.listxattr	= bad_inode_listxattr,
 	.removexattr	= bad_inode_removexattr,
+	/* truncate_range returns void */
 };
 
 

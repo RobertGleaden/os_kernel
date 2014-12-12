@@ -1,28 +1,18 @@
 /******************************************************************************
+ * rtl871x_mp.c
  *
- * Copyright(c) 2007 - 2010 Realtek Corporation. All rights reserved.
+ * Description :
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
+ * Author :
  *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
+ * History :
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ * Copyright 2007, Realtek Corp.
  *
- * Modifications for inclusion into the Linux staging tree are
- * Copyright(c) 2010 Larry Finger. All rights reserved.
+ * The contents of this file is the sole property of Realtek Corp. It can not be
+ * be used, copied or modified without written permission from Realtek Corp.
  *
- * Contact information:
- * WLAN FAE <wlanfae@realtek.com>
- * Larry Finger <Larry.Finger@lwfinger.net>
- *
- ******************************************************************************/
+*******************************************************************************/
 #define _RTL871X_MP_C_
 
 #include "osdep_service.h"
@@ -53,9 +43,8 @@ static int init_mp_priv(struct mp_priv *pmp_priv)
 	_init_mp_priv_(pmp_priv);
 	_init_queue(&pmp_priv->free_mp_xmitqueue);
 	pmp_priv->pallocated_mp_xmitframe_buf = NULL;
-	pmp_priv->pallocated_mp_xmitframe_buf = kmalloc(NR_MP_XMITFRAME *
-							sizeof(struct mp_xmit_frame) + 4,
-							GFP_ATOMIC);
+	pmp_priv->pallocated_mp_xmitframe_buf = _malloc(NR_MP_XMITFRAME *
+					 sizeof(struct mp_xmit_frame) + 4);
 	if (pmp_priv->pallocated_mp_xmitframe_buf == NULL) {
 		res = _FAIL;
 		goto _exit_init_mp_priv;
@@ -81,8 +70,9 @@ _exit_init_mp_priv:
 
 static int free_mp_priv(struct mp_priv *pmp_priv)
 {
+	int res = 0;
 	kfree(pmp_priv->pallocated_mp_xmitframe_buf);
-	return 0;
+	return res;
 }
 
 void mp871xinit(struct _adapter *padapter)
@@ -110,7 +100,7 @@ static u32 fw_iocmd_read(struct _adapter *pAdapter, struct IOCMD_STRUCT iocmd)
 	u16 iocmd_value	= iocmd.value;
 	u8 iocmd_idx	= iocmd.index;
 
-	cmd32 = (iocmd_class << 24) | (iocmd_value << 8) | iocmd_idx;
+	cmd32 = (iocmd_class << 24) | (iocmd_value << 8) | iocmd_idx ;
 	if (r8712_fw_cmd(pAdapter, cmd32))
 		r8712_fw_cmd_data(pAdapter, &val32, 1);
 	else
@@ -128,7 +118,7 @@ static u8 fw_iocmd_write(struct _adapter *pAdapter,
 
 	r8712_fw_cmd_data(pAdapter, &value, 0);
 	msleep(100);
-	cmd32 = (iocmd_class << 24) | (iocmd_value << 8) | iocmd_idx;
+	cmd32 = (iocmd_class << 24) | (iocmd_value << 8) | iocmd_idx ;
 	return r8712_fw_cmd(pAdapter, cmd32);
 }
 
@@ -189,8 +179,8 @@ u32 r8712_rf_reg_read(struct _adapter *pAdapter, u8 path, u8 offset)
 	u32 rf_data;
 	struct IOCMD_STRUCT iocmd;
 
-	iocmd.cmdclass	= IOCMD_CLASS_BB_RF;
-	iocmd.value	= rf_addr;
+	iocmd.cmdclass	= IOCMD_CLASS_BB_RF ;
+	iocmd.value	= rf_addr ;
 	iocmd.index	= IOCMD_RF_READ_IDX;
 	rf_data = fw_iocmd_read(pAdapter, iocmd);
 	return rf_data;
@@ -281,10 +271,11 @@ void r8712_SetChannel(struct _adapter *pAdapter)
 	struct SetChannel_parm *pparm = NULL;
 	u16 code = GEN_CMD_CODE(_SetChannel);
 
-	pcmd = kmalloc(sizeof(struct cmd_obj), GFP_ATOMIC);
+	pcmd = (struct cmd_obj *)_malloc(sizeof(struct cmd_obj));
 	if (pcmd == NULL)
 		return;
-	pparm = kmalloc(sizeof(struct SetChannel_parm), GFP_ATOMIC);
+	pparm = (struct SetChannel_parm *)_malloc(sizeof(struct
+					 SetChannel_parm));
 	if (pparm == NULL) {
 		kfree(pcmd);
 		return;

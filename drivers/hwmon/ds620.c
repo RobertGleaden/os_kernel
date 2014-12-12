@@ -75,13 +75,33 @@ struct ds620_data {
 	s16 temp[3];		/* Register values, word */
 };
 
+/*
+ *  Temperature registers are word-sized.
+ *  DS620 uses a high-byte first convention, which is exactly opposite to
+ *  the SMBus standard.
+ */
+static int ds620_read_temp(struct i2c_client *client, u8 reg)
+{
+	int ret;
+
+	ret = i2c_smbus_read_word_data(client, reg);
+	if (ret < 0)
+		return ret;
+	return swab16(ret);
+}
+
+static int ds620_write_temp(struct i2c_client *client, u8 reg, u16 value)
+{
+	return i2c_smbus_write_word_data(client, reg, swab16(value));
+}
+
 static void ds620_init_client(struct i2c_client *client)
 {
-	struct ds620_platform_data *ds620_info = dev_get_platdata(&client->dev);
+	struct ds620_platform_data *ds620_info = client->dev.platform_data;
 	u16 conf, new_conf;
 
 	new_conf = conf =
-	    i2c_smbus_read_word_swapped(client, DS620_REG_CONF);
+	    swab16(i2c_smbus_read_word_data(client, DS620_REG_CONF));
 
 	/* switch to continuous conversion mode */
 	new_conf &= ~DS620_REG_CONFIG_1SHOT;
@@ -98,7 +118,8 @@ static void ds620_init_client(struct i2c_client *client)
 	new_conf |= DS620_REG_CONFIG_R1 | DS620_REG_CONFIG_R0;
 
 	if (conf != new_conf)
-		i2c_smbus_write_word_swapped(client, DS620_REG_CONF, new_conf);
+		i2c_smbus_write_word_data(client, DS620_REG_CONF,
+					  swab16(new_conf));
 
 	/* start conversion */
 	i2c_smbus_write_byte(client, DS620_COM_START);
@@ -120,8 +141,8 @@ static struct ds620_data *ds620_update_client(struct device *dev)
 		dev_dbg(&client->dev, "Starting ds620 update\n");
 
 		for (i = 0; i < ARRAY_SIZE(data->temp); i++) {
-			res = i2c_smbus_read_word_swapped(client,
-							  DS620_REG_TEMP[i]);
+			res = ds620_read_temp(client,
+					      DS620_REG_TEMP[i]);
 			if (res < 0) {
 				ret = ERR_PTR(res);
 				goto abort;
@@ -161,7 +182,7 @@ static ssize_t set_temp(struct device *dev, struct device_attribute *da,
 	struct i2c_client *client = to_i2c_client(dev);
 	struct ds620_data *data = i2c_get_clientdata(client);
 
-	res = kstrtol(buf, 10, &val);
+	res = strict_strtol(buf, 10, &val);
 
 	if (res)
 		return res;
@@ -170,8 +191,8 @@ static ssize_t set_temp(struct device *dev, struct device_attribute *da,
 
 	mutex_lock(&data->update_lock);
 	data->temp[attr->index] = val;
-	i2c_smbus_write_word_swapped(client, DS620_REG_TEMP[attr->index],
-				     data->temp[attr->index]);
+	ds620_write_temp(client, DS620_REG_TEMP[attr->index],
+			 data->temp[attr->index]);
 	mutex_unlock(&data->update_lock);
 	return count;
 }
@@ -189,15 +210,16 @@ static ssize_t show_alarm(struct device *dev, struct device_attribute *da,
 		return PTR_ERR(data);
 
 	/* reset alarms if necessary */
-	res = i2c_smbus_read_word_swapped(client, DS620_REG_CONF);
+	res = i2c_smbus_read_word_data(client, DS620_REG_CONF);
 	if (res < 0)
 		return res;
 
-	new_conf = conf = res;
+	conf = swab16(res);
+	new_conf = conf;
 	new_conf &= ~attr->index;
 	if (conf != new_conf) {
-		res = i2c_smbus_write_word_swapped(client, DS620_REG_CONF,
-						   new_conf);
+		res = i2c_smbus_write_word_data(client, DS620_REG_CONF,
+						swab16(new_conf));
 		if (res < 0)
 			return res;
 	}
@@ -232,10 +254,11 @@ static int ds620_probe(struct i2c_client *client,
 	struct ds620_data *data;
 	int err;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct ds620_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct ds620_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->update_lock);
@@ -246,7 +269,7 @@ static int ds620_probe(struct i2c_client *client,
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&client->dev.kobj, &ds620_group);
 	if (err)
-		return err;
+		goto exit_free;
 
 	data->hwmon_dev = hwmon_device_register(&client->dev);
 	if (IS_ERR(data->hwmon_dev)) {
@@ -260,6 +283,9 @@ static int ds620_probe(struct i2c_client *client,
 
 exit_remove_files:
 	sysfs_remove_group(&client->dev.kobj, &ds620_group);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -269,6 +295,8 @@ static int ds620_remove(struct i2c_client *client)
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &ds620_group);
+
+	kfree(data);
 
 	return 0;
 }
@@ -291,8 +319,19 @@ static struct i2c_driver ds620_driver = {
 	.id_table = ds620_id,
 };
 
-module_i2c_driver(ds620_driver);
+static int __init ds620_init(void)
+{
+	return i2c_add_driver(&ds620_driver);
+}
+
+static void __exit ds620_exit(void)
+{
+	i2c_del_driver(&ds620_driver);
+}
 
 MODULE_AUTHOR("Roland Stigge <stigge@antcom.de>");
 MODULE_DESCRIPTION("DS620 driver");
 MODULE_LICENSE("GPL");
+
+module_init(ds620_init);
+module_exit(ds620_exit);

@@ -26,7 +26,6 @@
 
 #undef HAVE_REALLY_SLOW_DMA_CONTROLLER
 
-#include <linux/export.h>
 #include <sound/core.h>
 #include <asm/dma.h>
 
@@ -81,7 +80,7 @@ EXPORT_SYMBOL(snd_dma_disable);
  * @dma: the dma number
  * @size: the dma transfer size
  *
- * Return: The current pointer in DMA transfer buffer in bytes.
+ * Returns the current pointer in DMA tranfer buffer in bytes
  */
 unsigned int snd_dma_pointer(unsigned long dma, unsigned int size)
 {
@@ -106,7 +105,7 @@ unsigned int snd_dma_pointer(unsigned long dma, unsigned int size)
 		result = result1;
 #ifdef CONFIG_SND_DEBUG
 	if (result > size)
-		pr_err("ALSA: pointer (0x%x) for DMA #%ld is greater than transfer size (0x%x)\n", result, dma, size);
+		snd_printk(KERN_ERR "pointer (0x%x) for DMA #%ld is greater than transfer size (0x%x)\n", result, dma, size);
 #endif
 	if (result >= size || result == 0)
 		return 0;

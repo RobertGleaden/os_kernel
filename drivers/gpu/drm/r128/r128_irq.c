@@ -30,8 +30,9 @@
  *    Eric Anholt <anholt@FreeBSD.org>
  */
 
-#include <drm/drmP.h>
-#include <drm/r128_drm.h>
+#include "drmP.h"
+#include "drm.h"
+#include "r128_drm.h"
 #include "r128_drv.h"
 
 u32 r128_get_vblank_counter(struct drm_device *dev, int crtc)
@@ -44,7 +45,7 @@ u32 r128_get_vblank_counter(struct drm_device *dev, int crtc)
 	return atomic_read(&dev_priv->vbl_received);
 }
 
-irqreturn_t r128_driver_irq_handler(int irq, void *arg)
+irqreturn_t r128_driver_irq_handler(DRM_IRQ_ARGS)
 {
 	struct drm_device *dev = (struct drm_device *) arg;
 	drm_r128_private_t *dev_priv = (drm_r128_private_t *) dev->dev_private;

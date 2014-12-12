@@ -105,13 +105,12 @@
 #include <linux/delay.h>
 #include <linux/ide.h>
 #include <linux/init.h>
-#include <linux/module.h>
 
 #include <asm/io.h>
 
 #define DRV_NAME "cmd640"
 
-static bool cmd640_vlb;
+static int cmd640_vlb;
 
 /*
  * CMD640 specific registers definition.
@@ -685,7 +684,7 @@ static int pci_conf2(void)
 	return 0;
 }
 
-static const struct ide_port_info cmd640_port_info __initconst = {
+static const struct ide_port_info cmd640_port_info __initdata = {
 	.chipset		= ide_cmd640,
 	.host_flags		= IDE_HFLAG_SERIALIZE |
 				  IDE_HFLAG_NO_DMA |

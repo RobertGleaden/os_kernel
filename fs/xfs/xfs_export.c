@@ -16,21 +16,20 @@
  * Inc.,  51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 #include "xfs.h"
-#include "xfs_format.h"
-#include "xfs_log_format.h"
-#include "xfs_trans_resv.h"
+#include "xfs_types.h"
+#include "xfs_inum.h"
+#include "xfs_log.h"
+#include "xfs_trans.h"
 #include "xfs_sb.h"
 #include "xfs_ag.h"
-#include "xfs_mount.h"
-#include "xfs_da_format.h"
 #include "xfs_dir2.h"
+#include "xfs_mount.h"
 #include "xfs_export.h"
+#include "xfs_vnodeops.h"
+#include "xfs_bmap_btree.h"
 #include "xfs_inode.h"
-#include "xfs_trans.h"
 #include "xfs_inode_item.h"
 #include "xfs_trace.h"
-#include "xfs_icache.h"
-#include "xfs_log.h"
 
 /*
  * Note that we only accept fileids which are long enough rather than allow
@@ -49,23 +48,24 @@ static int xfs_fileid_length(int fileid_type)
 	case FILEID_INO32_GEN_PARENT | XFS_FILEID_TYPE_64FLAG:
 		return 6;
 	}
-	return FILEID_INVALID;
+	return 255; /* invalid */
 }
 
 STATIC int
 xfs_fs_encode_fh(
-	struct inode	*inode,
-	__u32		*fh,
-	int		*max_len,
-	struct inode	*parent)
+	struct dentry		*dentry,
+	__u32			*fh,
+	int			*max_len,
+	int			connectable)
 {
 	struct fid		*fid = (struct fid *)fh;
 	struct xfs_fid64	*fid64 = (struct xfs_fid64 *)fh;
+	struct inode		*inode = dentry->d_inode;
 	int			fileid_type;
 	int			len;
 
 	/* Directories don't need their parent encoded, they have ".." */
-	if (!parent)
+	if (S_ISDIR(inode->i_mode) || !connectable)
 		fileid_type = FILEID_INO32_GEN;
 	else
 		fileid_type = FILEID_INO32_GEN_PARENT;
@@ -91,25 +91,29 @@ xfs_fs_encode_fh(
 	len = xfs_fileid_length(fileid_type);
 	if (*max_len < len) {
 		*max_len = len;
-		return FILEID_INVALID;
+		return 255;
 	}
 	*max_len = len;
 
 	switch (fileid_type) {
 	case FILEID_INO32_GEN_PARENT:
-		fid->i32.parent_ino = XFS_I(parent)->i_ino;
-		fid->i32.parent_gen = parent->i_generation;
+		spin_lock(&dentry->d_lock);
+		fid->i32.parent_ino = dentry->d_parent->d_inode->i_ino;
+		fid->i32.parent_gen = dentry->d_parent->d_inode->i_generation;
+		spin_unlock(&dentry->d_lock);
 		/*FALLTHRU*/
 	case FILEID_INO32_GEN:
-		fid->i32.ino = XFS_I(inode)->i_ino;
+		fid->i32.ino = inode->i_ino;
 		fid->i32.gen = inode->i_generation;
 		break;
 	case FILEID_INO32_GEN_PARENT | XFS_FILEID_TYPE_64FLAG:
-		fid64->parent_ino = XFS_I(parent)->i_ino;
-		fid64->parent_gen = parent->i_generation;
+		spin_lock(&dentry->d_lock);
+		fid64->parent_ino = dentry->d_parent->d_inode->i_ino;
+		fid64->parent_gen = dentry->d_parent->d_inode->i_generation;
+		spin_unlock(&dentry->d_lock);
 		/*FALLTHRU*/
 	case FILEID_INO32_GEN | XFS_FILEID_TYPE_64FLAG:
-		fid64->ino = XFS_I(inode)->i_ino;
+		fid64->ino = inode->i_ino;
 		fid64->gen = inode->i_generation;
 		break;
 	}
@@ -191,9 +195,6 @@ xfs_fs_fh_to_parent(struct super_block *sb, struct fid *fid,
 	struct xfs_fid64	*fid64 = (struct xfs_fid64 *)fid;
 	struct inode		*inode = NULL;
 
-	if (fh_len < xfs_fileid_length(fileid_type))
-		return NULL;
-
 	switch (fileid_type) {
 	case FILEID_INO32_GEN_PARENT:
 		inode = xfs_nfs_get_inode(sb, fid->i32.parent_ino,
@@ -228,16 +229,16 @@ xfs_fs_nfs_commit_metadata(
 {
 	struct xfs_inode	*ip = XFS_I(inode);
 	struct xfs_mount	*mp = ip->i_mount;
-	xfs_lsn_t		lsn = 0;
+	int			error = 0;
 
 	xfs_ilock(ip, XFS_ILOCK_SHARED);
-	if (xfs_ipincount(ip))
-		lsn = ip->i_itemp->ili_last_lsn;
+	if (xfs_ipincount(ip)) {
+		error = _xfs_log_force_lsn(mp, ip->i_itemp->ili_last_lsn,
+				XFS_LOG_SYNC, NULL);
+	}
 	xfs_iunlock(ip, XFS_ILOCK_SHARED);
 
-	if (!lsn)
-		return 0;
-	return -_xfs_log_force_lsn(mp, lsn, XFS_LOG_SYNC, NULL);
+	return error;
 }
 
 const struct export_operations xfs_export_operations = {

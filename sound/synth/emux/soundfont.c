@@ -27,7 +27,6 @@
  */
 #include <asm/uaccess.h>
 #include <linux/slab.h>
-#include <linux/export.h>
 #include <sound/core.h>
 #include <sound/soundfont.h>
 #include <sound/seq_oss_legacy.h>
@@ -1021,7 +1020,6 @@ load_guspatch(struct snd_sf_list *sflist, const char __user *data,
 			 data, count);
 		if (rc < 0) {
 			sf_sample_delete(sflist, sf, smp);
-			kfree(zone);
 			return rc;
 		}
 		/* memory offset is updated after */

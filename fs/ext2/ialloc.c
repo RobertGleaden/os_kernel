@@ -81,6 +81,7 @@ static void ext2_release_inode(struct super_block *sb, int group, int dir)
 	spin_unlock(sb_bgl_lock(EXT2_SB(sb), group));
 	if (dir)
 		percpu_counter_dec(&EXT2_SB(sb)->s_dirs_counter);
+	sb->s_dirt = 1;
 	mark_buffer_dirty(bh);
 }
 
@@ -118,6 +119,7 @@ void ext2_free_inode (struct inode * inode)
 	 * as writing the quota to disk may need the lock as well.
 	 */
 	/* Quota is already initialized in iput() */
+	ext2_xattr_delete_inode(inode);
 	dquot_free_inode(inode);
 	dquot_drop(inode);
 
@@ -284,7 +286,7 @@ static int find_group_orlov(struct super_block *sb, struct inode *parent)
 		int best_ndir = inodes_per_group;
 		int best_group = -1;
 
-		group = prandom_u32();
+		get_random_bytes(&group, sizeof(group));
 		parent_group = (unsigned)group % ngroups;
 		for (i = 0; i < ngroups; i++) {
 			group = (parent_group + i) % ngroups;
@@ -427,7 +429,7 @@ found:
 	return group;
 }
 
-struct inode *ext2_new_inode(struct inode *dir, umode_t mode,
+struct inode *ext2_new_inode(struct inode *dir, int mode,
 			     const struct qstr *qstr)
 {
 	struct super_block *sb;
@@ -541,6 +543,7 @@ got:
 	}
 	spin_unlock(sb_bgl_lock(sbi, group));
 
+	sb->s_dirt = 1;
 	mark_buffer_dirty(bh2);
 	if (test_opt(sb, GRPID)) {
 		inode->i_mode = mode;
@@ -570,11 +573,8 @@ got:
 	inode->i_generation = sbi->s_next_generation++;
 	spin_unlock(&sbi->s_next_gen_lock);
 	if (insert_inode_locked(inode) < 0) {
-		ext2_error(sb, "ext2_new_inode",
-			   "inode number already in use - inode=%lu",
-			   (unsigned long) ino);
-		err = -EIO;
-		goto fail;
+		err = -EINVAL;
+		goto fail_drop;
 	}
 
 	dquot_initialize(inode);
@@ -601,7 +601,7 @@ fail_free_drop:
 fail_drop:
 	dquot_drop(inode);
 	inode->i_flags |= S_NOQUOTA;
-	clear_nlink(inode);
+	inode->i_nlink = 0;
 	unlock_new_inode(inode);
 	iput(inode);
 	return ERR_PTR(err);
@@ -643,7 +643,6 @@ unsigned long ext2_count_free_inodes (struct super_block * sb)
 	}
 	brelse(bitmap_bh);
 	printk("ext2_count_free_inodes: stored = %lu, computed = %lu, %lu\n",
-		(unsigned long)
 		percpu_counter_read(&EXT2_SB(sb)->s_freeinodes_counter),
 		desc_count, bitmap_count);
 	return desc_count;

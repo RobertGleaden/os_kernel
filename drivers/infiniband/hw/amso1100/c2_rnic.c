@@ -439,10 +439,10 @@ static int c2_rnic_close(struct c2_dev *c2dev)
 
 /*
  * Called by c2_probe to initialize the RNIC. This principally
- * involves initializing the various limits and resource pools that
+ * involves initalizing the various limits and resouce pools that
  * comprise the RNIC instance.
  */
-int c2_rnic_init(struct c2_dev *c2dev)
+int __devinit c2_rnic_init(struct c2_dev *c2dev)
 {
 	int err;
 	u32 qsize, msgsize;
@@ -576,8 +576,7 @@ int c2_rnic_init(struct c2_dev *c2dev)
 		goto bail4;
 
 	/* Initialize cached the adapter limits */
-	err = c2_rnic_query(c2dev, &c2dev->props);
-	if (err)
+	if (c2_rnic_query(c2dev, &c2dev->props))
 		goto bail5;
 
 	/* Initialize the PD pool */
@@ -612,7 +611,7 @@ int c2_rnic_init(struct c2_dev *c2dev)
 /*
  * Called by c2_remove to cleanup the RNIC resources.
  */
-void c2_rnic_term(struct c2_dev *c2dev)
+void __devexit c2_rnic_term(struct c2_dev *c2dev)
 {
 
 	/* Close the open adapter instance */

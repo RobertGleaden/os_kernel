@@ -9,10 +9,9 @@
 
 #include <linux/compiler.h>
 #include <linux/types.h>
-#include <asm/cmpxchg.h>
-#include <asm/barrier.h>
+#include <asm/system.h>
 
-#define ATOMIC_INIT(i)	{ (i) }
+#define ATOMIC_INIT(i)	( (atomic_t) { (i) } )
 
 #define atomic_read(v)		(*(volatile int *)&(v)->counter)
 #define atomic_set(v,i)		((v)->counter = (i))
@@ -62,5 +61,10 @@ static inline int __atomic_add_unless(atomic_t *v, int a, int u)
 
 	return c;
 }
+
+#define smp_mb__before_atomic_dec()	smp_mb()
+#define smp_mb__after_atomic_dec()	smp_mb()
+#define smp_mb__before_atomic_inc()	smp_mb()
+#define smp_mb__after_atomic_inc()	smp_mb()
 
 #endif /* __ASM_SH_ATOMIC_H */

@@ -19,7 +19,6 @@
 #include <linux/percpu.h>
 #include <linux/smp.h>
 #include <linux/slab.h>
-#include <asm/cpu_device_id.h>
 #include <asm/byteorder.h>
 #include <asm/processor.h>
 #include <asm/i387.h>
@@ -328,6 +327,7 @@ static struct crypto_alg aes_alg = {
 	.cra_ctxsize		=	sizeof(struct aes_ctx),
 	.cra_alignmask		=	PADLOCK_ALIGNMENT - 1,
 	.cra_module		=	THIS_MODULE,
+	.cra_list		=	LIST_HEAD_INIT(aes_alg.cra_list),
 	.cra_u			=	{
 		.cipher = {
 			.cia_min_keysize	=	AES_MIN_KEY_SIZE,
@@ -407,6 +407,7 @@ static struct crypto_alg ecb_aes_alg = {
 	.cra_alignmask		=	PADLOCK_ALIGNMENT - 1,
 	.cra_type		=	&crypto_blkcipher_type,
 	.cra_module		=	THIS_MODULE,
+	.cra_list		=	LIST_HEAD_INIT(ecb_aes_alg.cra_list),
 	.cra_u			=	{
 		.blkcipher = {
 			.min_keysize		=	AES_MIN_KEY_SIZE,
@@ -489,6 +490,7 @@ static struct crypto_alg cbc_aes_alg = {
 	.cra_alignmask		=	PADLOCK_ALIGNMENT - 1,
 	.cra_type		=	&crypto_blkcipher_type,
 	.cra_module		=	THIS_MODULE,
+	.cra_list		=	LIST_HEAD_INIT(cbc_aes_alg.cra_list),
 	.cra_u			=	{
 		.blkcipher = {
 			.min_keysize		=	AES_MIN_KEY_SIZE,
@@ -501,19 +503,15 @@ static struct crypto_alg cbc_aes_alg = {
 	}
 };
 
-static struct x86_cpu_id padlock_cpu_id[] = {
-	X86_FEATURE_MATCH(X86_FEATURE_XCRYPT),
-	{}
-};
-MODULE_DEVICE_TABLE(x86cpu, padlock_cpu_id);
-
 static int __init padlock_init(void)
 {
 	int ret;
 	struct cpuinfo_x86 *c = &cpu_data(0);
 
-	if (!x86_match_cpu(padlock_cpu_id))
+	if (!cpu_has_xcrypt) {
+		printk(KERN_NOTICE PFX "VIA PadLock not detected.\n");
 		return -ENODEV;
+	}
 
 	if (!cpu_has_xcrypt_enabled) {
 		printk(KERN_NOTICE PFX "VIA PadLock detected, but not enabled. Hmm, strange...\n");

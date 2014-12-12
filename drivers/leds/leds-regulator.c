@@ -140,10 +140,9 @@ static void regulator_led_brightness_set(struct led_classdev *led_cdev,
 	schedule_work(&led->work);
 }
 
-static int regulator_led_probe(struct platform_device *pdev)
+static int __devinit regulator_led_probe(struct platform_device *pdev)
 {
-	struct led_regulator_platform_data *pdata =
-			dev_get_platdata(&pdev->dev);
+	struct led_regulator_platform_data *pdata = pdev->dev.platform_data;
 	struct regulator_led *led;
 	struct regulator *vcc;
 	int ret = 0;
@@ -159,7 +158,7 @@ static int regulator_led_probe(struct platform_device *pdev)
 		return PTR_ERR(vcc);
 	}
 
-	led = devm_kzalloc(&pdev->dev, sizeof(*led), GFP_KERNEL);
+	led = kzalloc(sizeof(*led), GFP_KERNEL);
 	if (led == NULL) {
 		ret = -ENOMEM;
 		goto err_vcc;
@@ -170,7 +169,7 @@ static int regulator_led_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "Invalid default brightness %d\n",
 				pdata->brightness);
 		ret = -EINVAL;
-		goto err_vcc;
+		goto err_led;
 	}
 	led->value = pdata->brightness;
 
@@ -191,7 +190,7 @@ static int regulator_led_probe(struct platform_device *pdev)
 	ret = led_classdev_register(&pdev->dev, &led->cdev);
 	if (ret < 0) {
 		cancel_work_sync(&led->work);
-		goto err_vcc;
+		goto err_led;
 	}
 
 	/* to expose the default value to userspace */
@@ -202,12 +201,14 @@ static int regulator_led_probe(struct platform_device *pdev)
 
 	return 0;
 
+err_led:
+	kfree(led);
 err_vcc:
 	regulator_put(vcc);
 	return ret;
 }
 
-static int regulator_led_remove(struct platform_device *pdev)
+static int __devexit regulator_led_remove(struct platform_device *pdev)
 {
 	struct regulator_led *led = platform_get_drvdata(pdev);
 
@@ -215,6 +216,7 @@ static int regulator_led_remove(struct platform_device *pdev)
 	cancel_work_sync(&led->work);
 	regulator_led_disable(led);
 	regulator_put(led->vcc);
+	kfree(led);
 	return 0;
 }
 
@@ -224,10 +226,20 @@ static struct platform_driver regulator_led_driver = {
 		   .owner = THIS_MODULE,
 		   },
 	.probe  = regulator_led_probe,
-	.remove = regulator_led_remove,
+	.remove = __devexit_p(regulator_led_remove),
 };
 
-module_platform_driver(regulator_led_driver);
+static int __init regulator_led_init(void)
+{
+	return platform_driver_register(&regulator_led_driver);
+}
+module_init(regulator_led_init);
+
+static void __exit regulator_led_exit(void)
+{
+	platform_driver_unregister(&regulator_led_driver);
+}
+module_exit(regulator_led_exit);
 
 MODULE_AUTHOR("Antonio Ospite <ospite@studenti.unina.it>");
 MODULE_DESCRIPTION("Regulator driven LED driver");

@@ -23,7 +23,8 @@
  * the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program;  if not, see <http://www.gnu.org/licenses/>.
+ * along with this program;  if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
 
@@ -110,6 +111,8 @@ int netlbl_cfg_unlbl_map_add(const char *domain,
 	struct netlbl_domaddr_map *addrmap = NULL;
 	struct netlbl_domaddr4_map *map4 = NULL;
 	struct netlbl_domaddr6_map *map6 = NULL;
+	const struct in_addr *addr4, *mask4;
+	const struct in6_addr *addr6, *mask6;
 
 	entry = kzalloc(sizeof(*entry), GFP_ATOMIC);
 	if (entry == NULL)
@@ -121,7 +124,7 @@ int netlbl_cfg_unlbl_map_add(const char *domain,
 	}
 
 	if (addr == NULL && mask == NULL)
-		entry->def.type = NETLBL_NLTYPE_UNLABELED;
+		entry->type = NETLBL_NLTYPE_UNLABELED;
 	else if (addr != NULL && mask != NULL) {
 		addrmap = kzalloc(sizeof(*addrmap), GFP_ATOMIC);
 		if (addrmap == NULL)
@@ -130,13 +133,13 @@ int netlbl_cfg_unlbl_map_add(const char *domain,
 		INIT_LIST_HEAD(&addrmap->list6);
 
 		switch (family) {
-		case AF_INET: {
-			const struct in_addr *addr4 = addr;
-			const struct in_addr *mask4 = mask;
+		case AF_INET:
+			addr4 = addr;
+			mask4 = mask;
 			map4 = kzalloc(sizeof(*map4), GFP_ATOMIC);
 			if (map4 == NULL)
 				goto cfg_unlbl_map_add_failure;
-			map4->def.type = NETLBL_NLTYPE_UNLABELED;
+			map4->type = NETLBL_NLTYPE_UNLABELED;
 			map4->list.addr = addr4->s_addr & mask4->s_addr;
 			map4->list.mask = mask4->s_addr;
 			map4->list.valid = 1;
@@ -145,36 +148,32 @@ int netlbl_cfg_unlbl_map_add(const char *domain,
 			if (ret_val != 0)
 				goto cfg_unlbl_map_add_failure;
 			break;
-			}
-#if IS_ENABLED(CONFIG_IPV6)
-		case AF_INET6: {
-			const struct in6_addr *addr6 = addr;
-			const struct in6_addr *mask6 = mask;
+		case AF_INET6:
+			addr6 = addr;
+			mask6 = mask;
 			map6 = kzalloc(sizeof(*map6), GFP_ATOMIC);
 			if (map6 == NULL)
 				goto cfg_unlbl_map_add_failure;
-			map6->def.type = NETLBL_NLTYPE_UNLABELED;
-			map6->list.addr = *addr6;
+			map6->type = NETLBL_NLTYPE_UNLABELED;
+			ipv6_addr_copy(&map6->list.addr, addr6);
 			map6->list.addr.s6_addr32[0] &= mask6->s6_addr32[0];
 			map6->list.addr.s6_addr32[1] &= mask6->s6_addr32[1];
 			map6->list.addr.s6_addr32[2] &= mask6->s6_addr32[2];
 			map6->list.addr.s6_addr32[3] &= mask6->s6_addr32[3];
-			map6->list.mask = *mask6;
+			ipv6_addr_copy(&map6->list.mask, mask6);
 			map6->list.valid = 1;
-			ret_val = netlbl_af6list_add(&map6->list,
-						     &addrmap->list6);
+			ret_val = netlbl_af4list_add(&map4->list,
+						     &addrmap->list4);
 			if (ret_val != 0)
 				goto cfg_unlbl_map_add_failure;
 			break;
-			}
-#endif /* IPv6 */
 		default:
 			goto cfg_unlbl_map_add_failure;
 			break;
 		}
 
-		entry->def.addrsel = addrmap;
-		entry->def.type = NETLBL_NLTYPE_ADDRSELECT;
+		entry->type_def.addrsel = addrmap;
+		entry->type = NETLBL_NLTYPE_ADDRSELECT;
 	} else {
 		ret_val = -EINVAL;
 		goto cfg_unlbl_map_add_failure;
@@ -226,11 +225,9 @@ int netlbl_cfg_unlbl_static_add(struct net *net,
 	case AF_INET:
 		addr_len = sizeof(struct in_addr);
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		addr_len = sizeof(struct in6_addr);
 		break;
-#endif /* IPv6 */
 	default:
 		return -EPFNOSUPPORT;
 	}
@@ -269,11 +266,9 @@ int netlbl_cfg_unlbl_static_del(struct net *net,
 	case AF_INET:
 		addr_len = sizeof(struct in_addr);
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
 	case AF_INET6:
 		addr_len = sizeof(struct in6_addr);
 		break;
-#endif /* IPv6 */
 	default:
 		return -EPFNOSUPPORT;
 	}
@@ -354,8 +349,8 @@ int netlbl_cfg_cipsov4_map_add(u32 doi,
 	}
 
 	if (addr == NULL && mask == NULL) {
-		entry->def.cipso = doi_def;
-		entry->def.type = NETLBL_NLTYPE_CIPSOV4;
+		entry->type_def.cipsov4 = doi_def;
+		entry->type = NETLBL_NLTYPE_CIPSOV4;
 	} else if (addr != NULL && mask != NULL) {
 		addrmap = kzalloc(sizeof(*addrmap), GFP_ATOMIC);
 		if (addrmap == NULL)
@@ -366,8 +361,8 @@ int netlbl_cfg_cipsov4_map_add(u32 doi,
 		addrinfo = kzalloc(sizeof(*addrinfo), GFP_ATOMIC);
 		if (addrinfo == NULL)
 			goto out_addrinfo;
-		addrinfo->def.cipso = doi_def;
-		addrinfo->def.type = NETLBL_NLTYPE_CIPSOV4;
+		addrinfo->type_def.cipsov4 = doi_def;
+		addrinfo->type = NETLBL_NLTYPE_CIPSOV4;
 		addrinfo->list.addr = addr->s_addr & mask->s_addr;
 		addrinfo->list.mask = mask->s_addr;
 		addrinfo->list.valid = 1;
@@ -375,8 +370,8 @@ int netlbl_cfg_cipsov4_map_add(u32 doi,
 		if (ret_val != 0)
 			goto cfg_cipsov4_map_add_failure;
 
-		entry->def.addrsel = addrmap;
-		entry->def.type = NETLBL_NLTYPE_ADDRSELECT;
+		entry->type_def.addrsel = addrmap;
+		entry->type = NETLBL_NLTYPE_ADDRSELECT;
 	} else {
 		ret_val = -EINVAL;
 		goto out_addrmap;
@@ -596,7 +591,7 @@ int netlbl_secattr_catmap_setrng(struct netlbl_lsm_secattr_catmap *catmap,
 			iter = iter->next;
 			iter_max_spot = iter->startbit + NETLBL_CATMAP_SIZE;
 		}
-		ret_val = netlbl_secattr_catmap_setbit(iter, spot, flags);
+		ret_val = netlbl_secattr_catmap_setbit(iter, spot, GFP_ATOMIC);
 	}
 
 	return ret_val;
@@ -656,14 +651,14 @@ int netlbl_sock_setattr(struct sock *sk,
 	}
 	switch (family) {
 	case AF_INET:
-		switch (dom_entry->def.type) {
+		switch (dom_entry->type) {
 		case NETLBL_NLTYPE_ADDRSELECT:
 			ret_val = -EDESTADDRREQ;
 			break;
 		case NETLBL_NLTYPE_CIPSOV4:
 			ret_val = cipso_v4_sock_setattr(sk,
-							dom_entry->def.cipso,
-							secattr);
+						    dom_entry->type_def.cipsov4,
+						    secattr);
 			break;
 		case NETLBL_NLTYPE_UNLABELED:
 			ret_val = 0;
@@ -672,7 +667,7 @@ int netlbl_sock_setattr(struct sock *sk,
 			ret_val = -ENOENT;
 		}
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -723,7 +718,7 @@ int netlbl_sock_getattr(struct sock *sk,
 	case AF_INET:
 		ret_val = cipso_v4_sock_getattr(sk, secattr);
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	case AF_INET6:
 		ret_val = -ENOMSG;
 		break;
@@ -753,22 +748,23 @@ int netlbl_conn_setattr(struct sock *sk,
 {
 	int ret_val;
 	struct sockaddr_in *addr4;
-	struct netlbl_dommap_def *entry;
+	struct netlbl_domaddr4_map *af4_entry;
 
 	rcu_read_lock();
 	switch (addr->sa_family) {
 	case AF_INET:
 		addr4 = (struct sockaddr_in *)addr;
-		entry = netlbl_domhsh_getentry_af4(secattr->domain,
-						   addr4->sin_addr.s_addr);
-		if (entry == NULL) {
+		af4_entry = netlbl_domhsh_getentry_af4(secattr->domain,
+						       addr4->sin_addr.s_addr);
+		if (af4_entry == NULL) {
 			ret_val = -ENOENT;
 			goto conn_setattr_return;
 		}
-		switch (entry->type) {
+		switch (af4_entry->type) {
 		case NETLBL_NLTYPE_CIPSOV4:
 			ret_val = cipso_v4_sock_setattr(sk,
-							entry->cipso, secattr);
+						   af4_entry->type_def.cipsov4,
+						   secattr);
 			break;
 		case NETLBL_NLTYPE_UNLABELED:
 			/* just delete the protocols we support for right now
@@ -780,7 +776,7 @@ int netlbl_conn_setattr(struct sock *sk,
 			ret_val = -ENOENT;
 		}
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -810,21 +806,36 @@ int netlbl_req_setattr(struct request_sock *req,
 		       const struct netlbl_lsm_secattr *secattr)
 {
 	int ret_val;
-	struct netlbl_dommap_def *entry;
+	struct netlbl_dom_map *dom_entry;
+	struct netlbl_domaddr4_map *af4_entry;
+	u32 proto_type;
+	struct cipso_v4_doi *proto_cv4;
 
 	rcu_read_lock();
+	dom_entry = netlbl_domhsh_getentry(secattr->domain);
+	if (dom_entry == NULL) {
+		ret_val = -ENOENT;
+		goto req_setattr_return;
+	}
 	switch (req->rsk_ops->family) {
 	case AF_INET:
-		entry = netlbl_domhsh_getentry_af4(secattr->domain,
-						   inet_rsk(req)->ir_rmt_addr);
-		if (entry == NULL) {
-			ret_val = -ENOENT;
-			goto req_setattr_return;
+		if (dom_entry->type == NETLBL_NLTYPE_ADDRSELECT) {
+			struct inet_request_sock *req_inet = inet_rsk(req);
+			af4_entry = netlbl_domhsh_getentry_af4(secattr->domain,
+							    req_inet->rmt_addr);
+			if (af4_entry == NULL) {
+				ret_val = -ENOENT;
+				goto req_setattr_return;
+			}
+			proto_type = af4_entry->type;
+			proto_cv4 = af4_entry->type_def.cipsov4;
+		} else {
+			proto_type = dom_entry->type;
+			proto_cv4 = dom_entry->type_def.cipsov4;
 		}
-		switch (entry->type) {
+		switch (proto_type) {
 		case NETLBL_NLTYPE_CIPSOV4:
-			ret_val = cipso_v4_req_setattr(req,
-						       entry->cipso, secattr);
+			ret_val = cipso_v4_req_setattr(req, proto_cv4, secattr);
 			break;
 		case NETLBL_NLTYPE_UNLABELED:
 			/* just delete the protocols we support for right now
@@ -836,7 +847,7 @@ int netlbl_req_setattr(struct request_sock *req,
 			ret_val = -ENOENT;
 		}
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -882,21 +893,23 @@ int netlbl_skbuff_setattr(struct sk_buff *skb,
 {
 	int ret_val;
 	struct iphdr *hdr4;
-	struct netlbl_dommap_def *entry;
+	struct netlbl_domaddr4_map *af4_entry;
 
 	rcu_read_lock();
 	switch (family) {
 	case AF_INET:
 		hdr4 = ip_hdr(skb);
-		entry = netlbl_domhsh_getentry_af4(secattr->domain,hdr4->daddr);
-		if (entry == NULL) {
+		af4_entry = netlbl_domhsh_getentry_af4(secattr->domain,
+						       hdr4->daddr);
+		if (af4_entry == NULL) {
 			ret_val = -ENOENT;
 			goto skbuff_setattr_return;
 		}
-		switch (entry->type) {
+		switch (af4_entry->type) {
 		case NETLBL_NLTYPE_CIPSOV4:
-			ret_val = cipso_v4_skbuff_setattr(skb, entry->cipso,
-							  secattr);
+			ret_val = cipso_v4_skbuff_setattr(skb,
+						   af4_entry->type_def.cipsov4,
+						   secattr);
 			break;
 		case NETLBL_NLTYPE_UNLABELED:
 			/* just delete the protocols we support for right now
@@ -907,7 +920,7 @@ int netlbl_skbuff_setattr(struct sk_buff *skb,
 			ret_val = -ENOENT;
 		}
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	case AF_INET6:
 		/* since we don't support any IPv6 labeling protocols right
 		 * now we can optimize everything away until we do */
@@ -946,7 +959,7 @@ int netlbl_skbuff_getattr(const struct sk_buff *skb,
 		    cipso_v4_skbuff_getattr(skb, secattr) == 0)
 			return 0;
 		break;
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 	case AF_INET6:
 		break;
 #endif /* IPv6 */

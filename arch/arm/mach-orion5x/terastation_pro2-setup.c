@@ -8,7 +8,7 @@
  * as published by the Free Software Foundation; either version
  * 2 of the License, or (at your option) any later version.
  */
-#include <linux/gpio.h>
+
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
@@ -20,6 +20,7 @@
 #include <linux/i2c.h>
 #include <linux/serial_reg.h>
 #include <asm/mach-types.h>
+#include <asm/gpio.h>
 #include <asm/mach/arch.h>
 #include <asm/mach/pci.h>
 #include <mach/orion5x.h>
@@ -77,7 +78,7 @@ static struct platform_device tsp2_nor_flash = {
 #define TSP2_PCI_SLOT0_OFFS		7
 #define TSP2_PCI_SLOT0_IRQ_PIN		11
 
-static void __init tsp2_pci_preinit(void)
+void __init tsp2_pci_preinit(void)
 {
 	int pin;
 
@@ -122,6 +123,7 @@ static int __init tsp2_pci_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 static struct hw_pci tsp2_pci __initdata = {
 	.nr_controllers = 2,
 	.preinit        = tsp2_pci_preinit,
+	.swizzle        = pci_std_swizzle,
 	.setup          = orion5x_pci_sys_setup,
 	.scan           = orion5x_pci_sys_scan_bus,
 	.map_irq        = tsp2_pci_map_irq,
@@ -329,10 +331,8 @@ static void __init tsp2_init(void)
 	/*
 	 * Configure peripherals.
 	 */
-	mvebu_mbus_add_window_by_id(ORION_MBUS_DEVBUS_BOOT_TARGET,
-				    ORION_MBUS_DEVBUS_BOOT_ATTR,
-				    TSP2_NOR_BOOT_BASE,
-				    TSP2_NOR_BOOT_SIZE);
+	orion5x_setup_dev_boot_win(TSP2_NOR_BOOT_BASE,
+				   TSP2_NOR_BOOT_SIZE);
 	platform_device_register(&tsp2_nor_flash);
 
 	orion5x_ehci0_init();
@@ -358,12 +358,11 @@ static void __init tsp2_init(void)
 
 MACHINE_START(TERASTATION_PRO2, "Buffalo Terastation Pro II/Live")
 	/* Maintainer:  Sylver Bruneau <sylver.bruneau@googlemail.com> */
-	.atag_offset	= 0x100,
+	.boot_params	= 0x00000100,
 	.init_machine	= tsp2_init,
 	.map_io		= orion5x_map_io,
 	.init_early	= orion5x_init_early,
 	.init_irq	= orion5x_init_irq,
-	.init_time	= orion5x_timer_init,
+	.timer		= &orion5x_timer,
 	.fixup		= tag_fixup_mem32,
-	.restart	= orion5x_restart,
 MACHINE_END

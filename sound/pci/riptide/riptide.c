@@ -98,7 +98,6 @@
 #include <linux/device.h>
 #include <linux/firmware.h>
 #include <linux/kernel.h>
-#include <linux/module.h>
 #include <asm/io.h>
 #include <sound/core.h>
 #include <sound/info.h>
@@ -122,7 +121,7 @@ MODULE_FIRMWARE("riptide.hex");
 
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;
-static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE;
+static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE;
 
 #ifdef SUPPORT_JOYSTICK
 static int joystick_port[SNDRV_CARDS] = { [0 ... (SNDRV_CARDS - 1)] = 0x200 };
@@ -464,7 +463,7 @@ struct snd_riptide {
 
 	unsigned long received_irqs;
 	unsigned long handled_irqs;
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_PM
 	int in_suspend;
 #endif
 };
@@ -1150,11 +1149,10 @@ static void riptide_handleirq(unsigned long dev_id)
 	}
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int riptide_suspend(struct device *dev)
+#ifdef CONFIG_PM
+static int riptide_suspend(struct pci_dev *pci, pm_message_t state)
 {
-	struct pci_dev *pci = to_pci_dev(dev);
-	struct snd_card *card = dev_get_drvdata(dev);
+	struct snd_card *card = pci_get_drvdata(pci);
 	struct snd_riptide *chip = card->private_data;
 
 	chip->in_suspend = 1;
@@ -1163,14 +1161,13 @@ static int riptide_suspend(struct device *dev)
 	snd_ac97_suspend(chip->ac97);
 	pci_disable_device(pci);
 	pci_save_state(pci);
-	pci_set_power_state(pci, PCI_D3hot);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
 
-static int riptide_resume(struct device *dev)
+static int riptide_resume(struct pci_dev *pci)
 {
-	struct pci_dev *pci = to_pci_dev(dev);
-	struct snd_card *card = dev_get_drvdata(dev);
+	struct snd_card *card = pci_get_drvdata(pci);
 	struct snd_riptide *chip = card->private_data;
 
 	pci_set_power_state(pci, PCI_D0);
@@ -1188,12 +1185,7 @@ static int riptide_resume(struct device *dev)
 	chip->in_suspend = 0;
 	return 0;
 }
-
-static SIMPLE_DEV_PM_OPS(riptide_pm, riptide_suspend, riptide_resume);
-#define RIPTIDE_PM_OPS	&riptide_pm
-#else
-#define RIPTIDE_PM_OPS	NULL
-#endif /* CONFIG_PM_SLEEP */
+#endif
 
 static int try_to_load_firmware(struct cmdif *cif, struct snd_riptide *chip)
 {
@@ -1706,7 +1698,7 @@ static struct snd_pcm_ops snd_riptide_capture_ops = {
 	.pointer = snd_riptide_pointer,
 };
 
-static int
+static int __devinit
 snd_riptide_pcm(struct snd_riptide *chip, int device, struct snd_pcm **rpcm)
 {
 	struct snd_pcm *pcm;
@@ -1844,7 +1836,8 @@ static int snd_riptide_free(struct snd_riptide *chip)
 	}
 	if (chip->irq >= 0)
 		free_irq(chip->irq, chip);
-	release_firmware(chip->fw_entry);
+	if (chip->fw_entry)
+		release_firmware(chip->fw_entry);
 	release_and_free_resource(chip->res_port);
 	kfree(chip);
 	return 0;
@@ -1857,7 +1850,7 @@ static int snd_riptide_dev_free(struct snd_device *device)
 	return snd_riptide_free(chip);
 }
 
-static int
+static int __devinit
 snd_riptide_create(struct snd_card *card, struct pci_dev *pci,
 		   struct snd_riptide **rchip)
 {
@@ -1915,6 +1908,8 @@ snd_riptide_create(struct snd_card *card, struct pci_dev *pci,
 		snd_riptide_free(chip);
 		return err;
 	}
+
+	snd_card_set_dev(card, &pci->dev);
 
 	*rchip = chip;
 	return 0;
@@ -1991,7 +1986,7 @@ snd_riptide_proc_read(struct snd_info_entry *entry,
 	snd_iprintf(buffer, "\n");
 }
 
-static void snd_riptide_proc_init(struct snd_riptide *chip)
+static void __devinit snd_riptide_proc_init(struct snd_riptide *chip)
 {
 	struct snd_info_entry *entry;
 
@@ -1999,7 +1994,7 @@ static void snd_riptide_proc_init(struct snd_riptide *chip)
 		snd_info_set_text_ops(entry, chip, snd_riptide_proc_read);
 }
 
-static int snd_riptide_mixer(struct snd_riptide *chip)
+static int __devinit snd_riptide_mixer(struct snd_riptide *chip)
 {
 	struct snd_ac97_bus *pbus;
 	struct snd_ac97_template ac97;
@@ -2025,7 +2020,7 @@ static int snd_riptide_mixer(struct snd_riptide *chip)
 
 #ifdef SUPPORT_JOYSTICK
 
-static int
+static int __devinit
 snd_riptide_joystick_probe(struct pci_dev *pci, const struct pci_device_id *id)
 {
 	static int dev;
@@ -2058,17 +2053,18 @@ snd_riptide_joystick_probe(struct pci_dev *pci, const struct pci_device_id *id)
 	return 0;
 }
 
-static void snd_riptide_joystick_remove(struct pci_dev *pci)
+static void __devexit snd_riptide_joystick_remove(struct pci_dev *pci)
 {
 	struct gameport *gameport = pci_get_drvdata(pci);
 	if (gameport) {
 		release_region(gameport->io, 8);
 		gameport_unregister_port(gameport);
+		pci_set_drvdata(pci, NULL);
 	}
 }
 #endif
 
-static int
+static int __devinit
 snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 {
 	static int dev;
@@ -2084,8 +2080,7 @@ snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 		return -ENOENT;
 	}
 
-	err = snd_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE,
-			   0, &card);
+	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &card);
 	if (err < 0)
 		return err;
 	err = snd_riptide_create(card, pci, &chip);
@@ -2114,7 +2109,7 @@ snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 		val = mpu_port[dev];
 		pci_write_config_word(chip->pci, PCI_EXT_MPU_Base, val);
 		err = snd_mpu401_uart_new(card, 0, MPU401_HW_RIPTIDE,
-					  val, MPU401_INFO_IRQ_HOOK, -1,
+					  val, 0, chip->irq, 0,
 					  &chip->rmidi);
 		if (err < 0)
 			snd_printk(KERN_WARNING
@@ -2174,19 +2169,21 @@ snd_card_riptide_probe(struct pci_dev *pci, const struct pci_device_id *pci_id)
 	return err;
 }
 
-static void snd_card_riptide_remove(struct pci_dev *pci)
+static void __devexit snd_card_riptide_remove(struct pci_dev *pci)
 {
 	snd_card_free(pci_get_drvdata(pci));
+	pci_set_drvdata(pci, NULL);
 }
 
 static struct pci_driver driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = snd_riptide_ids,
 	.probe = snd_card_riptide_probe,
-	.remove = snd_card_riptide_remove,
-	.driver = {
-		.pm = RIPTIDE_PM_OPS,
-	},
+	.remove = __devexit_p(snd_card_riptide_remove),
+#ifdef CONFIG_PM
+	.suspend = riptide_suspend,
+	.resume = riptide_resume,
+#endif
 };
 
 #ifdef SUPPORT_JOYSTICK
@@ -2194,7 +2191,7 @@ static struct pci_driver joystick_driver = {
 	.name = KBUILD_MODNAME "-joystick",
 	.id_table = snd_riptide_joystick_ids,
 	.probe = snd_riptide_joystick_probe,
-	.remove = snd_riptide_joystick_remove,
+	.remove = __devexit_p(snd_riptide_joystick_remove),
 };
 #endif
 

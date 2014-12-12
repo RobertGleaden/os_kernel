@@ -14,11 +14,15 @@
 #include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
+#include <linux/reciprocal_div.h>
 #include <linux/vmalloc.h>
 #include <net/pkt_sched.h>
 #include <net/inet_ecn.h>
 #include <net/red.h>
-#include <net/flow_keys.h>
+#include <linux/ip.h>
+#include <net/ip.h>
+#include <linux/ipv6.h>
+#include <net/ipv6.h>
 
 /*
    CHOKe stateless AQM for fair bandwidth allocation
@@ -56,7 +60,6 @@ struct choke_sched_data {
 	struct red_parms parms;
 
 /* Variables */
-	struct red_vars  vars;
 	struct tcf_proto *filter_list;
 	struct {
 		u32	prob_drop;	/* Early probability drops */
@@ -75,6 +78,12 @@ struct choke_sched_data {
 
 	struct sk_buff **tab;
 };
+
+/* deliver a random number between 0 and N - 1 */
+static u32 random_N(unsigned int N)
+{
+	return reciprocal_divide(random32(), N);
+}
 
 /* number of elements in queue including holes */
 static unsigned int choke_len(const struct choke_sched_data *q)
@@ -133,15 +142,91 @@ static void choke_drop_by_idx(struct Qdisc *sch, unsigned int idx)
 	--sch->q.qlen;
 }
 
+/*
+ * Compare flow of two packets
+ *  Returns true only if source and destination address and port match.
+ *          false for special cases
+ */
+static bool choke_match_flow(struct sk_buff *skb1,
+			     struct sk_buff *skb2)
+{
+	int off1, off2, poff;
+	const u32 *ports1, *ports2;
+	u8 ip_proto;
+	__u32 hash1;
+
+	if (skb1->protocol != skb2->protocol)
+		return false;
+
+	/* Use hash value as quick check
+	 * Assumes that __skb_get_rxhash makes IP header and ports linear
+	 */
+	hash1 = skb_get_rxhash(skb1);
+	if (!hash1 || hash1 != skb_get_rxhash(skb2))
+		return false;
+
+	/* Probably match, but be sure to avoid hash collisions */
+	off1 = skb_network_offset(skb1);
+	off2 = skb_network_offset(skb2);
+
+	switch (skb1->protocol) {
+	case __constant_htons(ETH_P_IP): {
+		const struct iphdr *ip1, *ip2;
+
+		ip1 = (const struct iphdr *) (skb1->data + off1);
+		ip2 = (const struct iphdr *) (skb2->data + off2);
+
+		ip_proto = ip1->protocol;
+		if (ip_proto != ip2->protocol ||
+		    ip1->saddr != ip2->saddr || ip1->daddr != ip2->daddr)
+			return false;
+
+		if (ip_is_fragment(ip1) | ip_is_fragment(ip2))
+			ip_proto = 0;
+		off1 += ip1->ihl * 4;
+		off2 += ip2->ihl * 4;
+		break;
+	}
+
+	case __constant_htons(ETH_P_IPV6): {
+		const struct ipv6hdr *ip1, *ip2;
+
+		ip1 = (const struct ipv6hdr *) (skb1->data + off1);
+		ip2 = (const struct ipv6hdr *) (skb2->data + off2);
+
+		ip_proto = ip1->nexthdr;
+		if (ip_proto != ip2->nexthdr ||
+		    ipv6_addr_cmp(&ip1->saddr, &ip2->saddr) ||
+		    ipv6_addr_cmp(&ip1->daddr, &ip2->daddr))
+			return false;
+		off1 += 40;
+		off2 += 40;
+	}
+
+	default: /* Maybe compare MAC header here? */
+		return false;
+	}
+
+	poff = proto_ports_offset(ip_proto);
+	if (poff < 0)
+		return true;
+
+	off1 += poff;
+	off2 += poff;
+
+	ports1 = (__force u32 *)(skb1->data + off1);
+	ports2 = (__force u32 *)(skb2->data + off2);
+	return *ports1 == *ports2;
+}
+
 struct choke_skb_cb {
-	u16			classid;
-	u8			keys_valid;
-	struct flow_keys	keys;
+	u16 classid;
 };
 
 static inline struct choke_skb_cb *choke_skb_cb(const struct sk_buff *skb)
 {
-	qdisc_cb_private_validate(skb, sizeof(struct choke_skb_cb));
+	BUILD_BUG_ON(sizeof(skb->cb) <
+		sizeof(struct qdisc_skb_cb) + sizeof(struct choke_skb_cb));
 	return (struct choke_skb_cb *)qdisc_skb_cb(skb)->data;
 }
 
@@ -153,32 +238,6 @@ static inline void choke_set_classid(struct sk_buff *skb, u16 classid)
 static u16 choke_get_classid(const struct sk_buff *skb)
 {
 	return choke_skb_cb(skb)->classid;
-}
-
-/*
- * Compare flow of two packets
- *  Returns true only if source and destination address and port match.
- *          false for special cases
- */
-static bool choke_match_flow(struct sk_buff *skb1,
-			     struct sk_buff *skb2)
-{
-	if (skb1->protocol != skb2->protocol)
-		return false;
-
-	if (!choke_skb_cb(skb1)->keys_valid) {
-		choke_skb_cb(skb1)->keys_valid = 1;
-		skb_flow_dissect(skb1, &choke_skb_cb(skb1)->keys);
-	}
-
-	if (!choke_skb_cb(skb2)->keys_valid) {
-		choke_skb_cb(skb2)->keys_valid = 1;
-		skb_flow_dissect(skb2, &choke_skb_cb(skb2)->keys);
-	}
-
-	return !memcmp(&choke_skb_cb(skb1)->keys,
-		       &choke_skb_cb(skb2)->keys,
-		       sizeof(struct flow_keys));
 }
 
 /*
@@ -226,7 +285,7 @@ static struct sk_buff *choke_peek_random(const struct choke_sched_data *q,
 	int retrys = 3;
 
 	do {
-		*pidx = (q->head + prandom_u32_max(choke_len(q))) & q->tab_mask;
+		*pidx = (q->head + random_N(choke_len(q))) & q->tab_mask;
 		skb = q->tab[*pidx];
 		if (skb)
 			return skb;
@@ -258,7 +317,7 @@ static bool choke_match_random(const struct choke_sched_data *q,
 static int choke_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct choke_sched_data *q = qdisc_priv(sch);
-	const struct red_parms *p = &q->parms;
+	struct red_parms *p = &q->parms;
 	int ret = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
 
 	if (q->filter_list) {
@@ -267,15 +326,14 @@ static int choke_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			goto other_drop;	/* Packet was eaten by filter */
 	}
 
-	choke_skb_cb(skb)->keys_valid = 0;
 	/* Compute average queue usage (see RED) */
-	q->vars.qavg = red_calc_qavg(p, &q->vars, sch->q.qlen);
-	if (red_is_idling(&q->vars))
-		red_end_of_idle_period(&q->vars);
+	p->qavg = red_calc_qavg(p, sch->q.qlen);
+	if (red_is_idling(p))
+		red_end_of_idle_period(p);
 
 	/* Is queue small? */
-	if (q->vars.qavg <= p->qth_min)
-		q->vars.qcount = -1;
+	if (p->qavg <= p->qth_min)
+		p->qcount = -1;
 	else {
 		unsigned int idx;
 
@@ -287,8 +345,8 @@ static int choke_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		}
 
 		/* Queue is large, always mark/drop */
-		if (q->vars.qavg > p->qth_max) {
-			q->vars.qcount = -1;
+		if (p->qavg > p->qth_max) {
+			p->qcount = -1;
 
 			sch->qstats.overlimits++;
 			if (use_harddrop(q) || !use_ecn(q) ||
@@ -298,10 +356,10 @@ static int choke_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			}
 
 			q->stats.forced_mark++;
-		} else if (++q->vars.qcount) {
-			if (red_mark_probability(p, &q->vars, q->vars.qavg)) {
-				q->vars.qcount = 0;
-				q->vars.qR = red_random(p);
+		} else if (++p->qcount) {
+			if (red_mark_probability(p, p->qavg)) {
+				p->qcount = 0;
+				p->qR = red_random(p);
 
 				sch->qstats.overlimits++;
 				if (!use_ecn(q) || !INET_ECN_set_ce(skb)) {
@@ -312,7 +370,7 @@ static int choke_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 				q->stats.prob_mark++;
 			}
 		} else
-			q->vars.qR = red_random(p);
+			p->qR = red_random(p);
 	}
 
 	/* Admit new packet */
@@ -325,13 +383,15 @@ static int choke_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	}
 
 	q->stats.pdrop++;
-	return qdisc_drop(skb, sch);
+	sch->qstats.drops++;
+	kfree_skb(skb);
+	return NET_XMIT_DROP;
 
-congestion_drop:
+ congestion_drop:
 	qdisc_drop(skb, sch);
 	return NET_XMIT_CN;
 
-other_drop:
+ other_drop:
 	if (ret & __NET_XMIT_BYPASS)
 		sch->qstats.drops++;
 	kfree_skb(skb);
@@ -344,8 +404,8 @@ static struct sk_buff *choke_dequeue(struct Qdisc *sch)
 	struct sk_buff *skb;
 
 	if (q->head == q->tail) {
-		if (!red_is_idling(&q->vars))
-			red_start_of_idle_period(&q->vars);
+		if (!red_is_idling(&q->parms))
+			red_start_of_idle_period(&q->parms);
 		return NULL;
 	}
 
@@ -368,8 +428,8 @@ static unsigned int choke_drop(struct Qdisc *sch)
 	if (len > 0)
 		q->stats.other++;
 	else {
-		if (!red_is_idling(&q->vars))
-			red_start_of_idle_period(&q->vars);
+		if (!red_is_idling(&q->parms))
+			red_start_of_idle_period(&q->parms);
 	}
 
 	return len;
@@ -379,19 +439,23 @@ static void choke_reset(struct Qdisc *sch)
 {
 	struct choke_sched_data *q = qdisc_priv(sch);
 
-	red_restart(&q->vars);
+	red_restart(&q->parms);
 }
 
 static const struct nla_policy choke_policy[TCA_CHOKE_MAX + 1] = {
 	[TCA_CHOKE_PARMS]	= { .len = sizeof(struct tc_red_qopt) },
 	[TCA_CHOKE_STAB]	= { .len = RED_STAB_SIZE },
-	[TCA_CHOKE_MAX_P]	= { .type = NLA_U32 },
 };
 
 
 static void choke_free(void *addr)
 {
-	kvfree(addr);
+	if (addr) {
+		if (is_vmalloc_addr(addr))
+			vfree(addr);
+		else
+			kfree(addr);
+	}
 }
 
 static int choke_change(struct Qdisc *sch, struct nlattr *opt)
@@ -402,7 +466,6 @@ static int choke_change(struct Qdisc *sch, struct nlattr *opt)
 	int err;
 	struct sk_buff **old = NULL;
 	unsigned int mask;
-	u32 max_P;
 
 	if (opt == NULL)
 		return -EINVAL;
@@ -415,8 +478,6 @@ static int choke_change(struct Qdisc *sch, struct nlattr *opt)
 	    tb[TCA_CHOKE_STAB] == NULL)
 		return -EINVAL;
 
-	max_P = tb[TCA_CHOKE_MAX_P] ? nla_get_u32(tb[TCA_CHOKE_MAX_P]) : 0;
-
 	ctl = nla_data(tb[TCA_CHOKE_PARMS]);
 
 	if (ctl->limit > CHOKE_MAX_QUEUE)
@@ -426,8 +487,7 @@ static int choke_change(struct Qdisc *sch, struct nlattr *opt)
 	if (mask != q->tab_mask) {
 		struct sk_buff **ntab;
 
-		ntab = kcalloc(mask + 1, sizeof(struct sk_buff *),
-			       GFP_KERNEL | __GFP_NOWARN);
+		ntab = kcalloc(mask + 1, sizeof(struct sk_buff *), GFP_KERNEL);
 		if (!ntab)
 			ntab = vzalloc((mask + 1) * sizeof(struct sk_buff *));
 		if (!ntab)
@@ -467,12 +527,10 @@ static int choke_change(struct Qdisc *sch, struct nlattr *opt)
 
 	red_set_parms(&q->parms, ctl->qth_min, ctl->qth_max, ctl->Wlog,
 		      ctl->Plog, ctl->Scell_log,
-		      nla_data(tb[TCA_CHOKE_STAB]),
-		      max_P);
-	red_set_vars(&q->vars);
+		      nla_data(tb[TCA_CHOKE_STAB]));
 
 	if (q->head == q->tail)
-		red_end_of_idle_period(&q->vars);
+		red_end_of_idle_period(&q->parms);
 
 	sch_tree_unlock(sch);
 	choke_free(old);
@@ -502,9 +560,7 @@ static int choke_dump(struct Qdisc *sch, struct sk_buff *skb)
 	if (opts == NULL)
 		goto nla_put_failure;
 
-	if (nla_put(skb, TCA_CHOKE_PARMS, sizeof(opt), &opt) ||
-	    nla_put_u32(skb, TCA_CHOKE_MAX_P, q->parms.max_P))
-		goto nla_put_failure;
+	NLA_PUT(skb, TCA_CHOKE_PARMS, sizeof(opt), &opt);
 	return nla_nest_end(skb, opts);
 
 nla_put_failure:

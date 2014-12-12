@@ -13,7 +13,6 @@
  *  published by the Free Software Foundation.
  */
 
-#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/interrupt.h>
@@ -45,12 +44,12 @@
 #include <mach/pxa27x.h>
 #include <mach/balloon3.h>
 #include <mach/audio.h>
-#include <linux/platform_data/video-pxafb.h>
-#include <linux/platform_data/mmc-pxamci.h>
+#include <mach/pxafb.h>
+#include <mach/mmc.h>
 #include <mach/udc.h>
 #include <mach/pxa27x-udc.h>
-#include <linux/platform_data/irda-pxaficp.h>
-#include <linux/platform_data/usb-ohci-pxa27x.h>
+#include <mach/irda.h>
+#include <mach/ohci.h>
 
 #include "generic.h"
 #include "devices.h"
@@ -180,7 +179,7 @@ static unsigned long balloon3_ac97_pin_config[] __initdata = {
 };
 
 static struct ucb1400_pdata vpac270_ucb1400_pdata = {
-	.irq		= PXA_GPIO_TO_IRQ(BALLOON3_GPIO_CODEC_IRQ),
+	.irq		= IRQ_GPIO(BALLOON3_GPIO_CODEC_IRQ),
 };
 
 
@@ -308,7 +307,7 @@ static inline void balloon3_mmc_init(void) {}
 /******************************************************************************
  * USB Gadget
  ******************************************************************************/
-#if defined(CONFIG_USB_PXA27X)||defined(CONFIG_USB_PXA27X_MODULE)
+#if defined(CONFIG_USB_GADGET_PXA27X)||defined(CONFIG_USB_GADGET_PXA27X_MODULE)
 static void balloon3_udc_command(int cmd)
 {
 	if (cmd == PXA2XX_UDC_CMD_CONNECT)
@@ -331,6 +330,7 @@ static struct pxa2xx_udc_mach_info balloon3_udc_info __initdata = {
 static void __init balloon3_udc_init(void)
 {
 	pxa_set_udc_info(&balloon3_udc_info);
+	platform_device_register(&balloon3_gpio_vbus);
 }
 #else
 static inline void balloon3_udc_init(void) {}
@@ -591,7 +591,7 @@ static void balloon3_nand_cmd_ctl(struct mtd_info *mtd, int cmd, unsigned int ct
 				BALLOON3_NAND_CONTROL_REG);
 		if (balloon3_ctl_set)
 			__raw_writel(balloon3_ctl_set,
-				BALLOON3_NAND_CONTROL_REG +
+				BALLOON3_NAND_CONTROL_REG |
 				BALLOON3_FPGA_SETnCLR);
 	}
 
@@ -608,7 +608,7 @@ static void balloon3_nand_select_chip(struct mtd_info *mtd, int chip)
 	__raw_writew(
 		BALLOON3_NAND_CONTROL_FLCE0 | BALLOON3_NAND_CONTROL_FLCE1 |
 		BALLOON3_NAND_CONTROL_FLCE2 | BALLOON3_NAND_CONTROL_FLCE3,
-		BALLOON3_NAND_CONTROL_REG + BALLOON3_FPGA_SETnCLR);
+		BALLOON3_NAND_CONTROL_REG | BALLOON3_FPGA_SETnCLR);
 
 	/* Deassert correct nCE line */
 	__raw_writew(BALLOON3_NAND_CONTROL_FLCE0 << chip,
@@ -626,7 +626,7 @@ static int balloon3_nand_probe(struct platform_device *pdev)
 	int ret;
 
 	__raw_writew(BALLOON3_NAND_CONTROL2_16BIT,
-		BALLOON3_NAND_CONTROL2_REG + BALLOON3_FPGA_SETnCLR);
+		BALLOON3_NAND_CONTROL2_REG | BALLOON3_FPGA_SETnCLR);
 
 	ver = __raw_readw(BALLOON3_FPGA_VER);
 	if (ver < 0x4f08)
@@ -649,7 +649,7 @@ static int balloon3_nand_probe(struct platform_device *pdev)
 		BALLOON3_NAND_CONTROL_FLCE0 | BALLOON3_NAND_CONTROL_FLCE1 |
 		BALLOON3_NAND_CONTROL_FLCE2 | BALLOON3_NAND_CONTROL_FLCE3 |
 		BALLOON3_NAND_CONTROL_FLWP,
-		BALLOON3_NAND_CONTROL_REG + BALLOON3_FPGA_SETnCLR);
+		BALLOON3_NAND_CONTROL_REG | BALLOON3_FPGA_SETnCLR);
 	return 0;
 
 err2:
@@ -678,6 +678,8 @@ static struct mtd_partition balloon3_partition_info[] = {
 	},
 };
 
+static const char *balloon3_part_probes[] = { "cmdlinepart", NULL };
+
 struct platform_nand_data balloon3_nand_pdata = {
 	.chip = {
 		.nr_chips	= 4,
@@ -685,6 +687,7 @@ struct platform_nand_data balloon3_nand_pdata = {
 		.nr_partitions	= ARRAY_SIZE(balloon3_partition_info),
 		.partitions	= balloon3_partition_info,
 		.chip_delay	= 50,
+		.part_probe_types = balloon3_part_probes,
 	},
 	.ctrl = {
 		.hwcontrol	= 0,
@@ -728,7 +731,9 @@ static inline void balloon3_nand_init(void) {}
 #if defined(CONFIG_REGULATOR_MAX1586) || \
     defined(CONFIG_REGULATOR_MAX1586_MODULE)
 static struct regulator_consumer_supply balloon3_max1587a_consumers[] = {
-	REGULATOR_SUPPLY("vcc_core", NULL),
+	{
+		.supply	= "vcc_core",
+	}
 };
 
 static struct regulator_init_data balloon3_max1587a_v3_info = {
@@ -802,7 +807,7 @@ static void __init balloon3_init(void)
 
 static struct map_desc balloon3_io_desc[] __initdata = {
 	{	/* CPLD/FPGA */
-		.virtual	= (unsigned long)BALLOON3_FPGA_VIRT,
+		.virtual	=  BALLOON3_FPGA_VIRT,
 		.pfn		= __phys_to_pfn(BALLOON3_FPGA_PHYS),
 		.length		= BALLOON3_FPGA_LENGTH,
 		.type		= MT_DEVICE,
@@ -821,8 +826,7 @@ MACHINE_START(BALLOON3, "Balloon3")
 	.nr_irqs	= BALLOON3_NR_IRQS,
 	.init_irq	= balloon3_init_irq,
 	.handle_irq	= pxa27x_handle_irq,
-	.init_time	= pxa_timer_init,
+	.timer		= &pxa_timer,
 	.init_machine	= balloon3_init,
-	.atag_offset	= 0x100,
-	.restart	= pxa_restart,
+	.boot_params	= PLAT_PHYS_OFFSET + 0x100,
 MACHINE_END

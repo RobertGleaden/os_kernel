@@ -10,6 +10,7 @@
 #include <linux/spinlock.h>
 #include <linux/module.h>
 
+#include <asm/system.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/fixmap.h>
@@ -127,7 +128,7 @@ static int __init parse_reservetop(char *arg)
 
 	address = memparse(arg, &arg);
 	reserve_top_address(address);
-	early_ioremap_init();
+	fixup_early_ioremap();
 	return 0;
 }
 early_param("reservetop", parse_reservetop);

@@ -27,12 +27,11 @@
  *
  * Authors:
  *    Keith Whitwell <keith@tungstengraphics.com>
- *
- * ------------------------ This file is DEPRECATED! -------------------------
  */
 
-#include <drm/drmP.h>
-#include <drm/radeon_drm.h>
+#include "drmP.h"
+#include "drm.h"
+#include "radeon_drm.h"
 #include "radeon_drv.h"
 
 /* Very simple allocator for GART memory, working on a static range
@@ -243,7 +242,7 @@ int radeon_mem_alloc(struct drm_device *dev, void *data, struct drm_file *file_p
 	if (!block)
 		return -ENOMEM;
 
-	if (copy_to_user(alloc->region_offset, &block->start,
+	if (DRM_COPY_TO_USER(alloc->region_offset, &block->start,
 			     sizeof(int))) {
 		DRM_ERROR("copy_to_user\n");
 		return -EFAULT;

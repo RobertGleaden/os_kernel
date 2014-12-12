@@ -74,8 +74,8 @@ struct autofs_info {
 	unsigned long last_used;
 	atomic_t count;
 
-	kuid_t uid;
-	kgid_t gid;
+	uid_t uid;
+	gid_t gid;
 };
 
 #define AUTOFS_INF_EXPIRING	(1<<0) /* dentry is in the process of expiring */
@@ -89,8 +89,8 @@ struct autofs_wait_queue {
 	struct qstr name;
 	u32 dev;
 	u64 ino;
-	kuid_t uid;
-	kgid_t gid;
+	uid_t uid;
+	gid_t gid;
 	pid_t pid;
 	pid_t tgid;
 	/* This is for status reporting upon return */
@@ -104,7 +104,7 @@ struct autofs_sb_info {
 	u32 magic;
 	int pipefd;
 	struct file *pipe;
-	struct pid *oz_pgrp;
+	pid_t oz_pgrp;
 	int catatonic;
 	int version;
 	int sub_version;
@@ -116,13 +116,11 @@ struct autofs_sb_info {
 	int needs_reghost;
 	struct super_block *sb;
 	struct mutex wq_mutex;
-	struct mutex pipe_mutex;
 	spinlock_t fs_lock;
 	struct autofs_wait_queue *queues; /* Wait queue pointer */
 	spinlock_t lookup_lock;
 	struct list_head active_list;
 	struct list_head expiring_list;
-	struct rcu_head rcu;
 };
 
 static inline struct autofs_sb_info *autofs4_sbi(struct super_block *sb)
@@ -140,7 +138,7 @@ static inline struct autofs_info *autofs4_dentry_ino(struct dentry *dentry)
    filesystem without "magic".) */
 
 static inline int autofs4_oz_mode(struct autofs_sb_info *sbi) {
-	return sbi->catatonic || task_pgrp(current) == sbi->oz_pgrp;
+	return sbi->catatonic || task_pgrp_nr(current) == sbi->oz_pgrp;
 }
 
 /* Does a dentry have some pending activity? */
@@ -157,7 +155,7 @@ static inline int autofs4_ispending(struct dentry *dentry)
 	return 0;
 }
 
-struct inode *autofs4_get_inode(struct super_block *, umode_t);
+struct inode *autofs4_get_inode(struct super_block *, mode_t);
 void autofs4_free_ino(struct autofs_info *);
 
 /* Expiration */
@@ -269,17 +267,6 @@ static inline void managed_dentry_clear_managed(struct dentry *dentry)
 int autofs4_fill_super(struct super_block *, void *, int);
 struct autofs_info *autofs4_new_ino(struct autofs_sb_info *);
 void autofs4_clean_ino(struct autofs_info *);
-
-static inline int autofs_prepare_pipe(struct file *pipe)
-{
-	if (!pipe->f_op->write)
-		return -EINVAL;
-	if (!S_ISFIFO(file_inode(pipe)->i_mode))
-		return -EINVAL;
-	/* We want a packet pipe */
-	pipe->f_flags |= O_DIRECT;
-	return 0;
-}
 
 /* Queue management functions */
 

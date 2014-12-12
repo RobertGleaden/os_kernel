@@ -29,11 +29,17 @@
 #ifndef __WCMD_H__
 #define __WCMD_H__
 
+#include "ttype.h"
 #include "80211hdr.h"
 #include "80211mgr.h"
 
+/*---------------------  Export Definitions -------------------------*/
+
+
+
 #define AUTHENTICATE_TIMEOUT   1000 //ms
 #define ASSOCIATE_TIMEOUT      1000 //ms
+
 
 // Command code
 typedef enum tagCMD_CODE {
@@ -51,8 +57,7 @@ typedef enum tagCMD_CODE {
     WLAN_CMD_REMOVE_ALLKEY,
     WLAN_CMD_MAC_DISPOWERSAVING,
     WLAN_CMD_11H_CHSW,
-    WLAN_CMD_RUN_AP,
-    WLAN_CMD_CONFIGURE_FILTER
+    WLAN_CMD_RUN_AP
 } CMD_CODE, *PCMD_CODE;
 
 #define CMD_Q_SIZE              32
@@ -69,11 +74,11 @@ typedef enum tagCMD_STATUS {
 
 typedef struct tagCMD_ITEM {
     CMD_CODE eCmd;
-    u8     abyCmdDesireSSID[WLAN_IEHDR_LEN + WLAN_SSID_MAXLEN + 1];
-    bool     bNeedRadioOFF;
-    bool     bRadioCmd;
-    bool     bForceSCAN;
-    u16     wDeAuthenReason;
+    BYTE     abyCmdDesireSSID[WLAN_IEHDR_LEN + WLAN_SSID_MAXLEN + 1];
+    BOOL     bNeedRadioOFF;
+    BOOL     bRadioCmd;
+    BOOL     bForceSCAN;
+    WORD     wDeAuthenReason;
 } CMD_ITEM, *PCMD_ITEM;
 
 // Command state
@@ -97,16 +102,32 @@ typedef enum tagCMD_STATE {
     WLAN_CMD_REMOVE_ALLKEY_START,
     WLAN_CMD_MAC_DISPOWERSAVING_START,
     WLAN_CMD_11H_CHSW_START,
-    WLAN_CMD_CONFIGURE_FILTER_START,
     WLAN_CMD_IDLE
 } CMD_STATE, *PCMD_STATE;
 
-struct vnt_private;
+/*---------------------  Export Classes  ----------------------------*/
 
-void vResetCommandTimer(struct vnt_private *);
+/*---------------------  Export Variables  --------------------------*/
 
-int bScheduleCommand(struct vnt_private *, CMD_CODE eCommand, u8 *pbyItem0);
+/*---------------------  Export Types  ------------------------------*/
 
-void vRunCommand(struct work_struct *work);
+/*---------------------  Export Functions  --------------------------*/
+
+void vResetCommandTimer(void *hDeviceContext);
+
+BOOL bScheduleCommand(void *hDeviceContext,
+		      CMD_CODE eCommand,
+		      PBYTE pbyItem0);
+
+void vRunCommand(void *hDeviceContext);
+
+/*
+void
+WCMDvCommandThread(
+    void * Context
+    );
+*/
+
+void BSSvSecondTxData(void *hDeviceContext);
 
 #endif /* __WCMD_H__ */

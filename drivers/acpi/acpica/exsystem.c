@@ -1,3 +1,4 @@
+
 /******************************************************************************
  *
  * Module Name: exsystem - Interface to OS services
@@ -5,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2014, Intel Corp.
+ * Copyright (C) 2000 - 2011, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -52,13 +53,13 @@ ACPI_MODULE_NAME("exsystem")
  *
  * FUNCTION:    acpi_ex_system_wait_semaphore
  *
- * PARAMETERS:  semaphore       - Semaphore to wait on
- *              timeout         - Max time to wait
+ * PARAMETERS:  Semaphore       - Semaphore to wait on
+ *              Timeout         - Max time to wait
  *
  * RETURN:      Status
  *
  * DESCRIPTION: Implements a semaphore wait with a check to see if the
- *              semaphore is available immediately. If it is not, the
+ *              semaphore is available immediately.  If it is not, the
  *              interpreter is released before waiting.
  *
  ******************************************************************************/
@@ -77,7 +78,7 @@ acpi_status acpi_ex_system_wait_semaphore(acpi_semaphore semaphore, u16 timeout)
 
 		/* We must wait, so unlock the interpreter */
 
-		acpi_ex_exit_interpreter();
+		acpi_ex_relinquish_interpreter();
 
 		status = acpi_os_wait_semaphore(semaphore, 1, timeout);
 
@@ -87,7 +88,7 @@ acpi_status acpi_ex_system_wait_semaphore(acpi_semaphore semaphore, u16 timeout)
 
 		/* Reacquire the interpreter */
 
-		acpi_ex_enter_interpreter();
+		acpi_ex_reacquire_interpreter();
 	}
 
 	return_ACPI_STATUS(status);
@@ -97,13 +98,13 @@ acpi_status acpi_ex_system_wait_semaphore(acpi_semaphore semaphore, u16 timeout)
  *
  * FUNCTION:    acpi_ex_system_wait_mutex
  *
- * PARAMETERS:  mutex           - Mutex to wait on
- *              timeout         - Max time to wait
+ * PARAMETERS:  Mutex           - Mutex to wait on
+ *              Timeout         - Max time to wait
  *
  * RETURN:      Status
  *
  * DESCRIPTION: Implements a mutex wait with a check to see if the
- *              mutex is available immediately. If it is not, the
+ *              mutex is available immediately.  If it is not, the
  *              interpreter is released before waiting.
  *
  ******************************************************************************/
@@ -123,7 +124,7 @@ acpi_status acpi_ex_system_wait_mutex(acpi_mutex mutex, u16 timeout)
 
 		/* We must wait, so unlock the interpreter */
 
-		acpi_ex_exit_interpreter();
+		acpi_ex_relinquish_interpreter();
 
 		status = acpi_os_acquire_mutex(mutex, timeout);
 
@@ -133,7 +134,7 @@ acpi_status acpi_ex_system_wait_mutex(acpi_mutex mutex, u16 timeout)
 
 		/* Reacquire the interpreter */
 
-		acpi_ex_enter_interpreter();
+		acpi_ex_reacquire_interpreter();
 	}
 
 	return_ACPI_STATUS(status);
@@ -151,7 +152,7 @@ acpi_status acpi_ex_system_wait_mutex(acpi_mutex mutex, u16 timeout)
  * DESCRIPTION: Suspend running thread for specified amount of time.
  *              Note: ACPI specification requires that Stall() does not
  *              relinquish the processor, and delays longer than 100 usec
- *              should use Sleep() instead. We allow stalls up to 255 usec
+ *              should use Sleep() instead.  We allow stalls up to 255 usec
  *              for compatibility with other interpreters and existing BIOSs.
  *
  ******************************************************************************/
@@ -198,7 +199,7 @@ acpi_status acpi_ex_system_do_sleep(u64 how_long)
 
 	/* Since this thread will sleep, we must release the interpreter */
 
-	acpi_ex_exit_interpreter();
+	acpi_ex_relinquish_interpreter();
 
 	/*
 	 * For compatibility with other ACPI implementations and to prevent
@@ -212,7 +213,7 @@ acpi_status acpi_ex_system_do_sleep(u64 how_long)
 
 	/* And now we must get the interpreter again */
 
-	acpi_ex_enter_interpreter();
+	acpi_ex_reacquire_interpreter();
 	return (AE_OK);
 }
 
@@ -253,7 +254,7 @@ acpi_status acpi_ex_system_signal_event(union acpi_operand_object * obj_desc)
  * RETURN:      Status
  *
  * DESCRIPTION: Provides an access point to perform synchronization operations
- *              within the AML. This operation is a request to wait for an
+ *              within the AML.  This operation is a request to wait for an
  *              event.
  *
  ******************************************************************************/

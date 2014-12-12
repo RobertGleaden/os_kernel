@@ -45,7 +45,7 @@ static unsigned long platform_mmio_alloc;
 static unsigned long platform_mmiolen;
 static uint64_t callback_via;
 
-static unsigned long alloc_xen_mmio(unsigned long len)
+unsigned long alloc_xen_mmio(unsigned long len)
 {
 	unsigned long addr;
 
@@ -84,7 +84,7 @@ static irqreturn_t do_hvm_evtchn_intr(int irq, void *dev_id)
 static int xen_allocate_irq(struct pci_dev *pdev)
 {
 	return request_irq(pdev->irq, do_hvm_evtchn_intr,
-			IRQF_NOBALANCING | IRQF_TRIGGER_RISING,
+			IRQF_DISABLED | IRQF_NOBALANCING | IRQF_TRIGGER_RISING,
 			"xen-platform-pci", pdev);
 }
 
@@ -101,17 +101,13 @@ static int platform_pci_resume(struct pci_dev *pdev)
 	return 0;
 }
 
-static int platform_pci_init(struct pci_dev *pdev,
-			     const struct pci_device_id *ent)
+static int __devinit platform_pci_init(struct pci_dev *pdev,
+				       const struct pci_device_id *ent)
 {
 	int i, ret;
 	long ioaddr;
 	long mmio_addr, mmio_len;
 	unsigned int max_nr_gframes;
-	unsigned long grant_frames;
-
-	if (!xen_domain())
-		return -ENODEV;
 
 	i = pci_enable_device(pdev);
 	if (i)
@@ -155,17 +151,13 @@ static int platform_pci_init(struct pci_dev *pdev,
 	}
 
 	max_nr_gframes = gnttab_max_grant_frames();
-	grant_frames = alloc_xen_mmio(PAGE_SIZE * max_nr_gframes);
-	ret = gnttab_setup_auto_xlat_frames(grant_frames);
-	if (ret)
-		goto out;
+	xen_hvm_resume_frames = alloc_xen_mmio(PAGE_SIZE * max_nr_gframes);
 	ret = gnttab_init();
 	if (ret)
-		goto grant_out;
+		goto out;
 	xenbus_probe(NULL);
 	return 0;
-grant_out:
-	gnttab_free_auto_xlat_frames();
+
 out:
 	pci_release_region(pdev, 0);
 mem_out:
@@ -175,7 +167,7 @@ pci_out:
 	return ret;
 }
 
-static struct pci_device_id platform_pci_tbl[] = {
+static struct pci_device_id platform_pci_tbl[] __devinitdata = {
 	{PCI_VENDOR_ID_XEN, PCI_DEVICE_ID_XEN_PLATFORM,
 		PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{0,}
@@ -194,6 +186,11 @@ static struct pci_driver platform_driver = {
 
 static int __init platform_pci_module_init(void)
 {
+	/* no unplug has been done, IGNORE hasn't been specified: just
+	 * return now */
+	if (!xen_platform_pci_unplug)
+		return -ENODEV;
+
 	return pci_register_driver(&platform_driver);
 }
 

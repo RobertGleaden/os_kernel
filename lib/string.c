@@ -22,10 +22,7 @@
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/ctype.h>
-#include <linux/kernel.h>
-#include <linux/export.h>
-#include <linux/bug.h>
-#include <linux/errno.h>
+#include <linux/module.h>
 
 #ifndef __HAVE_ARCH_STRNICMP
 /**
@@ -107,7 +104,7 @@ EXPORT_SYMBOL(strcpy);
 
 #ifndef __HAVE_ARCH_STRNCPY
 /**
- * strncpy - Copy a length-limited, C-string
+ * strncpy - Copy a length-limited, %NUL-terminated string
  * @dest: Where to copy the string to
  * @src: Where to copy the string from
  * @count: The maximum number of bytes to copy
@@ -136,7 +133,7 @@ EXPORT_SYMBOL(strncpy);
 
 #ifndef __HAVE_ARCH_STRLCPY
 /**
- * strlcpy - Copy a C-string into a sized buffer
+ * strlcpy - Copy a %NUL terminated string into a sized buffer
  * @dest: Where to copy the string to
  * @src: Where to copy the string from
  * @size: size of destination buffer
@@ -182,7 +179,7 @@ EXPORT_SYMBOL(strcat);
 
 #ifndef __HAVE_ARCH_STRNCAT
 /**
- * strncat - Append a length-limited, C-string to another
+ * strncat - Append a length-limited, %NUL-terminated string to another
  * @dest: The string to be appended to
  * @src: The string to append to it
  * @count: The maximum numbers of bytes to copy
@@ -211,7 +208,7 @@ EXPORT_SYMBOL(strncat);
 
 #ifndef __HAVE_ARCH_STRLCAT
 /**
- * strlcat - Append a length-limited, C-string to another
+ * strlcat - Append a length-limited, %NUL-terminated string to another
  * @dest: The string to be appended to
  * @src: The string to append to it
  * @count: The size of the destination buffer.
@@ -301,24 +298,6 @@ char *strchr(const char *s, int c)
 EXPORT_SYMBOL(strchr);
 #endif
 
-#ifndef __HAVE_ARCH_STRCHRNUL
-/**
- * strchrnul - Find and return a character in a string, or end of string
- * @s: The string to be searched
- * @c: The character to search for
- *
- * Returns pointer to first occurrence of 'c' in s. If c is not found, then
- * return a pointer to the null byte at the end of s.
- */
-char *strchrnul(const char *s, int c)
-{
-	while (*s && *s != (char)c)
-		s++;
-	return (char *)s;
-}
-EXPORT_SYMBOL(strchrnul);
-#endif
-
 #ifndef __HAVE_ARCH_STRRCHR
 /**
  * strrchr - Find the last occurrence of a character in a string
@@ -381,6 +360,7 @@ char *strim(char *s)
 	size_t size;
 	char *end;
 
+	s = skip_spaces(s);
 	size = strlen(s);
 	if (!size)
 		return s;
@@ -390,7 +370,7 @@ char *strim(char *s)
 		end--;
 	*(end + 1) = '\0';
 
-	return skip_spaces(s);
+	return s;
 }
 EXPORT_SYMBOL(strim);
 
@@ -666,7 +646,7 @@ EXPORT_SYMBOL(memmove);
  * @count: The size of the area.
  */
 #undef memcmp
-__visible int memcmp(const void *cs, const void *ct, size_t count)
+int memcmp(const void *cs, const void *ct, size_t count)
 {
 	const unsigned char *su1, *su2;
 	int res = 0;
@@ -776,69 +756,3 @@ void *memchr(const void *s, int c, size_t n)
 }
 EXPORT_SYMBOL(memchr);
 #endif
-
-static void *check_bytes8(const u8 *start, u8 value, unsigned int bytes)
-{
-	while (bytes) {
-		if (*start != value)
-			return (void *)start;
-		start++;
-		bytes--;
-	}
-	return NULL;
-}
-
-/**
- * memchr_inv - Find an unmatching character in an area of memory.
- * @start: The memory area
- * @c: Find a character other than c
- * @bytes: The size of the area.
- *
- * returns the address of the first character other than @c, or %NULL
- * if the whole buffer contains just @c.
- */
-void *memchr_inv(const void *start, int c, size_t bytes)
-{
-	u8 value = c;
-	u64 value64;
-	unsigned int words, prefix;
-
-	if (bytes <= 16)
-		return check_bytes8(start, value, bytes);
-
-	value64 = value;
-#if defined(ARCH_HAS_FAST_MULTIPLIER) && BITS_PER_LONG == 64
-	value64 *= 0x0101010101010101;
-#elif defined(ARCH_HAS_FAST_MULTIPLIER)
-	value64 *= 0x01010101;
-	value64 |= value64 << 32;
-#else
-	value64 |= value64 << 8;
-	value64 |= value64 << 16;
-	value64 |= value64 << 32;
-#endif
-
-	prefix = (unsigned long)start % 8;
-	if (prefix) {
-		u8 *r;
-
-		prefix = 8 - prefix;
-		r = check_bytes8(start, value, prefix);
-		if (r)
-			return r;
-		start += prefix;
-		bytes -= prefix;
-	}
-
-	words = bytes / 8;
-
-	while (words) {
-		if (*(u64 *)start != value64)
-			return check_bytes8(start, value, 8);
-		start += 8;
-		words--;
-	}
-
-	return check_bytes8(start, value, bytes % 8);
-}
-EXPORT_SYMBOL(memchr_inv);

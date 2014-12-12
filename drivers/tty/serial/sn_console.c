@@ -39,7 +39,6 @@
 
 #include <linux/interrupt.h>
 #include <linux/tty.h>
-#include <linux/tty_flip.h>
 #include <linux/serial.h>
 #include <linux/console.h>
 #include <linux/module.h>
@@ -457,22 +456,26 @@ static int sn_debug_printf(const char *fmt, ...)
 static void
 sn_receive_chars(struct sn_cons_port *port, unsigned long flags)
 {
-	struct tty_port *tport = NULL;
 	int ch;
+	struct tty_struct *tty;
 
 	if (!port) {
-		printk(KERN_ERR "sn_receive_chars - port NULL so can't receive\n");
+		printk(KERN_ERR "sn_receive_chars - port NULL so can't receieve\n");
 		return;
 	}
 
 	if (!port->sc_ops) {
-		printk(KERN_ERR "sn_receive_chars - port->sc_ops  NULL so can't receive\n");
+		printk(KERN_ERR "sn_receive_chars - port->sc_ops  NULL so can't receieve\n");
 		return;
 	}
 
 	if (port->sc_port.state) {
 		/* The serial_core stuffs are initialized, use them */
-		tport = &port->sc_port.state->port;
+		tty = port->sc_port.state->port.tty;
+	}
+	else {
+		/* Not registered yet - can't pass to tty layer.  */
+		tty = NULL;
 	}
 
 	while (port->sc_ops->sal_input_pending()) {
@@ -512,15 +515,15 @@ sn_receive_chars(struct sn_cons_port *port, unsigned long flags)
 #endif /* CONFIG_MAGIC_SYSRQ */
 
 		/* record the character to pass up to the tty layer */
-		if (tport) {
-			if (tty_insert_flip_char(tport, ch, TTY_NORMAL) == 0)
+		if (tty) {
+			if(tty_insert_flip_char(tty, ch, TTY_NORMAL) == 0)
 				break;
 		}
 		port->sc_port.icount.rx++;
 	}
 
-	if (tport)
-		tty_flip_buffer_push(tport);
+	if (tty)
+		tty_flip_buffer_push(tty);
 }
 
 /**
@@ -734,12 +737,11 @@ static void __init sn_sal_switch_to_interrupts(struct sn_cons_port *port)
 		DPRINTF("sn_console: switching to interrupt driven console\n");
 
 		if (request_irq(SGI_UART_VECTOR, sn_sal_interrupt,
-				IRQF_SHARED,
+				IRQF_DISABLED | IRQF_SHARED,
 				"SAL console driver", port) >= 0) {
 			spin_lock_irqsave(&port->sc_port.lock, flags);
 			port->sc_port.irq = SGI_UART_VECTOR;
 			port->sc_ops = &intr_ops;
-			irq_set_handler(port->sc_port.irq, handle_level_irq);
 
 			/* turn on receive interrupts */
 			ia64_sn_console_intr_enable(SAL_CONSOLE_INTR_RECV);

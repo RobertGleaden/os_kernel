@@ -33,9 +33,7 @@
 
 #include <linux/pci.h>
 #include <linux/netdevice.h>
-#include <linux/moduleparam.h>
 #include <linux/slab.h>
-#include <linux/stat.h>
 #include <linux/vmalloc.h>
 
 #include "ipath_kernel.h"
@@ -717,6 +715,16 @@ int ipath_init_chip(struct ipath_devdata *dd, int reinit)
 	ret = init_housekeeping(dd, reinit);
 	if (ret)
 		goto done;
+
+	/*
+	 * we ignore most issues after reporting them, but have to specially
+	 * handle hardware-disabled chips.
+	 */
+	if (ret == 2) {
+		/* unique error, known to ipath_init_one */
+		ret = -EPERM;
+		goto done;
+	}
 
 	/*
 	 * We could bump this to allow for full rcvegrcnt + rcvtidcnt,

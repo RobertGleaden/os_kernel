@@ -23,7 +23,6 @@
 #include <linux/slab.h>
 #include <linux/time.h>
 #include <linux/string.h>
-#include <linux/module.h>
 #include <sound/core.h>
 #include <sound/minors.h>
 #include <sound/control.h>
@@ -52,19 +51,14 @@ static int snd_mixer_oss_open(struct inode *inode, struct file *file)
 					 SNDRV_OSS_DEVICE_TYPE_MIXER);
 	if (card == NULL)
 		return -ENODEV;
-	if (card->mixer_oss == NULL) {
-		snd_card_unref(card);
+	if (card->mixer_oss == NULL)
 		return -ENODEV;
-	}
 	err = snd_card_file_add(card, file);
-	if (err < 0) {
-		snd_card_unref(card);
+	if (err < 0)
 		return err;
-	}
 	fmixer = kzalloc(sizeof(*fmixer), GFP_KERNEL);
 	if (fmixer == NULL) {
 		snd_card_file_remove(card, file);
-		snd_card_unref(card);
 		return -ENOMEM;
 	}
 	fmixer->card = card;
@@ -73,10 +67,8 @@ static int snd_mixer_oss_open(struct inode *inode, struct file *file)
 	if (!try_module_get(card->module)) {
 		kfree(fmixer);
 		snd_card_file_remove(card, file);
-		snd_card_unref(card);
 		return -EFAULT;
 	}
-	snd_card_unref(card);
 	return 0;
 }
 
@@ -507,7 +499,7 @@ static struct snd_kcontrol *snd_mixer_oss_test_id(struct snd_mixer_oss *mixer, c
 	
 	memset(&id, 0, sizeof(id));
 	id.iface = SNDRV_CTL_ELEM_IFACE_MIXER;
-	strlcpy(id.name, name, sizeof(id.name));
+	strcpy(id.name, name);
 	id.index = index;
 	return snd_ctl_find_id(card, &id);
 }
@@ -1053,7 +1045,6 @@ static int snd_mixer_oss_build_input(struct snd_mixer_oss *mixer, struct snd_mix
 			
 		if (kctl->info(kctl, uinfo)) {
 			up_read(&mixer->card->controls_rwsem);
-			kfree(uinfo);
 			return 0;
 		}
 		strcpy(str, ptr->name);
@@ -1069,7 +1060,6 @@ static int snd_mixer_oss_build_input(struct snd_mixer_oss *mixer, struct snd_mix
 				uinfo->value.enumerated.item = slot.capture_item;
 				if (kctl->info(kctl, uinfo)) {
 					up_read(&mixer->card->controls_rwsem);
-					kfree(uinfo);
 					return 0;
 				}
 				if (!strcmp(uinfo->value.enumerated.name, str)) {
@@ -1187,8 +1177,7 @@ static void snd_mixer_oss_proc_write(struct snd_info_entry *entry,
 			if (oss_mixer_names[ch] && strcmp(oss_mixer_names[ch], str) == 0)
 				break;
 		if (ch >= SNDRV_OSS_MAX_MIXERS) {
-			pr_err("ALSA: mixer_oss: invalid OSS volume '%s'\n",
-			       str);
+			snd_printk(KERN_ERR "mixer_oss: invalid OSS volume '%s'\n", str);
 			continue;
 		}
 		cptr = snd_info_get_str(str, cptr, sizeof(str));
@@ -1202,7 +1191,7 @@ static void snd_mixer_oss_proc_write(struct snd_info_entry *entry,
 		snd_info_get_str(idxstr, cptr, sizeof(idxstr));
 		idx = simple_strtoul(idxstr, NULL, 10);
 		if (idx >= 0x4000) { /* too big */
-			pr_err("ALSA: mixer_oss: invalid index %d\n", idx);
+			snd_printk(KERN_ERR "mixer_oss: invalid index %d\n", idx);
 			continue;
 		}
 		mutex_lock(&mixer->reg_mutex);
@@ -1213,7 +1202,7 @@ static void snd_mixer_oss_proc_write(struct snd_info_entry *entry,
 			goto __unlock;
 		tbl = kmalloc(sizeof(*tbl), GFP_KERNEL);
 		if (! tbl) {
-			pr_err("ALSA: mixer_oss: no memory\n");
+			snd_printk(KERN_ERR "mixer_oss: no memory\n");
 			goto __unlock;
 		}
 		tbl->oss_id = ch;
@@ -1344,18 +1333,20 @@ static int snd_mixer_oss_notify_handler(struct snd_card *card, int cmd)
 	struct snd_mixer_oss *mixer;
 
 	if (cmd == SND_MIXER_OSS_NOTIFY_REGISTER) {
+		char name[128];
 		int idx, err;
 
 		mixer = kcalloc(2, sizeof(*mixer), GFP_KERNEL);
 		if (mixer == NULL)
 			return -ENOMEM;
 		mutex_init(&mixer->reg_mutex);
+		sprintf(name, "mixer%i%i", card->number, 0);
 		if ((err = snd_register_oss_device(SNDRV_OSS_DEVICE_TYPE_MIXER,
 						   card, 0,
-						   &snd_mixer_oss_f_ops, card)) < 0) {
-			dev_err(card->dev,
-				"unable to register OSS mixer device %i:%i\n",
-				card->number, 0);
+						   &snd_mixer_oss_f_ops, card,
+						   name)) < 0) {
+			snd_printk(KERN_ERR "unable to register OSS mixer device %i:%i\n",
+				   card->number, 0);
 			kfree(mixer);
 			return err;
 		}
@@ -1364,8 +1355,7 @@ static int snd_mixer_oss_notify_handler(struct snd_card *card, int cmd)
 		if (*card->mixername)
 			strlcpy(mixer->name, card->mixername, sizeof(mixer->name));
 		else
-			snprintf(mixer->name, sizeof(mixer->name),
-				 "mixer%i", card->number);
+			strlcpy(mixer->name, name, sizeof(mixer->name));
 #ifdef SNDRV_OSS_INFO_DEV_MIXERS
 		snd_oss_info_register(SNDRV_OSS_INFO_DEV_MIXERS,
 				      card->number,

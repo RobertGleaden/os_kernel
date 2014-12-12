@@ -15,13 +15,14 @@
     GNU General Public License for more details.
 
     You should have received a copy of the GNU General Public License
-    along with Atmel wireless lan drivers; if not, see
-    <http://www.gnu.org/licenses/>.
+    along with Atmel wireless lan drivers; if not, write to the Free Software
+    Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 ******************************************************************************/
 #include <linux/pci.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/netdevice.h>
 #include "atmel.h"
 
@@ -44,11 +45,11 @@ static struct pci_driver atmel_driver = {
 	.name     = "atmel",
 	.id_table = card_ids,
 	.probe    = atmel_pci_probe,
-	.remove   = atmel_pci_remove,
+	.remove   = __devexit_p(atmel_pci_remove),
 };
 
 
-static int atmel_pci_probe(struct pci_dev *pdev,
+static int __devinit atmel_pci_probe(struct pci_dev *pdev,
 				     const struct pci_device_id *pent)
 {
 	struct net_device *dev;
@@ -68,9 +69,20 @@ static int atmel_pci_probe(struct pci_dev *pdev,
 	return 0;
 }
 
-static void atmel_pci_remove(struct pci_dev *pdev)
+static void __devexit atmel_pci_remove(struct pci_dev *pdev)
 {
 	stop_atmel_card(pci_get_drvdata(pdev));
 }
 
-module_pci_driver(atmel_driver);
+static int __init atmel_init_module(void)
+{
+	return pci_register_driver(&atmel_driver);
+}
+
+static void __exit atmel_cleanup_module(void)
+{
+	pci_unregister_driver(&atmel_driver);
+}
+
+module_init(atmel_init_module);
+module_exit(atmel_cleanup_module);

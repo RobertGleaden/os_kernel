@@ -33,13 +33,29 @@
  */
 
 #include "int.h"
+#include "mib.h"
 #include "tmacro.h"
 #include "mac.h"
 #include "power.h"
 #include "bssdb.h"
 #include "usbpipe.h"
 
-static int msglevel = MSG_LEVEL_INFO; /* MSG_LEVEL_DEBUG */
+/*---------------------  Static Definitions -------------------------*/
+/* static int msglevel = MSG_LEVEL_DEBUG; */
+static int msglevel = MSG_LEVEL_INFO;
+
+
+/*---------------------  Static Classes  ----------------------------*/
+
+/*---------------------  Static Variables  --------------------------*/
+
+/*---------------------  Static Functions  --------------------------*/
+
+/*---------------------  Export Variables  --------------------------*/
+
+
+/*---------------------  Export Functions  --------------------------*/
+
 
 /*+
  *
@@ -63,125 +79,145 @@ static int msglevel = MSG_LEVEL_INFO; /* MSG_LEVEL_DEBUG */
  *  if we've gotten no data
  *
 -*/
-void INTvWorkItem(struct vnt_private *pDevice)
+void INTvWorkItem(void *Context)
 {
-	unsigned long flags;
+	PSDevice pDevice = (PSDevice) Context;
 	int ntStatus;
 
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->Interrupt Polling Thread\n");
 
-	spin_lock_irqsave(&pDevice->lock, flags);
-
-	ntStatus = PIPEnsInterruptRead(pDevice);
-
-	spin_unlock_irqrestore(&pDevice->lock, flags);
+	spin_lock_irq(&pDevice->lock);
+	if (pDevice->fKillEventPollingThread != TRUE)
+		ntStatus = PIPEnsInterruptRead(pDevice);
+	spin_unlock_irq(&pDevice->lock);
 }
 
-void INTnsProcessData(struct vnt_private *priv)
+int INTnsProcessData(PSDevice pDevice)
 {
-	struct vnt_interrupt_data *int_data;
-	struct vnt_manager *mgmt = &priv->vnt_mgmt;
-	struct net_device_stats *stats = &priv->stats;
+	int status = STATUS_SUCCESS;
+	PSINTData	pINTData;
+	PSMgmtObject	pMgmt = &(pDevice->sMgmtObj);
+	struct net_device_stats *pStats = &pDevice->stats;
 
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->s_nsInterruptProcessData\n");
 
-	int_data = (struct vnt_interrupt_data *)priv->int_buf.data_buf;
-
-	if (int_data->tsr0 & TSR_VALID) {
-		if (int_data->tsr0 & (TSR_TMO | TSR_RETRYTMO))
-			priv->wstats.discard.retries++;
-		else
-			stats->tx_packets++;
-
-		BSSvUpdateNodeTxCounter(priv,
-					int_data->tsr0,
-					int_data->pkt0);
+	pINTData = (PSINTData) pDevice->intBuf.pDataBuf;
+	if (pINTData->byTSR0 & TSR_VALID) {
+		STAvUpdateTDStatCounter(&(pDevice->scStatistic),
+					(BYTE) (pINTData->byPkt0 & 0x0F),
+					(BYTE) (pINTData->byPkt0>>4),
+					pINTData->byTSR0);
+		BSSvUpdateNodeTxCounter(pDevice,
+					&(pDevice->scStatistic),
+					pINTData->byTSR0,
+					pINTData->byPkt0);
+		/*DBG_PRN_GRP01(("TSR0 %02x\n", pINTData->byTSR0));*/
 	}
-
-	if (int_data->tsr1 & TSR_VALID) {
-		if (int_data->tsr1 & (TSR_TMO | TSR_RETRYTMO))
-			priv->wstats.discard.retries++;
-		else
-			stats->tx_packets++;
-
-
-		BSSvUpdateNodeTxCounter(priv,
-					int_data->tsr1,
-					int_data->pkt1);
+	if (pINTData->byTSR1 & TSR_VALID) {
+		STAvUpdateTDStatCounter(&(pDevice->scStatistic),
+					(BYTE) (pINTData->byPkt1 & 0x0F),
+					(BYTE) (pINTData->byPkt1>>4),
+					pINTData->byTSR1);
+		BSSvUpdateNodeTxCounter(pDevice,
+					&(pDevice->scStatistic),
+					pINTData->byTSR1,
+					pINTData->byPkt1);
+		/*DBG_PRN_GRP01(("TSR1 %02x\n", pINTData->byTSR1));*/
 	}
-
-	if (int_data->tsr2 & TSR_VALID) {
-		if (int_data->tsr2 & (TSR_TMO | TSR_RETRYTMO))
-			priv->wstats.discard.retries++;
-		else
-			stats->tx_packets++;
-
-		BSSvUpdateNodeTxCounter(priv,
-					int_data->tsr2,
-					int_data->pkt2);
+	if (pINTData->byTSR2 & TSR_VALID) {
+		STAvUpdateTDStatCounter(&(pDevice->scStatistic),
+					(BYTE) (pINTData->byPkt2 & 0x0F),
+					(BYTE) (pINTData->byPkt2>>4),
+					pINTData->byTSR2);
+		BSSvUpdateNodeTxCounter(pDevice,
+					&(pDevice->scStatistic),
+					pINTData->byTSR2,
+					pINTData->byPkt2);
+		/*DBG_PRN_GRP01(("TSR2 %02x\n", pINTData->byTSR2));*/
 	}
-
-	if (int_data->tsr3 & TSR_VALID) {
-		if (int_data->tsr3 & (TSR_TMO | TSR_RETRYTMO))
-			priv->wstats.discard.retries++;
-		else
-			stats->tx_packets++;
-
-		BSSvUpdateNodeTxCounter(priv,
-					int_data->tsr3,
-					int_data->pkt3);
+	if (pINTData->byTSR3 & TSR_VALID) {
+		STAvUpdateTDStatCounter(&(pDevice->scStatistic),
+					(BYTE) (pINTData->byPkt3 & 0x0F),
+					(BYTE) (pINTData->byPkt3>>4),
+					pINTData->byTSR3);
+		BSSvUpdateNodeTxCounter(pDevice,
+					&(pDevice->scStatistic),
+					pINTData->byTSR3,
+					pINTData->byPkt3);
+		/*DBG_PRN_GRP01(("TSR3 %02x\n", pINTData->byTSR3));*/
 	}
-
-	if (int_data->isr0 != 0) {
-		if (int_data->isr0 & ISR_BNTX) {
-			if (priv->op_mode == NL80211_IFTYPE_AP) {
-				if (mgmt->byDTIMCount > 0) {
-					mgmt->byDTIMCount--;
-					mgmt->sNodeDBTable[0].bRxPSPoll =
-						false;
-				} else if (mgmt->byDTIMCount == 0) {
-					/* check if multicast tx buffering */
-					mgmt->byDTIMCount =
-						mgmt->byDTIMPeriod-1;
-					mgmt->sNodeDBTable[0].bRxPSPoll = true;
-					if (mgmt->sNodeDBTable[0].bPSEnable)
-						bScheduleCommand((void *) priv,
+	if (pINTData->byISR0 != 0) {
+		if (pINTData->byISR0 & ISR_BNTX) {
+			if (pDevice->eOPMode == OP_MODE_AP) {
+				if (pMgmt->byDTIMCount > 0) {
+					pMgmt->byDTIMCount--;
+					pMgmt->sNodeDBTable[0].bRxPSPoll =
+						FALSE;
+				} else if (pMgmt->byDTIMCount == 0) {
+					/* check if mutltcast tx bufferring */
+					pMgmt->byDTIMCount =
+						pMgmt->byDTIMPeriod-1;
+					pMgmt->sNodeDBTable[0].bRxPSPoll = TRUE;
+					if (pMgmt->sNodeDBTable[0].bPSEnable)
+						bScheduleCommand((void *) pDevice,
 								 WLAN_CMD_RX_PSPOLL,
 								 NULL);
 				}
-				bScheduleCommand((void *) priv,
+				bScheduleCommand((void *) pDevice,
 						WLAN_CMD_BECON_SEND,
 						NULL);
-			}
-			priv->bBeaconSent = true;
+			} /* if (pDevice->eOPMode == OP_MODE_AP) */
+		pDevice->bBeaconSent = TRUE;
 		} else {
-			priv->bBeaconSent = false;
+			pDevice->bBeaconSent = FALSE;
 		}
-
-		if (int_data->isr0 & ISR_TBTT) {
-			if (priv->bEnablePSMode)
-				bScheduleCommand((void *) priv,
+		if (pINTData->byISR0 & ISR_TBTT) {
+			if (pDevice->bEnablePSMode)
+				bScheduleCommand((void *) pDevice,
 						WLAN_CMD_TBTT_WAKEUP,
 						NULL);
-			if (priv->bChannelSwitch) {
-				priv->byChannelSwitchCount--;
-				if (priv->byChannelSwitchCount == 0)
-					bScheduleCommand((void *) priv,
+			if (pDevice->bChannelSwitch) {
+				pDevice->byChannelSwitchCount--;
+				if (pDevice->byChannelSwitchCount == 0)
+					bScheduleCommand((void *) pDevice,
 							WLAN_CMD_11H_CHSW,
 							NULL);
 			}
 		}
-		priv->qwCurrTSF = le64_to_cpu(int_data->tsf);
+		LODWORD(pDevice->qwCurrTSF) = pINTData->dwLoTSF;
+		HIDWORD(pDevice->qwCurrTSF) = pINTData->dwHiTSF;
+		/*DBG_PRN_GRP01(("ISR0 = %02x ,
+				LoTsf =  %08x,
+				HiTsf =  %08x\n",
+				pINTData->byISR0,
+				pINTData->dwLoTSF,
+				pINTData->dwHiTSF)); */
+
+		STAvUpdate802_11Counter(&pDevice->s802_11Counter,
+					&pDevice->scStatistic,
+					pINTData->byRTSSuccess,
+					pINTData->byRTSFail,
+					pINTData->byACKFail,
+					pINTData->byFCSErr);
+		STAvUpdateIsrStatCounter(&pDevice->scStatistic,
+					pINTData->byISR0,
+					pINTData->byISR1);
 	}
 
-	if (int_data->isr1 != 0)
-		if (int_data->isr1 & ISR_GPIO3)
-			bScheduleCommand((void *) priv,
+	if (pINTData->byISR1 != 0)
+		if (pINTData->byISR1 & ISR_GPIO3)
+			bScheduleCommand((void *) pDevice,
 					WLAN_CMD_RADIO,
 					NULL);
+	pDevice->intBuf.uDataLen = 0;
+	pDevice->intBuf.bInUse = FALSE;
 
-	priv->int_buf.in_use = false;
+	pStats->tx_packets = pDevice->scStatistic.ullTsrOK;
+	pStats->tx_bytes = pDevice->scStatistic.ullTxDirectedBytes +
+			pDevice->scStatistic.ullTxMulticastBytes +
+			pDevice->scStatistic.ullTxBroadcastBytes;
+	pStats->tx_errors = pDevice->scStatistic.dwTsrErr;
+	pStats->tx_dropped = pDevice->scStatistic.dwTsrErr;
 
-	stats->tx_errors = priv->wstats.discard.retries;
-	stats->tx_dropped = priv->wstats.discard.retries;
+	return status;
 }

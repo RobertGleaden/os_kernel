@@ -22,7 +22,6 @@
 #include <linux/mutex.h>
 #include <linux/pci.h>
 #include <linux/slab.h>
-#include <linux/module.h>
 #include <sound/ac97_codec.h>
 #include <sound/asoundef.h>
 #include <sound/core.h>
@@ -313,7 +312,7 @@ static void oxygen_restore_eeprom(struct oxygen *chip,
 		oxygen_clear_bits8(chip, OXYGEN_MISC,
 				   OXYGEN_MISC_WRITE_PCI_SUBID);
 
-		dev_info(chip->card->dev, "EEPROM ID restored\n");
+		snd_printk(KERN_INFO "EEPROM ID restored\n");
 	}
 }
 
@@ -573,8 +572,8 @@ static void oxygen_card_free(struct snd_card *card)
 	oxygen_shutdown(chip);
 	if (chip->irq >= 0)
 		free_irq(chip->irq, chip);
-	flush_work(&chip->spdif_input_bits_work);
-	flush_work(&chip->gpio_work);
+	flush_work_sync(&chip->spdif_input_bits_work);
+	flush_work_sync(&chip->gpio_work);
 	chip->model.cleanup(chip);
 	kfree(chip->model_data);
 	mutex_destroy(&chip->mutex);
@@ -595,8 +594,7 @@ int oxygen_pci_probe(struct pci_dev *pci, int index, char *id,
 	const struct pci_device_id *pci_id;
 	int err;
 
-	err = snd_card_new(&pci->dev, index, id, owner,
-			   sizeof(*chip), &card);
+	err = snd_card_create(index, id, owner, sizeof(*chip), &card);
 	if (err < 0)
 		return err;
 
@@ -617,13 +615,13 @@ int oxygen_pci_probe(struct pci_dev *pci, int index, char *id,
 
 	err = pci_request_regions(pci, DRIVER);
 	if (err < 0) {
-		dev_err(card->dev, "cannot reserve PCI resources\n");
+		snd_printk(KERN_ERR "cannot reserve PCI resources\n");
 		goto err_pci_enable;
 	}
 
 	if (!(pci_resource_flags(pci, 0) & IORESOURCE_IO) ||
 	    pci_resource_len(pci, 0) < OXYGEN_IO_SIZE) {
-		dev_err(card->dev, "invalid PCI I/O range\n");
+		snd_printk(KERN_ERR "invalid PCI I/O range\n");
 		err = -ENXIO;
 		goto err_pci_regions;
 	}
@@ -649,6 +647,7 @@ int oxygen_pci_probe(struct pci_dev *pci, int index, char *id,
 	}
 
 	pci_set_master(pci);
+	snd_card_set_dev(card, &pci->dev);
 	card->private_free = oxygen_card_free;
 
 	configure_pcie_bridge(pci);
@@ -658,7 +657,7 @@ int oxygen_pci_probe(struct pci_dev *pci, int index, char *id,
 	err = request_irq(pci->irq, oxygen_interrupt, IRQF_SHARED,
 			  KBUILD_MODNAME, chip);
 	if (err < 0) {
-		dev_err(card->dev, "cannot grab interrupt %d\n", pci->irq);
+		snd_printk(KERN_ERR "cannot grab interrupt %d\n", pci->irq);
 		goto err_card;
 	}
 	chip->irq = pci->irq;
@@ -679,15 +678,15 @@ int oxygen_pci_probe(struct pci_dev *pci, int index, char *id,
 		goto err_card;
 
 	if (chip->model.device_config & (MIDI_OUTPUT | MIDI_INPUT)) {
-		unsigned int info_flags =
-				MPU401_INFO_INTEGRATED | MPU401_INFO_IRQ_HOOK;
+		unsigned int info_flags = MPU401_INFO_INTEGRATED;
 		if (chip->model.device_config & MIDI_OUTPUT)
 			info_flags |= MPU401_INFO_OUTPUT;
 		if (chip->model.device_config & MIDI_INPUT)
 			info_flags |= MPU401_INFO_INPUT;
 		err = snd_mpu401_uart_new(card, 0, MPU401_HW_CMIPCI,
 					  chip->addr + OXYGEN_MPU401,
-					  info_flags, -1, &chip->midi);
+					  info_flags, 0, 0,
+					  &chip->midi);
 		if (err < 0)
 			goto err_card;
 	}
@@ -722,14 +721,14 @@ EXPORT_SYMBOL(oxygen_pci_probe);
 void oxygen_pci_remove(struct pci_dev *pci)
 {
 	snd_card_free(pci_get_drvdata(pci));
+	pci_set_drvdata(pci, NULL);
 }
 EXPORT_SYMBOL(oxygen_pci_remove);
 
-#ifdef CONFIG_PM_SLEEP
-static int oxygen_pci_suspend(struct device *dev)
+#ifdef CONFIG_PM
+int oxygen_pci_suspend(struct pci_dev *pci, pm_message_t state)
 {
-	struct pci_dev *pci = to_pci_dev(dev);
-	struct snd_card *card = dev_get_drvdata(dev);
+	struct snd_card *card = pci_get_drvdata(pci);
 	struct oxygen *chip = card->private_data;
 	unsigned int i, saved_interrupt_mask;
 
@@ -750,15 +749,16 @@ static int oxygen_pci_suspend(struct device *dev)
 	spin_unlock_irq(&chip->reg_lock);
 
 	synchronize_irq(chip->irq);
-	flush_work(&chip->spdif_input_bits_work);
-	flush_work(&chip->gpio_work);
+	flush_work_sync(&chip->spdif_input_bits_work);
+	flush_work_sync(&chip->gpio_work);
 	chip->interrupt_mask = saved_interrupt_mask;
 
 	pci_disable_device(pci);
 	pci_save_state(pci);
-	pci_set_power_state(pci, PCI_D3hot);
+	pci_set_power_state(pci, pci_choose_state(pci, state));
 	return 0;
 }
+EXPORT_SYMBOL(oxygen_pci_suspend);
 
 static const u32 registers_to_restore[OXYGEN_IO_SIZE / 32] = {
 	0xffffffff, 0x00ff077f, 0x00011d08, 0x007f00ff,
@@ -786,17 +786,16 @@ static void oxygen_restore_ac97(struct oxygen *chip, unsigned int codec)
 					  chip->saved_ac97_registers[codec][i]);
 }
 
-static int oxygen_pci_resume(struct device *dev)
+int oxygen_pci_resume(struct pci_dev *pci)
 {
-	struct pci_dev *pci = to_pci_dev(dev);
-	struct snd_card *card = dev_get_drvdata(dev);
+	struct snd_card *card = pci_get_drvdata(pci);
 	struct oxygen *chip = card->private_data;
 	unsigned int i;
 
 	pci_set_power_state(pci, PCI_D0);
 	pci_restore_state(pci);
 	if (pci_enable_device(pci) < 0) {
-		dev_err(dev, "cannot reenable device");
+		snd_printk(KERN_ERR "cannot reenable device");
 		snd_card_disconnect(card);
 		return -EIO;
 	}
@@ -820,10 +819,8 @@ static int oxygen_pci_resume(struct device *dev)
 	snd_power_change_state(card, SNDRV_CTL_POWER_D0);
 	return 0;
 }
-
-SIMPLE_DEV_PM_OPS(oxygen_pci_pm, oxygen_pci_suspend, oxygen_pci_resume);
-EXPORT_SYMBOL(oxygen_pci_pm);
-#endif /* CONFIG_PM_SLEEP */
+EXPORT_SYMBOL(oxygen_pci_resume);
+#endif /* CONFIG_PM */
 
 void oxygen_pci_shutdown(struct pci_dev *pci)
 {

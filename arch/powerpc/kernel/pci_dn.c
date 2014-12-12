@@ -22,7 +22,6 @@
 #include <linux/kernel.h>
 #include <linux/pci.h>
 #include <linux/string.h>
-#include <linux/export.h>
 #include <linux/init.h>
 #include <linux/gfp.h>
 
@@ -32,23 +31,16 @@
 #include <asm/ppc-pci.h>
 #include <asm/firmware.h>
 
-struct pci_dn *pci_get_pdn(struct pci_dev *pdev)
-{
-	struct device_node *dn = pci_device_to_OF_node(pdev);
-	if (!dn)
-		return NULL;
-	return PCI_DN(dn);
-}
-
 /*
  * Traverse_func that inits the PCI fields of the device node.
  * NOTE: this *must* be done before read/write config to the device.
  */
-void *update_dn_pci_info(struct device_node *dn, void *data)
+void * __devinit update_dn_pci_info(struct device_node *dn, void *data)
 {
 	struct pci_controller *phb = data;
-	const __be32 *type = of_get_property(dn, "ibm,pci-config-space-type", NULL);
-	const __be32 *regs;
+	const int *type =
+		of_get_property(dn, "ibm,pci-config-space-type", NULL);
+	const u32 *regs;
 	struct pci_dn *pdn;
 
 	pdn = zalloc_maybe_bootmem(sizeof(*pdn), GFP_KERNEL);
@@ -57,19 +49,14 @@ void *update_dn_pci_info(struct device_node *dn, void *data)
 	dn->data = pdn;
 	pdn->node = dn;
 	pdn->phb = phb;
-#ifdef CONFIG_PPC_POWERNV
-	pdn->pe_number = IODA_INVALID_PE;
-#endif
 	regs = of_get_property(dn, "reg", NULL);
 	if (regs) {
-		u32 addr = of_read_number(regs, 1);
-
 		/* First register entry is addr (00BBSS00)  */
-		pdn->busno = (addr >> 16) & 0xff;
-		pdn->devfn = (addr >> 8) & 0xff;
+		pdn->busno = (regs[0] >> 16) & 0xff;
+		pdn->devfn = (regs[0] >> 8) & 0xff;
 	}
 
-	pdn->pci_ext_config_space = (type && of_read_number(type, 1) == 1);
+	pdn->pci_ext_config_space = (type && *type == 1);
 	return NULL;
 }
 
@@ -99,13 +86,12 @@ void *traverse_pci_devices(struct device_node *start, traverse_func pre,
 
 	/* We started with a phb, iterate all childs */
 	for (dn = start->child; dn; dn = nextdn) {
-		const __be32 *classp;
-		u32 class = 0;
+		const u32 *classp;
+		u32 class;
 
 		nextdn = NULL;
 		classp = of_get_property(dn, "class-code", NULL);
-		if (classp)
-			class = of_read_number(classp, 1);
+		class = classp ? *classp : 0;
 
 		if (pre && ((ret = pre(dn, data)) != NULL))
 			return ret;
@@ -139,7 +125,7 @@ void *traverse_pci_devices(struct device_node *start, traverse_func pre,
  * subsystem is set up, before kmalloc is valid) and during the 
  * dynamic lpar operation of adding a PHB to a running system.
  */
-void pci_devs_phb_init_dynamic(struct pci_controller *phb)
+void __devinit pci_devs_phb_init_dynamic(struct pci_controller *phb)
 {
 	struct device_node *dn = phb->dn;
 	struct pci_dn *pdn;

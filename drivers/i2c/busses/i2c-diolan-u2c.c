@@ -25,6 +25,8 @@
 #define USB_VENDOR_ID_DIOLAN		0x0abf
 #define USB_DEVICE_ID_DIOLAN_U2C	0x3370
 
+#define DIOLAN_OUT_EP		0x02
+#define DIOLAN_IN_EP		0x84
 
 /* commands via USB, must match command ids in the firmware */
 #define CMD_I2C_READ		0x01
@@ -82,7 +84,6 @@
 struct i2c_diolan_u2c {
 	u8 obuffer[DIOLAN_OUTBUF_LEN];	/* output buffer */
 	u8 ibuffer[DIOLAN_INBUF_LEN];	/* input buffer */
-	int ep_in, ep_out;              /* Endpoints    */
 	struct usb_device *usb_dev;	/* the usb device for this device */
 	struct usb_interface *interface;/* the interface for this device */
 	struct i2c_adapter adapter;	/* i2c related things */
@@ -108,7 +109,7 @@ static int diolan_usb_transfer(struct i2c_diolan_u2c *dev)
 		return -EINVAL;
 
 	ret = usb_bulk_msg(dev->usb_dev,
-			   usb_sndbulkpipe(dev->usb_dev, dev->ep_out),
+			   usb_sndbulkpipe(dev->usb_dev, DIOLAN_OUT_EP),
 			   dev->obuffer, dev->olen, &actual,
 			   DIOLAN_USB_TIMEOUT);
 	if (!ret) {
@@ -117,7 +118,7 @@ static int diolan_usb_transfer(struct i2c_diolan_u2c *dev)
 
 			tmpret = usb_bulk_msg(dev->usb_dev,
 					      usb_rcvbulkpipe(dev->usb_dev,
-							      dev->ep_in),
+							      DIOLAN_IN_EP),
 					      dev->ibuffer,
 					      sizeof(dev->ibuffer), &actual,
 					      DIOLAN_USB_TIMEOUT);
@@ -209,7 +210,7 @@ static void diolan_flush_input(struct i2c_diolan_u2c *dev)
 		int ret;
 
 		ret = usb_bulk_msg(dev->usb_dev,
-				   usb_rcvbulkpipe(dev->usb_dev, dev->ep_in),
+				   usb_rcvbulkpipe(dev->usb_dev, DIOLAN_IN_EP),
 				   dev->ibuffer, sizeof(dev->ibuffer), &actual,
 				   DIOLAN_USB_TIMEOUT);
 		if (ret < 0 || actual == 0)
@@ -404,7 +405,6 @@ static int diolan_usb_xfer(struct i2c_adapter *adapter, struct i2c_msg *msgs,
 			}
 		}
 	}
-	ret = num;
 abort:
 	sret = diolan_i2c_stop(dev);
 	if (sret < 0 && ret >= 0)
@@ -444,22 +444,16 @@ static void diolan_u2c_free(struct i2c_diolan_u2c *dev)
 static int diolan_u2c_probe(struct usb_interface *interface,
 			    const struct usb_device_id *id)
 {
-	struct usb_host_interface *hostif = interface->cur_altsetting;
 	struct i2c_diolan_u2c *dev;
 	int ret;
-
-	if (hostif->desc.bInterfaceNumber != 0
-	    || hostif->desc.bNumEndpoints < 2)
-		return -ENODEV;
 
 	/* allocate memory for our device state and initialize it */
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (dev == NULL) {
+		dev_err(&interface->dev, "no memory for device state\n");
 		ret = -ENOMEM;
 		goto error;
 	}
-	dev->ep_out = hostif->endpoint[0].desc.bEndpointAddress;
-	dev->ep_in = hostif->endpoint[1].desc.bEndpointAddress;
 
 	dev->usb_dev = usb_get_dev(interface_to_usbdev(interface));
 	dev->interface = interface;
@@ -521,8 +515,21 @@ static struct usb_driver diolan_u2c_driver = {
 	.id_table = diolan_u2c_table,
 };
 
-module_usb_driver(diolan_u2c_driver);
+static int __init diolan_u2c_init(void)
+{
+	/* register this driver with the USB subsystem */
+	return usb_register(&diolan_u2c_driver);
+}
 
-MODULE_AUTHOR("Guenter Roeck <linux@roeck-us.net>");
+static void __exit diolan_u2c_exit(void)
+{
+	/* deregister this driver with the USB subsystem */
+	usb_deregister(&diolan_u2c_driver);
+}
+
+module_init(diolan_u2c_init);
+module_exit(diolan_u2c_exit);
+
+MODULE_AUTHOR("Guenter Roeck <guenter.roeck@ericsson.com>");
 MODULE_DESCRIPTION(DRIVER_NAME " driver");
 MODULE_LICENSE("GPL");

@@ -8,7 +8,6 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/if_arp.h>
-#include <linux/export.h>
 
 #include "decl.h"
 #include "cfg.h"
@@ -733,13 +732,15 @@ int lbs_get_rssi(struct lbs_private *priv, s8 *rssi, s8 *nf)
  *  to the firmware
  *
  *  @priv:	pointer to &struct lbs_private
+ *  @request:	cfg80211 regulatory request structure
+ *  @bands:	the device's supported bands and channels
  *
  *  returns:	0 on success, error code on failure
 */
-int lbs_set_11d_domain_info(struct lbs_private *priv)
+int lbs_set_11d_domain_info(struct lbs_private *priv,
+			    struct regulatory_request *request,
+			    struct ieee80211_supported_band **bands)
 {
-	struct wiphy *wiphy = priv->wdev->wiphy;
-	struct ieee80211_supported_band **bands = wiphy->bands;
 	struct cmd_ds_802_11d_domain_info cmd;
 	struct mrvl_ie_domain_param_set *domain = &cmd.domain;
 	struct ieee80211_country_ie_triplet *t;
@@ -750,23 +751,21 @@ int lbs_set_11d_domain_info(struct lbs_private *priv)
 	u8 first_channel = 0, next_chan = 0, max_pwr = 0;
 	u8 i, flag = 0;
 	size_t triplet_size;
-	int ret = 0;
+	int ret;
 
 	lbs_deb_enter(LBS_DEB_11D);
-	if (!priv->country_code[0])
-		goto out;
 
 	memset(&cmd, 0, sizeof(cmd));
 	cmd.action = cpu_to_le16(CMD_ACT_SET);
 
 	lbs_deb_11d("Setting country code '%c%c'\n",
-		    priv->country_code[0], priv->country_code[1]);
+		    request->alpha2[0], request->alpha2[1]);
 
 	domain->header.type = cpu_to_le16(TLV_TYPE_DOMAIN);
 
 	/* Set country code */
-	domain->country_code[0] = priv->country_code[0];
-	domain->country_code[1] = priv->country_code[1];
+	domain->country_code[0] = request->alpha2[0];
+	domain->country_code[1] = request->alpha2[1];
 	domain->country_code[2] = ' ';
 
 	/* Now set up the channel triplets; firmware is somewhat picky here
@@ -848,7 +847,6 @@ int lbs_set_11d_domain_info(struct lbs_private *priv)
 
 	ret = lbs_cmd_with_response(priv, CMD_802_11D_DOMAIN_INFO, &cmd);
 
-out:
 	lbs_deb_leave_args(LBS_DEB_11D, "ret %d", ret);
 	return ret;
 }
@@ -1020,9 +1018,9 @@ static void lbs_submit_command(struct lbs_private *priv,
 	if (ret) {
 		netdev_info(priv->dev, "DNLD_CMD: hw_host_to_card failed: %d\n",
 			    ret);
-		/* Reset dnld state machine, report failure */
-		priv->dnld_sent = DNLD_RES_RECEIVED;
-		lbs_complete_command(priv, cmdnode, ret);
+		/* Let the timer kick in and retry, and potentially reset
+		   the whole thing if the condition persists */
+		timeo = HZ/4;
 	}
 
 	if (command == CMD_802_11_DEEP_SLEEP) {
@@ -1090,7 +1088,7 @@ void __lbs_complete_command(struct lbs_private *priv, struct cmd_ctrl_node *cmd,
 	if (!cmd->callback || cmd->callback == lbs_cmd_async_callback)
 		__lbs_cleanup_and_insert_cmd(priv, cmd);
 	priv->cur_cmd = NULL;
-	wake_up(&priv->waitq);
+	wake_up_interruptible(&priv->waitq);
 }
 
 void lbs_complete_command(struct lbs_private *priv, struct cmd_ctrl_node *cmd,
@@ -1157,22 +1155,6 @@ void lbs_set_mac_control(struct lbs_private *priv)
 	lbs_cmd_async(priv, CMD_MAC_CONTROL, &cmd.hdr, sizeof(cmd));
 
 	lbs_deb_leave(LBS_DEB_CMD);
-}
-
-int lbs_set_mac_control_sync(struct lbs_private *priv)
-{
-	struct cmd_ds_mac_control cmd;
-	int ret = 0;
-
-	lbs_deb_enter(LBS_DEB_CMD);
-
-	cmd.hdr.size = cpu_to_le16(sizeof(cmd));
-	cmd.action = cpu_to_le16(priv->mac_control);
-	cmd.reserved = 0;
-	ret = lbs_cmd_with_response(priv, CMD_MAC_CONTROL, &cmd);
-
-	lbs_deb_leave(LBS_DEB_CMD);
-	return ret;
 }
 
 /**
@@ -1645,7 +1627,7 @@ struct cmd_ctrl_node *__lbs_cmd_async(struct lbs_private *priv,
 		lbs_deb_host("PREP_CMD: cmdnode is NULL\n");
 
 		/* Wake up main thread to execute next command */
-		wake_up(&priv->waitq);
+		wake_up_interruptible(&priv->waitq);
 		cmdnode = ERR_PTR(-ENOBUFS);
 		goto done;
 	}
@@ -1665,7 +1647,7 @@ struct cmd_ctrl_node *__lbs_cmd_async(struct lbs_private *priv,
 
 	cmdnode->cmdwaitqwoken = 0;
 	lbs_queue_cmd(priv, cmdnode);
-	wake_up(&priv->waitq);
+	wake_up_interruptible(&priv->waitq);
 
  done:
 	lbs_deb_leave_args(LBS_DEB_HOST, "ret %p", cmdnode);

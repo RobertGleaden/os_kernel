@@ -2,10 +2,10 @@
  * LEDs driver for Dialog Semiconductor DA9030/DA9034
  *
  * Copyright (C) 2008 Compulab, Ltd.
- *	Mike Rapoport <mike@compulab.co.il>
+ * 	Mike Rapoport <mike@compulab.co.il>
  *
  * Copyright (C) 2006-2008 Marvell International Ltd.
- *	Eric Miao <eric.miao@marvell.com>
+ * 	Eric Miao <eric.miao@marvell.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -14,6 +14,7 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/init.h>
 #include <linux/platform_device.h>
 #include <linux/leds.h>
 #include <linux/workqueue.h>
@@ -84,15 +85,15 @@ static void da903x_led_set(struct led_classdev *led_cdev,
 			   enum led_brightness value)
 {
 	struct da903x_led *led;
-
+	
 	led = container_of(led_cdev, struct da903x_led, cdev);
 	led->new_brightness = value;
 	schedule_work(&led->work);
 }
 
-static int da903x_led_probe(struct platform_device *pdev)
+static int __devinit da903x_led_probe(struct platform_device *pdev)
 {
-	struct led_info *pdata = dev_get_platdata(&pdev->dev);
+	struct led_info *pdata = pdev->dev.platform_data;
 	struct da903x_led *led;
 	int id, ret;
 
@@ -107,9 +108,11 @@ static int da903x_led_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	led = devm_kzalloc(&pdev->dev, sizeof(struct da903x_led), GFP_KERNEL);
-	if (!led)
+	led = kzalloc(sizeof(struct da903x_led), GFP_KERNEL);
+	if (led == NULL) {
+		dev_err(&pdev->dev, "failed to alloc memory for LED%d\n", id);
 		return -ENOMEM;
+	}
 
 	led->cdev.name = pdata->name;
 	led->cdev.default_trigger = pdata->default_trigger;
@@ -126,18 +129,23 @@ static int da903x_led_probe(struct platform_device *pdev)
 	ret = led_classdev_register(led->master, &led->cdev);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to register LED %d\n", id);
-		return ret;
+		goto err;
 	}
 
 	platform_set_drvdata(pdev, led);
 	return 0;
+
+err:
+	kfree(led);
+	return ret;
 }
 
-static int da903x_led_remove(struct platform_device *pdev)
+static int __devexit da903x_led_remove(struct platform_device *pdev)
 {
 	struct da903x_led *led = platform_get_drvdata(pdev);
 
 	led_classdev_unregister(&led->cdev);
+	kfree(led);
 	return 0;
 }
 
@@ -147,13 +155,23 @@ static struct platform_driver da903x_led_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= da903x_led_probe,
-	.remove		= da903x_led_remove,
+	.remove		= __devexit_p(da903x_led_remove),
 };
 
-module_platform_driver(da903x_led_driver);
+static int __init da903x_led_init(void)
+{
+	return platform_driver_register(&da903x_led_driver);
+}
+module_init(da903x_led_init);
+
+static void __exit da903x_led_exit(void)
+{
+	platform_driver_unregister(&da903x_led_driver);
+}
+module_exit(da903x_led_exit);
 
 MODULE_DESCRIPTION("LEDs driver for Dialog Semiconductor DA9030/DA9034");
-MODULE_AUTHOR("Eric Miao <eric.miao@marvell.com>");
-MODULE_AUTHOR("Mike Rapoport <mike@compulab.co.il>");
+MODULE_AUTHOR("Eric Miao <eric.miao@marvell.com>"
+	      "Mike Rapoport <mike@compulab.co.il>");
 MODULE_LICENSE("GPL");
 MODULE_ALIAS("platform:da903x-led");

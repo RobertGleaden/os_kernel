@@ -1,4 +1,5 @@
 /*
+ *  drivers/s390/char/tape_core.c
  *    basic function of the tape device driver
  *
  *  S390 and zSeries version
@@ -13,6 +14,7 @@
 #define KMSG_COMPONENT "tape"
 #define pr_fmt(fmt) KMSG_COMPONENT ": " fmt
 
+#include <linux/kernel_stat.h>
 #include <linux/module.h>
 #include <linux/init.h>	     // for kernel parameters
 #include <linux/kmod.h>	     // for requesting modules
@@ -400,6 +402,9 @@ tape_generic_online(struct tape_device *device,
 	rc = tapechar_setup_device(device);
 	if (rc)
 		goto out_minor;
+	rc = tapeblock_setup_device(device);
+	if (rc)
+		goto out_char;
 
 	tape_state_set(device, TS_UNUSED);
 
@@ -407,6 +412,8 @@ tape_generic_online(struct tape_device *device,
 
 	return 0;
 
+out_char:
+	tapechar_cleanup_device(device);
 out_minor:
 	tape_remove_minor(device);
 out_discipline:
@@ -420,6 +427,7 @@ out:
 static void
 tape_cleanup_device(struct tape_device *device)
 {
+	tapeblock_cleanup_device(device);
 	tapechar_cleanup_device(device);
 	device->discipline->cleanup_device(device);
 	module_put(device->discipline->owner);
@@ -778,6 +786,10 @@ __tape_start_io(struct tape_device *device, struct tape_request *request)
 {
 	int rc;
 
+#ifdef CONFIG_S390_TAPE_BLOCK
+	if (request->op == TO_BLOCK)
+		device->discipline->check_locate(device, request);
+#endif
 	rc = ccw_device_start(
 		device->cdev,
 		request->cpaddr,
@@ -1103,6 +1115,7 @@ __tape_do_irq (struct ccw_device *cdev, unsigned long intparm, struct irb *irb)
 	struct tape_request *request;
 	int rc;
 
+	kstat_cpu(smp_processor_id()).irqs[IOINT_TAP]++;
 	device = dev_get_drvdata(&cdev->dev);
 	if (device == NULL) {
 		return;
@@ -1242,7 +1255,7 @@ __tape_do_irq (struct ccw_device *cdev, unsigned long intparm, struct irb *irb)
 }
 
 /*
- * Tape device open function used by tape_char frontend.
+ * Tape device open function used by tape_char & tape_block frontends.
  */
 int
 tape_open(struct tape_device *device)
@@ -1272,7 +1285,7 @@ tape_open(struct tape_device *device)
 }
 
 /*
- * Tape device release function used by tape_char frontend.
+ * Tape device release function used by tape_char & tape_block frontends.
  */
 int
 tape_release(struct tape_device *device)
@@ -1333,6 +1346,7 @@ tape_init (void)
 	DBF_EVENT(3, "tape init\n");
 	tape_proc_init();
 	tapechar_init ();
+	tapeblock_init ();
 	return 0;
 }
 
@@ -1346,6 +1360,7 @@ tape_exit(void)
 
 	/* Get rid of the frontends */
 	tapechar_exit();
+	tapeblock_exit();
 	tape_proc_cleanup();
 	debug_unregister (TAPE_DBF_AREA);
 }

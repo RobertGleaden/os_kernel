@@ -12,7 +12,6 @@
  */
 
 #include <linux/pci.h>
-#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/ssb/ssb.h>
 
@@ -38,7 +37,7 @@ static int ssb_pcihost_resume(struct pci_dev *dev)
 	struct ssb_bus *ssb = pci_get_drvdata(dev);
 	int err;
 
-	pci_set_power_state(dev, PCI_D0);
+	pci_set_power_state(dev, 0);
 	err = pci_enable_device(dev);
 	if (err)
 		return err;
@@ -54,8 +53,8 @@ static int ssb_pcihost_resume(struct pci_dev *dev)
 # define ssb_pcihost_resume	NULL
 #endif /* CONFIG_PM */
 
-static int ssb_pcihost_probe(struct pci_dev *dev,
-			     const struct pci_device_id *id)
+static int __devinit ssb_pcihost_probe(struct pci_dev *dev,
+				       const struct pci_device_id *id)
 {
 	struct ssb_bus *ssb;
 	int err = -ENOMEM;
@@ -111,7 +110,7 @@ static void ssb_pcihost_remove(struct pci_dev *dev)
 	pci_set_drvdata(dev, NULL);
 }
 
-int ssb_pcihost_register(struct pci_driver *driver)
+int __devinit ssb_pcihost_register(struct pci_driver *driver)
 {
 	driver->probe = ssb_pcihost_probe;
 	driver->remove = ssb_pcihost_remove;

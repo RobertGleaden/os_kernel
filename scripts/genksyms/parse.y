@@ -51,25 +51,6 @@ remove_list(struct string_list **pb, struct string_list **pe)
   free_list(b, e);
 }
 
-/* Record definition of a struct/union/enum */
-static void record_compound(struct string_list **keyw,
-		       struct string_list **ident,
-		       struct string_list **body,
-		       enum symbol_type type)
-{
-	struct string_list *b = *body, *i = *ident, *r;
-
-	if (i->in_source_file) {
-		remove_node(keyw);
-		(*ident)->tag = type;
-		remove_list(body, ident);
-		return;
-	}
-	r = copy_node(i); r->tag = type;
-	r->next = (*keyw)->next; *body = r; (*keyw)->next = NULL;
-	add_symbol(i->string, type, b, is_extern);
-}
-
 %}
 
 %token ASM_KEYW
@@ -103,7 +84,6 @@ static void record_compound(struct string_list **keyw,
 
 %token ASM_PHRASE
 %token ATTRIBUTE_PHRASE
-%token TYPEOF_PHRASE
 %token BRACE_PHRASE
 %token BRACKET_PHRASE
 %token EXPRESSION_PHRASE
@@ -221,8 +201,8 @@ storage_class_specifier:
 type_specifier:
 	simple_type_specifier
 	| cvar_qualifier
-	| TYPEOF_KEYW '(' parameter_declaration ')'
-	| TYPEOF_PHRASE
+	| TYPEOF_KEYW '(' decl_specifier_seq '*' ')'
+	| TYPEOF_KEYW '(' decl_specifier_seq ')'
 
 	/* References to s/u/e's defined elsewhere.  Rearrange things
 	   so that it is easier to expand the definition fully later.  */
@@ -235,11 +215,26 @@ type_specifier:
 
 	/* Full definitions of an s/u/e.  Record it.  */
 	| STRUCT_KEYW IDENT class_body
-		{ record_compound($1, $2, $3, SYM_STRUCT); $$ = $3; }
+		{ struct string_list *s = *$3, *i = *$2, *r;
+		  r = copy_node(i); r->tag = SYM_STRUCT;
+		  r->next = (*$1)->next; *$3 = r; (*$1)->next = NULL;
+		  add_symbol(i->string, SYM_STRUCT, s, is_extern);
+		  $$ = $3;
+		}
 	| UNION_KEYW IDENT class_body
-		{ record_compound($1, $2, $3, SYM_UNION); $$ = $3; }
+		{ struct string_list *s = *$3, *i = *$2, *r;
+		  r = copy_node(i); r->tag = SYM_UNION;
+		  r->next = (*$1)->next; *$3 = r; (*$1)->next = NULL;
+		  add_symbol(i->string, SYM_UNION, s, is_extern);
+		  $$ = $3;
+		}
 	| ENUM_KEYW IDENT enum_body
-		{ record_compound($1, $2, $3, SYM_ENUM); $$ = $3; }
+		{ struct string_list *s = *$3, *i = *$2, *r;
+		  r = copy_node(i); r->tag = SYM_ENUM;
+		  r->next = (*$1)->next; *$3 = r; (*$1)->next = NULL;
+		  add_symbol(i->string, SYM_ENUM, s, is_extern);
+		  $$ = $3;
+		}
 	/*
 	 * Anonymous enum definition. Tell add_symbol() to restart its counter.
 	 */

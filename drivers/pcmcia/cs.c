@@ -29,6 +29,7 @@
 #include <linux/device.h>
 #include <linux/kthread.h>
 #include <linux/freezer.h>
+#include <asm/system.h>
 #include <asm/irq.h>
 
 #include <pcmcia/ss.h>
@@ -484,7 +485,7 @@ static int socket_early_resume(struct pcmcia_socket *skt)
 
 static int socket_late_resume(struct pcmcia_socket *skt)
 {
-	int ret = 0;
+	int ret;
 
 	mutex_lock(&skt->ops_mutex);
 	skt->state &= ~SOCKET_SUSPEND;
@@ -511,31 +512,19 @@ static int socket_late_resume(struct pcmcia_socket *skt)
 		return socket_insert(skt);
 	}
 
-	if (!(skt->state & SOCKET_CARDBUS) && (skt->callback))
-		ret = skt->callback->early_resume(skt);
-	return ret;
-}
-
-/*
- * Finalize the resume. In case of a cardbus socket, we have
- * to rebind the devices as we can't be certain that it has been
- * replaced, or not.
- */
-static int socket_complete_resume(struct pcmcia_socket *skt)
-{
-	int ret = 0;
 #ifdef CONFIG_CARDBUS
 	if (skt->state & SOCKET_CARDBUS) {
 		/* We can't be sure the CardBus card is the same
 		 * as the one previously inserted. Therefore, remove
 		 * and re-add... */
 		cb_free(skt);
-		ret = cb_alloc(skt);
-		if (ret)
-			cb_free(skt);
+		cb_alloc(skt);
+		return 0;
 	}
 #endif
-	return ret;
+	if (!(skt->state & SOCKET_CARDBUS) && (skt->callback))
+		skt->callback->early_resume(skt);
+	return 0;
 }
 
 /*
@@ -545,15 +534,11 @@ static int socket_complete_resume(struct pcmcia_socket *skt)
  */
 static int socket_resume(struct pcmcia_socket *skt)
 {
-	int err;
 	if (!(skt->state & SOCKET_SUSPEND))
 		return -EBUSY;
 
 	socket_early_resume(skt);
-	err = socket_late_resume(skt);
-	if (!err)
-		err = socket_complete_resume(skt);
-	return err;
+	return socket_late_resume(skt);
 }
 
 static void socket_remove(struct pcmcia_socket *skt)
@@ -864,12 +849,6 @@ static int __used pcmcia_socket_dev_resume(struct device *dev)
 	return __pcmcia_pm_op(dev, socket_late_resume);
 }
 
-static void __used pcmcia_socket_dev_complete(struct device *dev)
-{
-	WARN(__pcmcia_pm_op(dev, socket_complete_resume),
-		"failed to complete resume");
-}
-
 static const struct dev_pm_ops pcmcia_socket_pm_ops = {
 	/* dev_resume may be called with IRQs enabled */
 	SET_SYSTEM_SLEEP_PM_OPS(NULL,
@@ -884,7 +863,6 @@ static const struct dev_pm_ops pcmcia_socket_pm_ops = {
 	.resume_noirq = pcmcia_socket_dev_resume_noirq,
 	.thaw_noirq = pcmcia_socket_dev_resume_noirq,
 	.restore_noirq = pcmcia_socket_dev_resume_noirq,
-	.complete = pcmcia_socket_dev_complete,
 };
 
 #define PCMCIA_SOCKET_CLASS_PM_OPS (&pcmcia_socket_pm_ops)

@@ -6,7 +6,7 @@
 #ifndef __START_H__
 #define __START_H__
 
-#include <generated/asm-offsets.h>
+#include "kern_constants.h"
 
 /*
  * Stolen from linux/const.h, which can't be directly included since
@@ -35,7 +35,7 @@
 
 #ifndef __ASSEMBLY__
 
-#include <sysdep/ptrace.h>
+#include "sysdep/ptrace.h"
 
 struct cpu_task {
 	int pid;
@@ -44,6 +44,7 @@ struct cpu_task {
 
 extern struct cpu_task cpu_tasks[];
 
+extern unsigned long low_physmem;
 extern unsigned long high_physmem;
 extern unsigned long uml_physmem;
 extern unsigned long uml_reserved;
@@ -51,14 +52,15 @@ extern unsigned long end_vm;
 extern unsigned long start_vm;
 extern unsigned long long highmem;
 
+extern unsigned long _stext, _etext, _sdata, _edata, __bss_start, _end;
+extern unsigned long _unprotected_end;
 extern unsigned long brk_start;
 
 extern unsigned long host_task_size;
 
 extern int linux_main(int argc, char **argv);
 
-struct siginfo;
-extern void (*sig_info[])(int, struct siginfo *si, struct uml_pt_regs *);
+extern void (*sig_info[])(int, struct uml_pt_regs *);
 
 #endif
 

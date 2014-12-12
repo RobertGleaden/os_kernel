@@ -27,15 +27,18 @@ struct request *blk_queue_find_tag(struct request_queue *q, int tag)
 EXPORT_SYMBOL(blk_queue_find_tag);
 
 /**
- * blk_free_tags - release a given set of tag maintenance info
+ * __blk_free_tags - release a given set of tag maintenance info
  * @bqt:	the tag map to free
  *
- * Drop the reference count on @bqt and frees it when the last reference
- * is dropped.
+ * Tries to free the specified @bqt.  Returns true if it was
+ * actually freed and false if there are still references using it
  */
-void blk_free_tags(struct blk_queue_tag *bqt)
+static int __blk_free_tags(struct blk_queue_tag *bqt)
 {
-	if (atomic_dec_and_test(&bqt->refcnt)) {
+	int retval;
+
+	retval = atomic_dec_and_test(&bqt->refcnt);
+	if (retval) {
 		BUG_ON(find_first_bit(bqt->tag_map, bqt->max_depth) <
 							bqt->max_depth);
 
@@ -47,8 +50,9 @@ void blk_free_tags(struct blk_queue_tag *bqt)
 
 		kfree(bqt);
 	}
+
+	return retval;
 }
-EXPORT_SYMBOL(blk_free_tags);
 
 /**
  * __blk_queue_free_tags - release tag maintenance info
@@ -65,11 +69,26 @@ void __blk_queue_free_tags(struct request_queue *q)
 	if (!bqt)
 		return;
 
-	blk_free_tags(bqt);
+	__blk_free_tags(bqt);
 
 	q->queue_tags = NULL;
 	queue_flag_clear_unlocked(QUEUE_FLAG_QUEUED, q);
 }
+
+/**
+ * blk_free_tags - release a given set of tag maintenance info
+ * @bqt:	the tag map to free
+ *
+ * For externally managed @bqt frees the map.  Callers of this
+ * function must guarantee to have released all the queues that
+ * might have been using this tag map.
+ */
+void blk_free_tags(struct blk_queue_tag *bqt)
+{
+	if (unlikely(!__blk_free_tags(bqt)))
+		BUG();
+}
+EXPORT_SYMBOL(blk_free_tags);
 
 /**
  * blk_queue_free_tags - release tag maintenance info
@@ -167,8 +186,7 @@ int blk_queue_init_tags(struct request_queue *q, int depth,
 		tags = __blk_queue_init_tags(q, depth);
 
 		if (!tags)
-			return -ENOMEM;
-
+			goto fail;
 	} else if (q->queue_tags) {
 		rc = blk_queue_resize_tags(q, depth);
 		if (rc)
@@ -185,6 +203,9 @@ int blk_queue_init_tags(struct request_queue *q, int depth,
 	queue_flag_set_unlocked(QUEUE_FLAG_QUEUED, q);
 	INIT_LIST_HEAD(&q->tag_busy_list);
 	return 0;
+fail:
+	kfree(tags);
+	return -ENOMEM;
 }
 EXPORT_SYMBOL(blk_queue_init_tags);
 
@@ -261,9 +282,16 @@ EXPORT_SYMBOL(blk_queue_resize_tags);
 void blk_queue_end_tag(struct request_queue *q, struct request *rq)
 {
 	struct blk_queue_tag *bqt = q->queue_tags;
-	unsigned tag = rq->tag; /* negative tags invalid */
+	int tag = rq->tag;
 
-	BUG_ON(tag >= bqt->real_max_depth);
+	BUG_ON(tag == -1);
+
+	if (unlikely(tag >= bqt->real_max_depth))
+		/*
+		 * This can happen after tag depth has been reduced.
+		 * FIXME: how about a warning or info message here?
+		 */
+		return;
 
 	list_del_init(&rq->queuelist);
 	rq->cmd_flags &= ~REQ_QUEUED;
@@ -329,16 +357,9 @@ int blk_queue_start_tag(struct request_queue *q, struct request *rq)
 	 */
 	max_depth = bqt->max_depth;
 	if (!rq_is_sync(rq) && max_depth > 1) {
-		switch (max_depth) {
-		case 2:
+		max_depth -= 2;
+		if (!max_depth)
 			max_depth = 1;
-			break;
-		case 3:
-			max_depth = 2;
-			break;
-		default:
-			max_depth -= 2;
-		}
 		if (q->in_flight[BLK_RW_ASYNC] > max_depth)
 			return 1;
 	}

@@ -1472,8 +1472,7 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	/* input device for IR remote (and tx) */
 	rdev = rc_allocate_device();
 	if (!rdev)
-		goto exit_free_dev_rdev;
-	itdev->rdev = rdev;
+		goto failure;
 
 	ret = -ENODEV;
 
@@ -1498,12 +1497,12 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	if (!pnp_port_valid(pdev, io_rsrc_no) ||
 	    pnp_port_len(pdev, io_rsrc_no) != dev_desc->io_region_size) {
 		dev_err(&pdev->dev, "IR PNP Port not valid!\n");
-		goto exit_free_dev_rdev;
+		goto failure;
 	}
 
 	if (!pnp_irq_valid(pdev, 0)) {
 		dev_err(&pdev->dev, "PNP IRQ not valid!\n");
-		goto exit_free_dev_rdev;
+		goto failure;
 	}
 
 	/* store resource values */
@@ -1515,6 +1514,16 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 
 	/* initialize raw event */
 	init_ir_raw_event(&itdev->rawir);
+
+	ret = -EBUSY;
+	/* now claim resources */
+	if (!request_region(itdev->cir_addr,
+				dev_desc->io_region_size, ITE_DRIVER_NAME))
+		goto failure;
+
+	if (request_irq(itdev->cir_irq, ite_cir_isr, IRQF_SHARED,
+			ITE_DRIVER_NAME, (void *)itdev))
+		goto failure;
 
 	/* set driver data into the pnp device */
 	pnp_set_drvdata(pdev, itdev);
@@ -1563,7 +1572,7 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	/* set up ir-core props */
 	rdev->priv = itdev;
 	rdev->driver_type = RC_DRIVER_IR_RAW;
-	rc_set_allowed_protocols(rdev, RC_BIT_ALL);
+	rdev->allowed_protos = RC_TYPE_ALL;
 	rdev->open = ite_open;
 	rdev->close = ite_close;
 	rdev->s_idle = ite_s_idle;
@@ -1593,35 +1602,27 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 
 	ret = rc_register_device(rdev);
 	if (ret)
-		goto exit_free_dev_rdev;
+		goto failure;
 
-	ret = -EBUSY;
-	/* now claim resources */
-	if (!request_region(itdev->cir_addr,
-				dev_desc->io_region_size, ITE_DRIVER_NAME))
-		goto exit_unregister_device;
-
-	if (request_irq(itdev->cir_irq, ite_cir_isr, IRQF_SHARED,
-			ITE_DRIVER_NAME, (void *)itdev))
-		goto exit_release_cir_addr;
-
+	itdev->rdev = rdev;
 	ite_pr(KERN_NOTICE, "driver has been successfully loaded\n");
 
 	return 0;
 
-exit_release_cir_addr:
-	release_region(itdev->cir_addr, itdev->params.io_region_size);
-exit_unregister_device:
-	rc_unregister_device(rdev);
-	rdev = NULL;
-exit_free_dev_rdev:
+failure:
+	if (itdev->cir_irq)
+		free_irq(itdev->cir_irq, itdev);
+
+	if (itdev->cir_addr)
+		release_region(itdev->cir_addr, itdev->params.io_region_size);
+
 	rc_free_device(rdev);
 	kfree(itdev);
 
 	return ret;
 }
 
-static void ite_remove(struct pnp_dev *pdev)
+static void __devexit ite_remove(struct pnp_dev *pdev)
 {
 	struct ite_dev *dev = pnp_get_drvdata(pdev);
 	unsigned long flags;
@@ -1703,18 +1704,18 @@ static struct pnp_driver ite_driver = {
 	.name		= ITE_DRIVER_NAME,
 	.id_table	= ite_ids,
 	.probe		= ite_probe,
-	.remove		= ite_remove,
+	.remove		= __devexit_p(ite_remove),
 	.suspend	= ite_suspend,
 	.resume		= ite_resume,
 	.shutdown	= ite_shutdown,
 };
 
-static int ite_init(void)
+int ite_init(void)
 {
 	return pnp_register_driver(&ite_driver);
 }
 
-static void ite_exit(void)
+void ite_exit(void)
 {
 	pnp_unregister_driver(&ite_driver);
 }

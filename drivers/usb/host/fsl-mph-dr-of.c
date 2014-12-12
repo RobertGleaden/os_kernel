@@ -16,7 +16,6 @@
 #include <linux/io.h>
 #include <linux/of_platform.h>
 #include <linux/clk.h>
-#include <linux/module.h>
 
 struct fsl_usb2_dev_data {
 	char *dr_mode;		/* controller mode */
@@ -24,7 +23,7 @@ struct fsl_usb2_dev_data {
 	enum fsl_usb2_operating_modes op_mode;	/* operating mode */
 };
 
-static struct fsl_usb2_dev_data dr_mode_data[] = {
+struct fsl_usb2_dev_data dr_mode_data[] __devinitdata = {
 	{
 		.dr_mode = "host",
 		.drivers = { "fsl-ehci", NULL, NULL, },
@@ -42,7 +41,7 @@ static struct fsl_usb2_dev_data dr_mode_data[] = {
 	},
 };
 
-static struct fsl_usb2_dev_data *get_dr_mode_data(struct device_node *np)
+struct fsl_usb2_dev_data * __devinit get_dr_mode_data(struct device_node *np)
 {
 	const unsigned char *prop;
 	int i;
@@ -59,7 +58,7 @@ static struct fsl_usb2_dev_data *get_dr_mode_data(struct device_node *np)
 	return &dr_mode_data[0]; /* mode not specified, use host */
 }
 
-static enum fsl_usb2_phy_modes determine_usb_phy(const char *phy_type)
+static enum fsl_usb2_phy_modes __devinit determine_usb_phy(const char *phy_type)
 {
 	if (!phy_type)
 		return FSL_USB2_PHY_NONE;
@@ -75,7 +74,7 @@ static enum fsl_usb2_phy_modes determine_usb_phy(const char *phy_type)
 	return FSL_USB2_PHY_NONE;
 }
 
-static struct platform_device *fsl_usb2_device_register(
+struct platform_device * __devinit fsl_usb2_device_register(
 					struct platform_device *ofdev,
 					struct fsl_usb2_platform_data *pdata,
 					const char *name, int id)
@@ -94,6 +93,7 @@ static struct platform_device *fsl_usb2_device_register(
 	pdev->dev.parent = &ofdev->dev;
 
 	pdev->dev.coherent_dma_mask = ofdev->dev.coherent_dma_mask;
+	pdev->dev.dma_mask = &pdev->archdata.dma_mask;
 	*pdev->dev.dma_mask = *ofdev->dev.dma_mask;
 
 	retval = platform_device_add_data(pdev, pdata, sizeof(*pdata));
@@ -119,45 +119,7 @@ error:
 
 static const struct of_device_id fsl_usb2_mph_dr_of_match[];
 
-static int usb_get_ver_info(struct device_node *np)
-{
-	int ver = -1;
-
-	/*
-	 * returns 1 for usb controller version 1.6
-	 * returns 2 for usb controller version 2.2
-	 * returns 0 otherwise
-	 */
-	if (of_device_is_compatible(np, "fsl-usb2-dr")) {
-		if (of_device_is_compatible(np, "fsl-usb2-dr-v1.6"))
-			ver = FSL_USB_VER_1_6;
-		else if (of_device_is_compatible(np, "fsl-usb2-dr-v2.2"))
-			ver = FSL_USB_VER_2_2;
-		else if (of_device_is_compatible(np, "fsl-usb2-dr-v2.4"))
-			ver = FSL_USB_VER_2_4;
-		else /* for previous controller versions */
-			ver = FSL_USB_VER_OLD;
-
-		if (ver > -1)
-			return ver;
-	}
-
-	if (of_device_is_compatible(np, "fsl,mpc5121-usb2-dr"))
-		return FSL_USB_VER_OLD;
-
-	if (of_device_is_compatible(np, "fsl-usb2-mph")) {
-		if (of_device_is_compatible(np, "fsl-usb2-mph-v1.6"))
-			ver = FSL_USB_VER_1_6;
-		else if (of_device_is_compatible(np, "fsl-usb2-mph-v2.2"))
-			ver = FSL_USB_VER_2_2;
-		else /* for previous controller versions */
-			ver = FSL_USB_VER_OLD;
-	}
-
-	return ver;
-}
-
-static int fsl_usb2_mph_dr_of_probe(struct platform_device *ofdev)
+static int __devinit fsl_usb2_mph_dr_of_probe(struct platform_device *ofdev)
 {
 	struct device_node *np = ofdev->dev.of_node;
 	struct platform_device *usb_dev;
@@ -204,14 +166,6 @@ static int fsl_usb2_mph_dr_of_probe(struct platform_device *ofdev)
 
 	prop = of_get_property(np, "phy_type", NULL);
 	pdata->phy_mode = determine_usb_phy(prop);
-	pdata->controller_ver = usb_get_ver_info(np);
-
-	if (pdata->have_sysif_regs) {
-		if (pdata->controller_ver < 0) {
-			dev_warn(&ofdev->dev, "Could not get controller version\n");
-			return -ENODEV;
-		}
-	}
 
 	for (i = 0; i < ARRAY_SIZE(dev_data->drivers); i++) {
 		if (!dev_data->drivers[i])
@@ -227,13 +181,13 @@ static int fsl_usb2_mph_dr_of_probe(struct platform_device *ofdev)
 	return 0;
 }
 
-static int __unregister_subdev(struct device *dev, void *d)
+static int __devexit __unregister_subdev(struct device *dev, void *d)
 {
 	platform_device_unregister(to_platform_device(dev));
 	return 0;
 }
 
-static int fsl_usb2_mph_dr_of_remove(struct platform_device *ofdev)
+static int __devexit fsl_usb2_mph_dr_of_remove(struct platform_device *ofdev)
 {
 	device_for_each_child(&ofdev->dev, NULL, __unregister_subdev);
 	return 0;
@@ -258,20 +212,27 @@ static int fsl_usb2_mph_dr_of_remove(struct platform_device *ofdev)
 
 int fsl_usb2_mpc5121_init(struct platform_device *pdev)
 {
-	struct fsl_usb2_platform_data *pdata = dev_get_platdata(&pdev->dev);
+	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 	struct clk *clk;
-	int err;
+	char clk_name[10];
+	int base, clk_num;
 
-	clk = devm_clk_get(pdev->dev.parent, "ipg");
+	base = pdev->resource->start & 0xf000;
+	if (base == 0x3000)
+		clk_num = 1;
+	else if (base == 0x4000)
+		clk_num = 2;
+	else
+		return -ENODEV;
+
+	snprintf(clk_name, sizeof(clk_name), "usb%d_clk", clk_num);
+	clk = clk_get(&pdev->dev, clk_name);
 	if (IS_ERR(clk)) {
 		dev_err(&pdev->dev, "failed to get clk\n");
 		return PTR_ERR(clk);
 	}
-	err = clk_prepare_enable(clk);
-	if (err) {
-		dev_err(&pdev->dev, "failed to enable clk\n");
-		return err;
-	}
+
+	clk_enable(clk);
 	pdata->clk = clk;
 
 	if (pdata->phy_mode == FSL_USB2_PHY_UTMI_WIDE) {
@@ -291,12 +252,14 @@ int fsl_usb2_mpc5121_init(struct platform_device *pdev)
 
 static void fsl_usb2_mpc5121_exit(struct platform_device *pdev)
 {
-	struct fsl_usb2_platform_data *pdata = dev_get_platdata(&pdev->dev);
+	struct fsl_usb2_platform_data *pdata = pdev->dev.platform_data;
 
 	pdata->regs = NULL;
 
-	if (pdata->clk)
-		clk_disable_unprepare(pdata->clk);
+	if (pdata->clk) {
+		clk_disable(pdata->clk);
+		clk_put(pdata->clk);
+	}
 }
 
 static struct fsl_usb2_platform_data fsl_usb2_mpc5121_pd = {
@@ -330,10 +293,20 @@ static struct platform_driver fsl_usb2_mph_dr_driver = {
 		.of_match_table = fsl_usb2_mph_dr_of_match,
 	},
 	.probe	= fsl_usb2_mph_dr_of_probe,
-	.remove	= fsl_usb2_mph_dr_of_remove,
+	.remove	= __devexit_p(fsl_usb2_mph_dr_of_remove),
 };
 
-module_platform_driver(fsl_usb2_mph_dr_driver);
+static int __init fsl_usb2_mph_dr_init(void)
+{
+	return platform_driver_register(&fsl_usb2_mph_dr_driver);
+}
+module_init(fsl_usb2_mph_dr_init);
+
+static void __exit fsl_usb2_mph_dr_exit(void)
+{
+	platform_driver_unregister(&fsl_usb2_mph_dr_driver);
+}
+module_exit(fsl_usb2_mph_dr_exit);
 
 MODULE_DESCRIPTION("FSL MPH DR OF devices driver");
 MODULE_AUTHOR("Anatolij Gustschin <agust@denx.de>");

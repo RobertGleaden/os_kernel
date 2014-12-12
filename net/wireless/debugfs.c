@@ -13,6 +13,12 @@
 #include "core.h"
 #include "debugfs.h"
 
+static int cfg80211_open_file_generic(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+	return 0;
+}
+
 #define DEBUGFS_READONLY_FILE(name, buflen, fmt, value...)		\
 static ssize_t name## _read(struct file *file, char __user *userbuf,	\
 			    size_t count, loff_t *ppos)			\
@@ -27,7 +33,7 @@ static ssize_t name## _read(struct file *file, char __user *userbuf,	\
 									\
 static const struct file_operations name## _ops = {			\
 	.read = name## _read,						\
-	.open = simple_open,						\
+	.open = cfg80211_open_file_generic,				\
 	.llseek = generic_file_llseek,					\
 };
 
@@ -47,19 +53,17 @@ static int ht_print_chan(struct ieee80211_channel *chan,
 		return 0;
 
 	if (chan->flags & IEEE80211_CHAN_DISABLED)
-		return scnprintf(buf + offset,
-				 buf_size - offset,
-				 "%d Disabled\n",
-				 chan->center_freq);
+		return snprintf(buf + offset,
+				buf_size - offset,
+				"%d Disabled\n",
+				chan->center_freq);
 
-	return scnprintf(buf + offset,
-			 buf_size - offset,
-			 "%d HT40 %c%c\n",
-			 chan->center_freq,
-			 (chan->flags & IEEE80211_CHAN_NO_HT40MINUS) ?
-				' ' : '-',
-			 (chan->flags & IEEE80211_CHAN_NO_HT40PLUS) ?
-				' ' : '+');
+	return snprintf(buf + offset,
+			buf_size - offset,
+			"%d HT40 %c%c\n",
+			chan->center_freq,
+			(chan->flags & IEEE80211_CHAN_NO_HT40MINUS) ? ' ' : '-',
+			(chan->flags & IEEE80211_CHAN_NO_HT40PLUS)  ? ' ' : '+');
 }
 
 static ssize_t ht40allow_map_read(struct file *file,
@@ -76,7 +80,7 @@ static ssize_t ht40allow_map_read(struct file *file,
 	if (!buf)
 		return -ENOMEM;
 
-	rtnl_lock();
+	mutex_lock(&cfg80211_mutex);
 
 	for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
 		sband = wiphy->bands[band];
@@ -87,7 +91,7 @@ static ssize_t ht40allow_map_read(struct file *file,
 						buf, buf_size, offset);
 	}
 
-	rtnl_unlock();
+	mutex_unlock(&cfg80211_mutex);
 
 	r = simple_read_from_buffer(user_buf, count, ppos, buf, offset);
 
@@ -98,7 +102,7 @@ static ssize_t ht40allow_map_read(struct file *file,
 
 static const struct file_operations ht40allow_map_ops = {
 	.read = ht40allow_map_read,
-	.open = simple_open,
+	.open = cfg80211_open_file_generic,
 	.llseek = default_llseek,
 };
 

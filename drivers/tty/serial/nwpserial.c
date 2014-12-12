@@ -10,13 +10,11 @@
  *
  */
 #include <linux/init.h>
-#include <linux/export.h>
 #include <linux/console.h>
 #include <linux/serial.h>
 #include <linux/serial_reg.h>
 #include <linux/serial_core.h>
 #include <linux/tty.h>
-#include <linux/tty_flip.h>
 #include <linux/irqreturn.h>
 #include <linux/mutex.h>
 #include <linux/of_platform.h>
@@ -128,7 +126,7 @@ static void nwpserial_config_port(struct uart_port *port, int flags)
 static irqreturn_t nwpserial_interrupt(int irq, void *dev_id)
 {
 	struct nwpserial_port *up = dev_id;
-	struct tty_port *port = &up->port.state->port;
+	struct tty_struct *tty = up->port.state->port.tty;
 	irqreturn_t ret;
 	unsigned int iir;
 	unsigned char ch;
@@ -146,13 +144,10 @@ static irqreturn_t nwpserial_interrupt(int irq, void *dev_id)
 		up->port.icount.rx++;
 		ch = dcr_read(up->dcr_host, UART_RX);
 		if (up->port.ignore_status_mask != NWPSERIAL_STATUS_RXVALID)
-			tty_insert_flip_char(port, ch, TTY_NORMAL);
+			tty_insert_flip_char(tty, ch, TTY_NORMAL);
 	} while (dcr_read(up->dcr_host, UART_LSR) & UART_LSR_DR);
 
-	spin_unlock(&up->port.lock);
-	tty_flip_buffer_push(port);
-	spin_lock(&up->port.lock);
-
+	tty_flip_buffer_push(tty);
 	ret = IRQ_HANDLED;
 
 	/* clear interrupt */
@@ -202,7 +197,7 @@ static void nwpserial_shutdown(struct uart_port *port)
 	dcr_write(up->dcr_host, UART_IER, up->ier);
 
 	/* free irq */
-	free_irq(up->port.irq, up);
+	free_irq(up->port.irq, port);
 }
 
 static int nwpserial_verify_port(struct uart_port *port,

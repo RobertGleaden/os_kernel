@@ -13,13 +13,13 @@
 #include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/pm_runtime.h>
-#include <linux/pm_clock.h>
 #include <linux/platform_device.h>
 #include <linux/mutex.h>
 #include <linux/clk.h>
 #include <linux/err.h>
 
-#include "soc.h"
+#include <plat/omap_device.h>
+#include <plat/omap-pm.h>
 
 #ifdef CONFIG_PM_RUNTIME
 static int omap1_pm_runtime_suspend(struct device *dev)

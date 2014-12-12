@@ -38,10 +38,12 @@
 #include <linux/time.h>
 
 /* Global variables */
-bool pciehp_debug;
-bool pciehp_poll_mode;
+int pciehp_debug;
+int pciehp_poll_mode;
 int pciehp_poll_time;
-static bool pciehp_force;
+int pciehp_force;
+struct workqueue_struct *pciehp_wq;
+struct workqueue_struct *pciehp_ordered_wq;
 
 #define DRIVER_VERSION	"0.4"
 #define DRIVER_AUTHOR	"Dan Zink <dan.zink@compaq.com>, Greg Kroah-Hartman <greg@kroah.com>, Dely Sy <dely.l.sy@intel.com>"
@@ -69,7 +71,6 @@ static int get_power_status	(struct hotplug_slot *slot, u8 *value);
 static int get_attention_status	(struct hotplug_slot *slot, u8 *value);
 static int get_latch_status	(struct hotplug_slot *slot, u8 *value);
 static int get_adapter_status	(struct hotplug_slot *slot, u8 *value);
-static int reset_slot		(struct hotplug_slot *slot, int probe);
 
 /**
  * release_slot - free up the memory used by a slot
@@ -108,12 +109,10 @@ static int init_slot(struct controller *ctrl)
 	ops = kzalloc(sizeof(*ops), GFP_KERNEL);
 	if (!ops)
 		goto out;
-
 	ops->enable_slot = enable_slot;
 	ops->disable_slot = disable_slot;
 	ops->get_power_status = get_power_status;
 	ops->get_adapter_status = get_adapter_status;
-	ops->reset_slot = reset_slot;
 	if (MRL_SENS(ctrl))
 		ops->get_latch_status = get_latch_status;
 	if (ATTN_LED(ctrl)) {
@@ -161,8 +160,7 @@ static int set_attention_status(struct hotplug_slot *hotplug_slot, u8 status)
 	ctrl_dbg(slot->ctrl, "%s: physical_slot = %s\n",
 		  __func__, slot_name(slot));
 
-	pciehp_set_attention_status(slot, status);
-	return 0;
+	return pciehp_set_attention_status(slot, status);
 }
 
 
@@ -194,8 +192,7 @@ static int get_power_status(struct hotplug_slot *hotplug_slot, u8 *value)
 	ctrl_dbg(slot->ctrl, "%s: physical_slot = %s\n",
 		  __func__, slot_name(slot));
 
-	pciehp_get_power_status(slot, value);
-	return 0;
+	return pciehp_get_power_status(slot, value);
 }
 
 static int get_attention_status(struct hotplug_slot *hotplug_slot, u8 *value)
@@ -205,8 +202,7 @@ static int get_attention_status(struct hotplug_slot *hotplug_slot, u8 *value)
 	ctrl_dbg(slot->ctrl, "%s: physical_slot = %s\n",
 		  __func__, slot_name(slot));
 
-	pciehp_get_attention_status(slot, value);
-	return 0;
+	return pciehp_get_attention_status(slot, value);
 }
 
 static int get_latch_status(struct hotplug_slot *hotplug_slot, u8 *value)
@@ -216,8 +212,7 @@ static int get_latch_status(struct hotplug_slot *hotplug_slot, u8 *value)
 	ctrl_dbg(slot->ctrl, "%s: physical_slot = %s\n",
 		 __func__, slot_name(slot));
 
-	pciehp_get_latch_status(slot, value);
-	return 0;
+	return pciehp_get_latch_status(slot, value);
 }
 
 static int get_adapter_status(struct hotplug_slot *hotplug_slot, u8 *value)
@@ -227,18 +222,7 @@ static int get_adapter_status(struct hotplug_slot *hotplug_slot, u8 *value)
 	ctrl_dbg(slot->ctrl, "%s: physical_slot = %s\n",
 		 __func__, slot_name(slot));
 
-	pciehp_get_adapter_status(slot, value);
-	return 0;
-}
-
-static int reset_slot(struct hotplug_slot *hotplug_slot, int probe)
-{
-	struct slot *slot = hotplug_slot->private;
-
-	ctrl_dbg(slot->ctrl, "%s: physical_slot = %s\n",
-		 __func__, slot_name(slot));
-
-	return pciehp_reset_slot(slot, probe);
+	return pciehp_get_adapter_status(slot, value);
 }
 
 static int pciehp_probe(struct pcie_device *dev)
@@ -266,7 +250,8 @@ static int pciehp_probe(struct pcie_device *dev)
 	rc = init_slot(ctrl);
 	if (rc) {
 		if (rc == -EBUSY)
-			ctrl_warn(ctrl, "Slot already registered by another hotplug driver\n");
+			ctrl_warn(ctrl, "Slot already registered by another "
+				  "hotplug driver\n");
 		else
 			ctrl_err(ctrl, "Slot initialization failed\n");
 		goto err_out_release_ctlr;
@@ -283,11 +268,8 @@ static int pciehp_probe(struct pcie_device *dev)
 	slot = ctrl->slot;
 	pciehp_get_adapter_status(slot, &occupied);
 	pciehp_get_power_status(slot, &poweron);
-	if (occupied && pciehp_force) {
-		mutex_lock(&slot->hotplug_lock);
+	if (occupied && pciehp_force)
 		pciehp_enable_slot(slot);
-		mutex_unlock(&slot->hotplug_lock);
-	}
 	/* If empty slot's power status is on, turn power off */
 	if (!occupied && poweron && POWER_CTRL(ctrl))
 		pciehp_power_off_slot(slot);
@@ -311,32 +293,32 @@ static void pciehp_remove(struct pcie_device *dev)
 }
 
 #ifdef CONFIG_PM
-static int pciehp_suspend(struct pcie_device *dev)
+static int pciehp_suspend (struct pcie_device *dev)
 {
+	dev_info(&dev->device, "%s ENTRY\n", __func__);
 	return 0;
 }
 
-static int pciehp_resume(struct pcie_device *dev)
+static int pciehp_resume (struct pcie_device *dev)
 {
-	struct controller *ctrl;
-	struct slot *slot;
-	u8 status;
+	dev_info(&dev->device, "%s ENTRY\n", __func__);
+	if (pciehp_force) {
+		struct controller *ctrl = get_service_data(dev);
+		struct slot *slot;
+		u8 status;
 
-	ctrl = get_service_data(dev);
+		/* reinitialize the chipset's event detection logic */
+		pcie_enable_notification(ctrl);
 
-	/* reinitialize the chipset's event detection logic */
-	pcie_enable_notification(ctrl);
+		slot = ctrl->slot;
 
-	slot = ctrl->slot;
-
-	/* Check if slot is occupied */
-	pciehp_get_adapter_status(slot, &status);
-	mutex_lock(&slot->hotplug_lock);
-	if (status)
-		pciehp_enable_slot(slot);
-	else
-		pciehp_disable_slot(slot);
-	mutex_unlock(&slot->hotplug_lock);
+		/* Check if slot is occupied */
+		pciehp_get_adapter_status(slot, &status);
+		if (status)
+			pciehp_enable_slot(slot);
+		else
+			pciehp_disable_slot(slot);
+	}
 	return 0;
 }
 #endif /* PM */
@@ -359,19 +341,33 @@ static int __init pcied_init(void)
 {
 	int retval = 0;
 
+	pciehp_wq = alloc_workqueue("pciehp", 0, 0);
+	if (!pciehp_wq)
+		return -ENOMEM;
+
+	pciehp_ordered_wq = alloc_ordered_workqueue("pciehp_ordered", 0);
+	if (!pciehp_ordered_wq) {
+		destroy_workqueue(pciehp_wq);
+		return -ENOMEM;
+	}
+
 	pciehp_firmware_init();
 	retval = pcie_port_service_register(&hpdriver_portdrv);
-	dbg("pcie_port_service_register = %d\n", retval);
-	info(DRIVER_DESC " version: " DRIVER_VERSION "\n");
-	if (retval)
+ 	dbg("pcie_port_service_register = %d\n", retval);
+  	info(DRIVER_DESC " version: " DRIVER_VERSION "\n");
+ 	if (retval) {
+		destroy_workqueue(pciehp_ordered_wq);
+		destroy_workqueue(pciehp_wq);
 		dbg("Failure to register service\n");
-
+	}
 	return retval;
 }
 
 static void __exit pcied_cleanup(void)
 {
 	dbg("unload_pciehpd()\n");
+	destroy_workqueue(pciehp_ordered_wq);
+	destroy_workqueue(pciehp_wq);
 	pcie_port_service_unregister(&hpdriver_portdrv);
 	info(DRIVER_DESC " version: " DRIVER_VERSION " unloaded\n");
 }

@@ -1,4 +1,5 @@
 /*
+ *  drivers/s390/char/sclp_cpi_sys.c
  *    SCLP control program identification sysfs interface
  *
  *    Copyright IBM Corp. 2001, 2007
@@ -20,7 +21,6 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/completion.h>
-#include <linux/export.h>
 #include <asm/ebcdic.h>
 #include <asm/sclp.h>
 

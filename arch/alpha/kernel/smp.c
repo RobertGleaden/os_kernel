@@ -68,7 +68,7 @@ enum ipi_message_type {
 };
 
 /* Set to a secondary's cpuid when it comes online.  */
-static int smp_secondary_alive = 0;
+static int smp_secondary_alive __devinitdata = 0;
 
 int smp_num_probed;		/* Internal processor count */
 int smp_num_cpus = 1;		/* Number that came online.  */
@@ -116,7 +116,7 @@ wait_boot_cpu_to_stop(int cpuid)
 /*
  * Where secondaries begin a life of C.
  */
-void
+void __cpuinit
 smp_callin(void)
 {
 	int cpuid = hard_smp_processor_id();
@@ -138,11 +138,9 @@ smp_callin(void)
 
 	/* Get our local ticker going. */
 	smp_setup_percpu_timer(cpuid);
-	init_clockevent();
 
 	/* Call platform-specific callin, if specified */
-	if (alpha_mv.smp_callin)
-		alpha_mv.smp_callin();
+	if (alpha_mv.smp_callin) alpha_mv.smp_callin();
 
 	/* All kernel threads share the same mm context.  */
 	atomic_inc(&init_mm.mm_count);
@@ -168,12 +166,12 @@ smp_callin(void)
 	DBGS(("smp_callin: commencing CPU %d current %p active_mm %p\n",
 	      cpuid, current, current->active_mm));
 
-	preempt_disable();
-	cpu_startup_entry(CPUHP_ONLINE);
+	/* Do nothing.  */
+	cpu_idle();
 }
 
 /* Wait until hwrpb->txrdy is clear for cpu.  Return -1 on timeout.  */
-static int
+static int __devinit
 wait_for_txrdy (unsigned long cpumask)
 {
 	unsigned long timeout;
@@ -196,7 +194,7 @@ wait_for_txrdy (unsigned long cpumask)
  * Send a message to a secondary's console.  "START" is one such
  * interesting message.  ;-)
  */
-static void
+static void __cpuinit
 send_secondary_console_msg(char *str, int cpuid)
 {
 	struct percpu_struct *cpu;
@@ -266,10 +264,9 @@ recv_secondary_console_msg(void)
 		if (cnt <= 0 || cnt >= 80)
 			strcpy(buf, "<<< BOGUS MSG >>>");
 		else {
-			cp1 = (char *) &cpu->ipc_buffer[1];
+			cp1 = (char *) &cpu->ipc_buffer[11];
 			cp2 = buf;
-			memcpy(cp2, cp1, cnt);
-			cp2[cnt] = '\0';
+			strcpy(cp2, cp1);
 			
 			while ((cp2 = strchr(cp2, '\r')) != 0) {
 				*cp2 = ' ';
@@ -288,7 +285,7 @@ recv_secondary_console_msg(void)
 /*
  * Convince the console to have a secondary cpu begin execution.
  */
-static int
+static int __cpuinit
 secondary_cpu_start(int cpuid, struct task_struct *idle)
 {
 	struct percpu_struct *cpu;
@@ -359,10 +356,24 @@ secondary_cpu_start(int cpuid, struct task_struct *idle)
 /*
  * Bring one cpu online.
  */
-static int
-smp_boot_one_cpu(int cpuid, struct task_struct *idle)
+static int __cpuinit
+smp_boot_one_cpu(int cpuid)
 {
+	struct task_struct *idle;
 	unsigned long timeout;
+
+	/* Cook up an idler for this guy.  Note that the address we
+	   give to kernel_thread is irrelevant -- it's going to start
+	   where HWRPB.CPU_restart says to start.  But this gets all
+	   the other task-y sort of data structures set up like we
+	   wish.  We can't use kernel_thread since we must avoid
+	   rescheduling the child.  */
+	idle = fork_idle(cpuid);
+	if (IS_ERR(idle))
+		panic("failed fork for CPU %d", cpuid);
+
+	DBGS(("smp_boot_one_cpu: CPU %d state 0x%lx flags 0x%lx\n",
+	      cpuid, idle->state, idle->flags));
 
 	/* Signal the secondary to wait a moment.  */
 	smp_secondary_alive = -1;
@@ -439,7 +450,7 @@ setup_smp(void)
 		smp_num_probed = 1;
 	}
 
-	printk(KERN_INFO "SMP: %d CPUs probed -- cpu_present_mask = %lx\n",
+	printk(KERN_INFO "SMP: %d CPUs probed -- cpu_present_map = %lx\n",
 	       smp_num_probed, cpumask_bits(cpu_present_mask)[0]);
 }
 
@@ -470,15 +481,15 @@ smp_prepare_cpus(unsigned int max_cpus)
 	smp_num_cpus = smp_num_probed;
 }
 
-void
+void __devinit
 smp_prepare_boot_cpu(void)
 {
 }
 
-int
-__cpu_up(unsigned int cpu, struct task_struct *tidle)
+int __cpuinit
+__cpu_up(unsigned int cpu)
 {
-	smp_boot_one_cpu(cpu, tidle);
+	smp_boot_one_cpu(cpu);
 
 	return cpu_online(cpu) ? 0 : -ENOSYS;
 }
@@ -498,6 +509,35 @@ smp_cpus_done(unsigned int max_cpus)
 	       num_online_cpus(), 
 	       (bogosum + 2500) / (500000/HZ),
 	       ((bogosum + 2500) / (5000/HZ)) % 100);
+}
+
+
+void
+smp_percpu_timer_interrupt(struct pt_regs *regs)
+{
+	struct pt_regs *old_regs;
+	int cpu = smp_processor_id();
+	unsigned long user = user_mode(regs);
+	struct cpuinfo_alpha *data = &cpu_data[cpu];
+
+	old_regs = set_irq_regs(regs);
+
+	/* Record kernel PC.  */
+	profile_tick(CPU_PROFILING);
+
+	if (!--data->prof_counter) {
+		/* We need to make like a normal interrupt -- otherwise
+		   timer interrupts ignore the global interrupt lock,
+		   which would be a Bad Thing.  */
+		irq_enter();
+
+		update_process_times(user);
+
+		data->prof_counter = data->prof_multiplier;
+
+		irq_exit();
+	}
+	set_irq_regs(old_regs);
 }
 
 int

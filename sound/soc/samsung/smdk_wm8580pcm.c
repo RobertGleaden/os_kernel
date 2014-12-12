@@ -8,7 +8,6 @@
  *  Free Software Foundation;  either version 2 of the  License, or (at your
  *  option) any later version.
  */
-#include <linux/module.h>
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
 #include <sound/pcm.h>
@@ -128,22 +127,21 @@ static struct snd_soc_dai_link smdk_dai[] = {
 		.cpu_dai_name = "samsung-pcm.0",
 		.codec_dai_name = "wm8580-hifi-playback",
 		.platform_name = "samsung-audio",
-		.codec_name = "wm8580.0-001b",
+		.codec_name = "wm8580-codec.0-001b",
 		.ops = &smdk_wm8580_pcm_ops,
 	}, {
 		.name = "WM8580 PAIF PCM TX",
 		.stream_name = "Capture",
 		.cpu_dai_name = "samsung-pcm.0",
 		.codec_dai_name = "wm8580-hifi-capture",
-		.platform_name = "samsung-pcm.0",
-		.codec_name = "wm8580.0-001b",
+		.platform_name = "samsung-audio",
+		.codec_name = "wm8580-codec.0-001b",
 		.ops = &smdk_wm8580_pcm_ops,
 	},
 };
 
 static struct snd_soc_card smdk_pcm = {
 	.name = "SMDK-PCM",
-	.owner = THIS_MODULE,
 	.dai_link = smdk_dai,
 	.num_links = 2,
 };
@@ -153,7 +151,7 @@ static struct snd_soc_card smdk_pcm = {
  * is absent (or not connected), so we connect EXT_VOICE_CLK(OSC4),
  * 2.0484Mhz, directly with MCLK both Codec and SoC.
  */
-static int snd_smdk_probe(struct platform_device *pdev)
+static int __devinit snd_smdk_probe(struct platform_device *pdev)
 {
 	int ret = 0;
 
@@ -164,11 +162,20 @@ static int snd_smdk_probe(struct platform_device *pdev)
 		xtal_freq = mclk_freq = SMDK_WM8580_EXT_VOICE;
 
 	smdk_pcm.dev = &pdev->dev;
-	ret = devm_snd_soc_register_card(&pdev->dev, &smdk_pcm);
-	if (ret)
+	ret = snd_soc_register_card(&smdk_pcm);
+	if (ret) {
 		dev_err(&pdev->dev, "snd_soc_register_card failed %d\n", ret);
+		return ret;
+	}
 
-	return ret;
+	return 0;
+}
+
+static int __devexit snd_smdk_remove(struct platform_device *pdev)
+{
+	snd_soc_unregister_card(&smdk_pcm);
+	platform_set_drvdata(pdev, NULL);
+	return 0;
 }
 
 static struct platform_driver snd_smdk_driver = {
@@ -177,9 +184,22 @@ static struct platform_driver snd_smdk_driver = {
 		.name = "samsung-smdk-pcm",
 	},
 	.probe = snd_smdk_probe,
+	.remove = __devexit_p(snd_smdk_remove),
 };
 
-module_platform_driver(snd_smdk_driver);
+static int __init smdk_audio_init(void)
+{
+	return platform_driver_register(&snd_smdk_driver);
+}
+
+module_init(smdk_audio_init);
+
+static void __exit smdk_audio_exit(void)
+{
+	platform_driver_unregister(&snd_smdk_driver);
+}
+
+module_exit(smdk_audio_exit);
 
 MODULE_AUTHOR("Sangbeom Kim, <sbkim73@samsung.com>");
 MODULE_DESCRIPTION("ALSA SoC SMDK WM8580 for PCM");

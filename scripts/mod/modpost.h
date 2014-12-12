@@ -113,7 +113,6 @@ struct module {
 	int has_cleanup;
 	struct buffer dev_table_buf;
 	char	     srcversion[25];
-	int is_dot_o;
 };
 
 struct elf_info {
@@ -127,7 +126,7 @@ struct elf_info {
 	Elf_Section  export_gpl_sec;
 	Elf_Section  export_unused_gpl_sec;
 	Elf_Section  export_gpl_future_sec;
-	char         *strtab;
+	const char   *strtab;
 	char	     *modinfo;
 	unsigned int modinfo_len;
 

@@ -7,7 +7,7 @@
 # as published by the Free Software Foundation; either version
 # 2 of the License, or (at your option) any later version.
 
-# This script checks the relocations of a vmlinux for "suspicious"
+# This script checks the relcoations of a vmlinux for "suspicious"
 # relocations.
 
 use strict;
@@ -28,24 +28,14 @@ open(FD, "$objdump -R $vmlinux|") or die;
 while (<FD>) {
 	study $_;
 
-	# Only look at relocation lines.
+	# Only look at relcoation lines.
 	next if (!/\s+R_/);
 
 	# These relocations are okay
-	# On PPC64:
-	# 	R_PPC64_RELATIVE, R_PPC64_NONE, R_PPC64_ADDR64
-	# On PPC:
-	# 	R_PPC_RELATIVE, R_PPC_ADDR16_HI, 
-	# 	R_PPC_ADDR16_HA,R_PPC_ADDR16_LO,
-	# 	R_PPC_NONE
+	next if (/R_PPC64_RELATIVE/ or /R_PPC64_NONE/ or
+	         /R_PPC64_ADDR64\s+mach_/);
 
-	next if (/\bR_PPC64_RELATIVE\b/ or /\bR_PPC64_NONE\b/ or
-	         /\bR_PPC64_ADDR64\s+mach_/);
-	next if (/\bR_PPC_ADDR16_LO\b/ or /\bR_PPC_ADDR16_HI\b/ or
-		 /\bR_PPC_ADDR16_HA\b/ or /\bR_PPC_RELATIVE\b/ or
-		 /\bR_PPC_NONE\b/);
-
-	# If we see this type of relocation it's an idication that
+	# If we see this type of relcoation it's an idication that
 	# we /may/ be using an old version of binutils.
 	if (/R_PPC64_UADDR64/) {
 		$old_binutils++;
@@ -61,6 +51,6 @@ if ($bad_relocs_count) {
 }
 
 if ($old_binutils) {
-	print "WARNING: You need at least binutils >= 2.19 to build a ".
-	      "CONFIG_RELOCATABLE kernel\n";
+	print "WARNING: You need at binutils >= 2.19 to build a ".
+	      "CONFIG_RELCOATABLE kernel\n";
 }

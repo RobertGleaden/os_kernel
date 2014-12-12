@@ -52,6 +52,7 @@
 #include <linux/sched.h>
 #include <linux/signal.h>
 #include <linux/poll.h>
+#include <linux/init.h>
 #include <linux/slab.h>
 #include <linux/lp.h>
 #include <linux/mutex.h>
@@ -171,31 +172,27 @@ struct usblp {
 #ifdef DEBUG
 static void usblp_dump(struct usblp *usblp)
 {
-	struct device *dev = &usblp->intf->dev;
 	int p;
 
-	dev_dbg(dev, "usblp=0x%p\n", usblp);
-	dev_dbg(dev, "dev=0x%p\n", usblp->dev);
-	dev_dbg(dev, "present=%d\n", usblp->present);
-	dev_dbg(dev, "readbuf=0x%p\n", usblp->readbuf);
-	dev_dbg(dev, "readcount=%d\n", usblp->readcount);
-	dev_dbg(dev, "ifnum=%d\n", usblp->ifnum);
-	for (p = USBLP_FIRST_PROTOCOL; p <= USBLP_LAST_PROTOCOL; p++) {
-		dev_dbg(dev, "protocol[%d].alt_setting=%d\n", p,
-			usblp->protocol[p].alt_setting);
-		dev_dbg(dev, "protocol[%d].epwrite=%p\n", p,
-			usblp->protocol[p].epwrite);
-		dev_dbg(dev, "protocol[%d].epread=%p\n", p,
-			usblp->protocol[p].epread);
-	}
-	dev_dbg(dev, "current_protocol=%d\n", usblp->current_protocol);
-	dev_dbg(dev, "minor=%d\n", usblp->minor);
-	dev_dbg(dev, "wstatus=%d\n", usblp->wstatus);
-	dev_dbg(dev, "rstatus=%d\n", usblp->rstatus);
-	dev_dbg(dev, "quirks=%d\n", usblp->quirks);
-	dev_dbg(dev, "used=%d\n", usblp->used);
-	dev_dbg(dev, "bidir=%d\n", usblp->bidir);
-	dev_dbg(dev, "device_id_string=\"%s\"\n",
+	dbg("usblp=0x%p", usblp);
+	dbg("dev=0x%p", usblp->dev);
+	dbg("present=%d", usblp->present);
+	dbg("readbuf=0x%p", usblp->readbuf);
+	dbg("readcount=%d", usblp->readcount);
+	dbg("ifnum=%d", usblp->ifnum);
+    for (p = USBLP_FIRST_PROTOCOL; p <= USBLP_LAST_PROTOCOL; p++) {
+	dbg("protocol[%d].alt_setting=%d", p, usblp->protocol[p].alt_setting);
+	dbg("protocol[%d].epwrite=%p", p, usblp->protocol[p].epwrite);
+	dbg("protocol[%d].epread=%p", p, usblp->protocol[p].epread);
+    }
+	dbg("current_protocol=%d", usblp->current_protocol);
+	dbg("minor=%d", usblp->minor);
+	dbg("wstatus=%d", usblp->wstatus);
+	dbg("rstatus=%d", usblp->rstatus);
+	dbg("quirks=%d", usblp->quirks);
+	dbg("used=%d", usblp->used);
+	dbg("bidir=%d", usblp->bidir);
+	dbg("device_id_string=\"%s\"",
 		usblp->device_id_string ?
 			usblp->device_id_string + 2 :
 			(unsigned char *)"(null)");
@@ -265,8 +262,7 @@ static int usblp_ctrl_msg(struct usblp *usblp, int request, int type, int dir, i
 	retval = usb_control_msg(usblp->dev,
 		dir ? usb_rcvctrlpipe(usblp->dev, 0) : usb_sndctrlpipe(usblp->dev, 0),
 		request, type | dir | recip, value, index, buf, len, USBLP_CTL_TIMEOUT);
-	dev_dbg(&usblp->intf->dev,
-		"usblp_control_msg: rq: 0x%02x dir: %d recip: %d value: %d idx: %d len: %#x result: %d\n",
+	dbg("usblp_control_msg: rq: 0x%02x dir: %d recip: %d value: %d idx: %d len: %#x result: %d",
 		request, !!dir, recip, value, index, len, retval);
 	return retval < 0 ? retval : 0;
 }
@@ -504,9 +500,8 @@ static long usblp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		goto done;
 	}
 
-	dev_dbg(&usblp->intf->dev,
-		"usblp_ioctl: cmd=0x%x (%c nr=%d len=%d dir=%d)\n", cmd,
-		_IOC_TYPE(cmd), _IOC_NR(cmd), _IOC_SIZE(cmd), _IOC_DIR(cmd));
+	dbg("usblp_ioctl: cmd=0x%x (%c nr=%d len=%d dir=%d)", cmd, _IOC_TYPE(cmd),
+		_IOC_NR(cmd), _IOC_SIZE(cmd), _IOC_DIR(cmd));
 
 	if (_IOC_TYPE(cmd) == 'P')	/* new-style ioctl number */
 
@@ -599,8 +594,7 @@ static long usblp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				goto done;
 			}
 
-			dev_dbg(&usblp->intf->dev,
-				"usblp%d requested/got HP channel %ld/%d\n",
+			dbg("usblp%d requested/got HP channel %ld/%d",
 				usblp->minor, arg, newChannel);
 			break;
 
@@ -620,8 +614,7 @@ static long usblp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				goto done;
 			}
 
-			dev_dbg(&usblp->intf->dev,
-				"usblp%d is bus=%d, device=%d\n",
+			dbg("usblp%d is bus=%d, device=%d",
 				usblp->minor, twoints[0], twoints[1]);
 			break;
 
@@ -641,8 +634,7 @@ static long usblp_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 				goto done;
 			}
 
-			dev_dbg(&usblp->intf->dev,
-				"usblp%d is VID=0x%4.4X, PID=0x%4.4X\n",
+			dbg("usblp%d is VID=0x%4.4X, PID=0x%4.4X",
 				usblp->minor, twoints[0], twoints[1]);
 			break;
 
@@ -995,7 +987,7 @@ static int usblp_submit_read(struct usblp *usblp)
 	usblp->rcomplete = 0;
 	spin_unlock_irqrestore(&usblp->lock, flags);
 	if ((rc = usb_submit_urb(urb, GFP_KERNEL)) < 0) {
-		dev_dbg(&usblp->intf->dev, "error submitting urb (%d)\n", rc);
+		dbg("error submitting urb (%d)", rc);
 		spin_lock_irqsave(&usblp->lock, flags);
 		usblp->rstatus = rc;
 		usblp->rcomplete = 1;
@@ -1053,7 +1045,7 @@ static const struct file_operations usblp_fops = {
 	.llseek =	noop_llseek,
 };
 
-static char *usblp_devnode(struct device *dev, umode_t *mode)
+static char *usblp_devnode(struct device *dev, mode_t *mode)
 {
 	return kasprintf(GFP_KERNEL, "usb/%s", dev_name(dev));
 }
@@ -1137,8 +1129,7 @@ static int usblp_probe(struct usb_interface *intf,
 	/* Analyze and pick initial alternate settings and endpoints. */
 	protocol = usblp_select_alts(usblp);
 	if (protocol < 0) {
-		dev_dbg(&intf->dev,
-			"incompatible printer-class device 0x%4.4X/0x%4.4X\n",
+		dbg("incompatible printer-class device 0x%4.4X/0x%4.4X",
 			le16_to_cpu(dev->descriptor.idVendor),
 			le16_to_cpu(dev->descriptor.idProduct));
 		retval = -ENODEV;
@@ -1167,14 +1158,14 @@ static int usblp_probe(struct usb_interface *intf,
 
 	retval = usb_register_dev(intf, &usblp_class);
 	if (retval) {
-		dev_err(&intf->dev,
-			"usblp: Not able to get a minor (base %u, slice default): %d\n",
-			USBLP_MINOR_BASE, retval);
+		printk(KERN_ERR "usblp: Not able to get a minor"
+		    " (base %u, slice default): %d\n",
+		    USBLP_MINOR_BASE, retval);
 		goto abort_intfdata;
 	}
 	usblp->minor = intf->minor;
-	dev_info(&intf->dev,
-		"usblp%d: USB %sdirectional printer dev %d if %d alt %d proto %d vid 0x%4.4X pid 0x%4.4X\n",
+	printk(KERN_INFO "usblp%d: USB %sdirectional printer dev %d "
+		"if %d alt %d proto %d vid 0x%4.4X pid 0x%4.4X\n",
 		usblp->minor, usblp->bidir ? "Bi" : "Uni", dev->devnum,
 		usblp->ifnum,
 		usblp->protocol[usblp->current_protocol].alt_setting,
@@ -1311,8 +1302,7 @@ static int usblp_set_protocol(struct usblp *usblp, int protocol)
 
 	usblp->bidir = (usblp->protocol[protocol].epread != NULL);
 	usblp->current_protocol = protocol;
-	dev_dbg(&usblp->intf->dev, "usblp%d set protocol %d\n",
-		usblp->minor, protocol);
+	dbg("usblp%d set protocol %d", usblp->minor, protocol);
 	return 0;
 }
 
@@ -1325,8 +1315,7 @@ static int usblp_cache_device_id_string(struct usblp *usblp)
 
 	err = usblp_get_id(usblp, 0, usblp->device_id_string, USBLP_DEVICE_ID_SIZE - 1);
 	if (err < 0) {
-		dev_dbg(&usblp->intf->dev,
-			"usblp%d: error = %d reading IEEE-1284 Device ID string\n",
+		dbg("usblp%d: error = %d reading IEEE-1284 Device ID string",
 			usblp->minor, err);
 		usblp->device_id_string[0] = usblp->device_id_string[1] = '\0';
 		return -EIO;
@@ -1342,7 +1331,7 @@ static int usblp_cache_device_id_string(struct usblp *usblp)
 		length = USBLP_DEVICE_ID_SIZE - 1;
 	usblp->device_id_string[length] = '\0';
 
-	dev_dbg(&usblp->intf->dev, "usblp%d Device ID string [len=%d]=\"%s\"\n",
+	dbg("usblp%d Device ID string [len=%d]=\"%s\"",
 		usblp->minor, length, &usblp->device_id_string[2]);
 
 	return length;
@@ -1423,7 +1412,18 @@ static struct usb_driver usblp_driver = {
 	.supports_autosuspend =	1,
 };
 
-module_usb_driver(usblp_driver);
+static int __init usblp_init(void)
+{
+	return usb_register(&usblp_driver);
+}
+
+static void __exit usblp_exit(void)
+{
+	usb_deregister(&usblp_driver);
+}
+
+module_init(usblp_init);
+module_exit(usblp_exit);
 
 MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);

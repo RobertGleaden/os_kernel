@@ -33,16 +33,16 @@
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/errno.h>
 #include <linux/stddef.h>
 #include <linux/i2c.h>
 #include <linux/io.h>
 #include <linux/dma-mapping.h>
-#include <linux/of_address.h>
 #include <linux/of_device.h>
-#include <linux/of_irq.h>
 #include <linux/of_platform.h>
+#include <linux/of_i2c.h>
 #include <sysdev/fsl_soc.h>
 #include <asm/cpm.h>
 
@@ -338,14 +338,6 @@ static int cpm_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 	tptr = 0;
 	rptr = 0;
 
-	/*
-	 * If there was a collision in the last i2c transaction,
-	 * Set I2COM_MASTER as it was cleared during collision.
-	 */
-	if (in_be16(&tbdf->cbd_sc) & BD_SC_CL) {
-		out_8(&cpm->i2c_reg->i2com, I2COM_MASTER);
-	}
-
 	while (tptr < num) {
 		pmsg = &msgs[tptr];
 		dev_dbg(&adap->dev, "R: %d T: %d\n", rptr, tptr);
@@ -434,7 +426,7 @@ static const struct i2c_adapter cpm_ops = {
 	.algo		= &cpm_i2c_algo,
 };
 
-static int cpm_i2c_setup(struct cpm_i2c *cpm)
+static int __devinit cpm_i2c_setup(struct cpm_i2c *cpm)
 {
 	struct platform_device *ofdev = cpm->ofdev;
 	const u32 *data;
@@ -448,7 +440,7 @@ static int cpm_i2c_setup(struct cpm_i2c *cpm)
 
 	init_waitqueue_head(&cpm->i2c_wait);
 
-	cpm->irq = irq_of_parse_and_map(ofdev->dev.of_node, 0);
+	cpm->irq = of_irq_to_resource(ofdev->dev.of_node, 0, NULL);
 	if (!cpm->irq)
 		return -EINVAL;
 
@@ -642,7 +634,7 @@ static void cpm_i2c_shutdown(struct cpm_i2c *cpm)
 		cpm_muram_free(cpm->i2c_addr);
 }
 
-static int cpm_i2c_probe(struct platform_device *ofdev)
+static int __devinit cpm_i2c_probe(struct platform_device *ofdev)
 {
 	int result, len;
 	struct cpm_i2c *cpm;
@@ -654,7 +646,7 @@ static int cpm_i2c_probe(struct platform_device *ofdev)
 
 	cpm->ofdev = ofdev;
 
-	platform_set_drvdata(ofdev, cpm);
+	dev_set_drvdata(&ofdev->dev, cpm);
 
 	cpm->adap = cpm_ops;
 	i2c_set_adapdata(&cpm->adap, cpm);
@@ -681,23 +673,30 @@ static int cpm_i2c_probe(struct platform_device *ofdev)
 	dev_dbg(&ofdev->dev, "hw routines for %s registered.\n",
 		cpm->adap.name);
 
+	/*
+	 * register OF I2C devices
+	 */
+	of_i2c_register_devices(&cpm->adap);
+
 	return 0;
 out_shut:
 	cpm_i2c_shutdown(cpm);
 out_free:
+	dev_set_drvdata(&ofdev->dev, NULL);
 	kfree(cpm);
 
 	return result;
 }
 
-static int cpm_i2c_remove(struct platform_device *ofdev)
+static int __devexit cpm_i2c_remove(struct platform_device *ofdev)
 {
-	struct cpm_i2c *cpm = platform_get_drvdata(ofdev);
+	struct cpm_i2c *cpm = dev_get_drvdata(&ofdev->dev);
 
 	i2c_del_adapter(&cpm->adap);
 
 	cpm_i2c_shutdown(cpm);
 
+	dev_set_drvdata(&ofdev->dev, NULL);
 	kfree(cpm);
 
 	return 0;
@@ -717,7 +716,7 @@ MODULE_DEVICE_TABLE(of, cpm_i2c_match);
 
 static struct platform_driver cpm_i2c_driver = {
 	.probe		= cpm_i2c_probe,
-	.remove		= cpm_i2c_remove,
+	.remove		= __devexit_p(cpm_i2c_remove),
 	.driver = {
 		.name = "fsl-i2c-cpm",
 		.owner = THIS_MODULE,
@@ -725,7 +724,18 @@ static struct platform_driver cpm_i2c_driver = {
 	},
 };
 
-module_platform_driver(cpm_i2c_driver);
+static int __init cpm_i2c_init(void)
+{
+	return platform_driver_register(&cpm_i2c_driver);
+}
+
+static void __exit cpm_i2c_exit(void)
+{
+	platform_driver_unregister(&cpm_i2c_driver);
+}
+
+module_init(cpm_i2c_init);
+module_exit(cpm_i2c_exit);
 
 MODULE_AUTHOR("Jochen Friedrich <jochen@scram.de>");
 MODULE_DESCRIPTION("I2C-Bus adapter routines for CPM boards");

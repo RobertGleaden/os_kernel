@@ -1,3 +1,4 @@
+
 /******************************************************************************
  *
  * Module Name: exresnte - AML Interpreter object resolution
@@ -5,7 +6,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2014, Intel Corp.
+ * Copyright (C) 2000 - 2011, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -57,8 +58,8 @@ ACPI_MODULE_NAME("exresnte")
  * PARAMETERS:  object_ptr      - Pointer to a location that contains
  *                                a pointer to a NS node, and will receive a
  *                                pointer to the resolved object.
- *              walk_state      - Current state. Valid only if executing AML
- *                                code. NULL if simply resolving an object
+ *              walk_state      - Current state.  Valid only if executing AML
+ *                                code.  NULL if simply resolving an object
  *
  * RETURN:      Status
  *
@@ -66,7 +67,7 @@ ACPI_MODULE_NAME("exresnte")
  *
  * Note: for some of the data types, the pointer attached to the Node
  * can be either a pointer to an actual internal object or a pointer into the
- * AML stream itself. These types are currently:
+ * AML stream itself.  These types are currently:
  *
  *      ACPI_TYPE_INTEGER
  *      ACPI_TYPE_STRING
@@ -88,7 +89,7 @@ acpi_ex_resolve_node_to_value(struct acpi_namespace_node **object_ptr,
 	ACPI_FUNCTION_TRACE(ex_resolve_node_to_value);
 
 	/*
-	 * The stack pointer points to a struct acpi_namespace_node (Node). Get the
+	 * The stack pointer points to a struct acpi_namespace_node (Node).  Get the
 	 * object that is attached to the Node.
 	 */
 	node = *object_ptr;
@@ -124,8 +125,7 @@ acpi_ex_resolve_node_to_value(struct acpi_namespace_node **object_ptr,
 	}
 
 	if (!source_desc) {
-		ACPI_ERROR((AE_INFO, "No object attached to node [%4.4s] %p",
-			    node->name.ascii, node));
+		ACPI_ERROR((AE_INFO, "No object attached to node %p", node));
 		return_ACPI_STATUS(AE_AML_NO_OPERAND);
 	}
 
@@ -249,7 +249,6 @@ acpi_ex_resolve_node_to_value(struct acpi_namespace_node **object_ptr,
 			break;
 
 		default:
-
 			/* No named references are allowed here */
 
 			ACPI_ERROR((AE_INFO,

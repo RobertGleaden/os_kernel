@@ -103,9 +103,6 @@ static struct autofs_dev_ioctl *copy_dev_ioctl(struct autofs_dev_ioctl __user *i
 	if (tmp.size < sizeof(tmp))
 		return ERR_PTR(-EINVAL);
 
-	if (tmp.size > (PATH_MAX + sizeof(tmp)))
-		return ERR_PTR(-ENAMETOOLONG);
-
 	return memdup_user(in, tmp.size);
 }
 
@@ -162,7 +159,7 @@ static struct autofs_sb_info *autofs_dev_ioctl_sbi(struct file *f)
 	struct inode *inode;
 
 	if (f) {
-		inode = file_inode(f);
+		inode = f->f_path.dentry->d_inode;
 		sbi = autofs4_sbi(inode->i_sb);
 	}
 	return sbi;
@@ -186,24 +183,24 @@ static int autofs_dev_ioctl_protosubver(struct file *fp,
 	return 0;
 }
 
-/* Find the topmost mount satisfying test() */
 static int find_autofs_mount(const char *pathname,
 			     struct path *res,
 			     int test(struct path *path, void *data),
 			     void *data)
 {
 	struct path path;
-	int err = kern_path_mountpoint(AT_FDCWD, pathname, &path, 0);
+	int err = kern_path(pathname, 0, &path);
 	if (err)
 		return err;
 	err = -ENOENT;
 	while (path.dentry == path.mnt->mnt_root) {
-		if (path.dentry->d_sb->s_magic == AUTOFS_SUPER_MAGIC) {
+		if (path.mnt->mnt_sb->s_magic == AUTOFS_SUPER_MAGIC) {
 			if (test(&path, data)) {
 				path_get(&path);
+				if (!err) /* already found some */
+					path_put(res);
 				*res = path;
 				err = 0;
-				break;
 			}
 		}
 		if (!follow_up(&path))
@@ -215,7 +212,7 @@ static int find_autofs_mount(const char *pathname,
 
 static int test_by_dev(struct path *path, void *p)
 {
-	return path->dentry->d_sb->s_dev == *(dev_t *)p;
+	return path->mnt->mnt_sb->s_dev == *(dev_t *)p;
 }
 
 static int test_by_type(struct path *path, void *p)
@@ -223,6 +220,20 @@ static int test_by_type(struct path *path, void *p)
 	struct autofs_info *ino = autofs4_dentry_ino(path->dentry);
 	return ino && ino->sbi->type & *(unsigned *)p;
 }
+
+static void autofs_dev_ioctl_fd_install(unsigned int fd, struct file *file)
+{
+	struct files_struct *files = current->files;
+	struct fdtable *fdt;
+
+	spin_lock(&files->file_lock);
+	fdt = files_fdtable(files);
+	BUG_ON(fdt->fd[fd] != NULL);
+	rcu_assign_pointer(fdt->fd[fd], file);
+	FD_SET(fd, fdt->close_on_exec);
+	spin_unlock(&files->file_lock);
+}
+
 
 /*
  * Open a file descriptor on the autofs mount point corresponding
@@ -232,7 +243,7 @@ static int autofs_dev_ioctl_open_mountpoint(const char *name, dev_t devid)
 {
 	int err, fd;
 
-	fd = get_unused_fd_flags(O_CLOEXEC);
+	fd = get_unused_fd();
 	if (likely(fd >= 0)) {
 		struct file *filp;
 		struct path path;
@@ -246,14 +257,14 @@ static int autofs_dev_ioctl_open_mountpoint(const char *name, dev_t devid)
 		 * corresponding to the autofs fs we want to open.
 		 */
 
-		filp = dentry_open(&path, O_RDONLY, current_cred());
-		path_put(&path);
+		filp = dentry_open(path.dentry, path.mnt, O_RDONLY,
+				   current_cred());
 		if (IS_ERR(filp)) {
 			err = PTR_ERR(filp);
 			goto out;
 		}
 
-		fd_install(fd, filp);
+		autofs_dev_ioctl_fd_install(fd, filp);
 	}
 
 	return fd;
@@ -349,7 +360,6 @@ static int autofs_dev_ioctl_setpipefd(struct file *fp,
 {
 	int pipefd;
 	int err = 0;
-	struct pid *new_pid = NULL;
 
 	if (param->setpipefd.pipefd == -1)
 		return -EINVAL;
@@ -361,33 +371,22 @@ static int autofs_dev_ioctl_setpipefd(struct file *fp,
 		mutex_unlock(&sbi->wq_mutex);
 		return -EBUSY;
 	} else {
-		struct file *pipe;
-
-		new_pid = get_task_pid(current, PIDTYPE_PGID);
-
-		if (ns_of_pid(new_pid) != ns_of_pid(sbi->oz_pgrp)) {
-			AUTOFS_WARN("Not allowed to change PID namespace");
-			err = -EINVAL;
-			goto out;
-		}
-
-		pipe = fget(pipefd);
+		struct file *pipe = fget(pipefd);
 		if (!pipe) {
 			err = -EBADF;
 			goto out;
 		}
-		if (autofs_prepare_pipe(pipe) < 0) {
+		if (!pipe->f_op || !pipe->f_op->write) {
 			err = -EPIPE;
 			fput(pipe);
 			goto out;
 		}
-		swap(sbi->oz_pgrp, new_pid);
+		sbi->oz_pgrp = task_pgrp_nr(current);
 		sbi->pipefd = pipefd;
 		sbi->pipe = pipe;
 		sbi->catatonic = 0;
 	}
 out:
-	put_pid(new_pid);
 	mutex_unlock(&sbi->wq_mutex);
 	return err;
 }
@@ -452,8 +451,8 @@ static int autofs_dev_ioctl_requester(struct file *fp,
 		err = 0;
 		autofs4_expire_wait(path.dentry);
 		spin_lock(&sbi->fs_lock);
-		param->requester.uid = from_kuid_munged(current_user_ns(), ino->uid);
-		param->requester.gid = from_kgid_munged(current_user_ns(), ino->gid);
+		param->requester.uid = ino->uid;
+		param->requester.gid = ino->gid;
 		spin_unlock(&sbi->fs_lock);
 	}
 	path_put(&path);
@@ -501,11 +500,12 @@ static int autofs_dev_ioctl_askumount(struct file *fp,
  * mount if there is one or 0 if it isn't a mountpoint.
  *
  * If we aren't supplied with a file descriptor then we
- * lookup the path and check if it is the root of a mount.
- * If a type is given we are looking for a particular autofs
- * mount and if we don't find a match we return fail. If the
- * located path is the root of a mount we return 1 along with
- * the super magic of the mount or 0 otherwise.
+ * lookup the nameidata of the path and check if it is the
+ * root of a mount. If a type is given we are looking for
+ * a particular autofs mount and if we don't find a match
+ * we return fail. If the located nameidata path is the
+ * root of a mount we return 1 along with the super magic
+ * of the mount or 0 otherwise.
  *
  * In both cases the the device number (as returned by
  * new_encode_dev()) is also returned.
@@ -533,18 +533,16 @@ static int autofs_dev_ioctl_ismountpoint(struct file *fp,
 
 	if (!fp || param->ioctlfd == -1) {
 		if (autofs_type_any(type))
-			err = kern_path_mountpoint(AT_FDCWD,
-						   name, &path, LOOKUP_FOLLOW);
+			err = kern_path(name, LOOKUP_FOLLOW, &path);
 		else
-			err = find_autofs_mount(name, &path,
-						test_by_type, &type);
+			err = find_autofs_mount(name, &path, test_by_type, &type);
 		if (err)
 			goto out;
-		devid = new_encode_dev(path.dentry->d_sb->s_dev);
+		devid = new_encode_dev(path.mnt->mnt_sb->s_dev);
 		err = 0;
 		if (path.mnt->mnt_root == path.dentry) {
 			err = 1;
-			magic = path.dentry->d_sb->s_magic;
+			magic = path.mnt->mnt_sb->s_magic;
 		}
 	} else {
 		dev_t dev = sbi->sb->s_dev;
@@ -558,7 +556,7 @@ static int autofs_dev_ioctl_ismountpoint(struct file *fp,
 		err = have_submounts(path.dentry);
 
 		if (follow_down_one(&path))
-			magic = path.dentry->d_sb->s_magic;
+			magic = path.mnt->mnt_sb->s_magic;
 	}
 
 	param->ismountpoint.out.devid = devid;
@@ -673,6 +671,12 @@ static int _autofs_dev_ioctl(unsigned int command, struct autofs_dev_ioctl __use
 			goto out;
 		}
 
+		if (!fp->f_op) {
+			err = -ENOTTY;
+			fput(fp);
+			goto out;
+		}
+
 		sbi = autofs_dev_ioctl_sbi(fp);
 		if (!sbi || sbi->magic != AUTOFS_SBI_MAGIC) {
 			err = -EINVAL;
@@ -737,7 +741,7 @@ MODULE_ALIAS_MISCDEV(AUTOFS_MINOR);
 MODULE_ALIAS("devname:autofs");
 
 /* Register/deregister misc character device */
-int __init autofs_dev_ioctl_init(void)
+int autofs_dev_ioctl_init(void)
 {
 	int r;
 

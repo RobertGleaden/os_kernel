@@ -10,8 +10,6 @@
  */
 
 #include <linux/dma-mapping.h>
-#include <linux/of_address.h>
-#include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/completion.h>
 #include <linux/miscdevice.h>
@@ -515,7 +513,7 @@ static noinline int fpga_program_dma(struct fpga_dev *priv)
 	 * transaction, and then put it under external control
 	 */
 	memset(&config, 0, sizeof(config));
-	config.direction = DMA_MEM_TO_DEV;
+	config.direction = DMA_TO_DEVICE;
 	config.dst_addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
 	config.dst_maxburst = fpga_fifo_size(priv->regs) / 2 / 4;
 	ret = chan->device->device_control(chan, DMA_SLAVE_CONFIG,
@@ -548,7 +546,7 @@ static noinline int fpga_program_dma(struct fpga_dev *priv)
 		goto out_dma_unmap;
 	}
 
-	dma_async_issue_pending(chan);
+	dma_async_memcpy_issue_pending(chan);
 
 	/* Set the total byte count */
 	fpga_set_byte_count(priv->regs, priv->bytes);
@@ -832,9 +830,8 @@ static ssize_t penable_store(struct device *dev, struct device_attribute *attr,
 	unsigned long val;
 	int ret;
 
-	ret = kstrtoul(buf, 0, &val);
-	if (ret)
-		return ret;
+	if (strict_strtoul(buf, 0, &val))
+		return -EINVAL;
 
 	if (val) {
 		ret = fpga_enable_power_supplies(priv);
@@ -862,9 +859,8 @@ static ssize_t program_store(struct device *dev, struct device_attribute *attr,
 	unsigned long val;
 	int ret;
 
-	ret = kstrtoul(buf, 0, &val);
-	if (ret)
-		return ret;
+	if (strict_strtoul(buf, 0, &val))
+		return -EINVAL;
 
 	/* We can't have an image writer and be programming simultaneously */
 	if (mutex_lock_interruptible(&priv->lock))
@@ -923,7 +919,7 @@ static bool dma_filter(struct dma_chan *chan, void *data)
 
 static int fpga_of_remove(struct platform_device *op)
 {
-	struct fpga_dev *priv = platform_get_drvdata(op);
+	struct fpga_dev *priv = dev_get_drvdata(&op->dev);
 	struct device *this_device = priv->miscdev.this_device;
 
 	sysfs_remove_group(&this_device->kobj, &fpga_attr_group);
@@ -949,7 +945,8 @@ static int fpga_of_remove(struct platform_device *op)
 /* CTL-CPLD Version Register */
 #define CTL_CPLD_VERSION	0x2000
 
-static int fpga_of_probe(struct platform_device *op)
+static int fpga_of_probe(struct platform_device *op,
+			 const struct of_device_id *match)
 {
 	struct device_node *of_node = op->dev.of_node;
 	struct device *this_device;
@@ -973,7 +970,7 @@ static int fpga_of_probe(struct platform_device *op)
 
 	kref_init(&priv->ref);
 
-	platform_set_drvdata(op, priv);
+	dev_set_drvdata(&op->dev, priv);
 	priv->dev = &op->dev;
 	mutex_init(&priv->lock);
 	init_completion(&priv->completion);
@@ -982,6 +979,7 @@ static int fpga_of_probe(struct platform_device *op)
 	dev_set_drvdata(priv->dev, priv);
 	dma_cap_zero(mask);
 	dma_cap_set(DMA_MEMCPY, mask);
+	dma_cap_set(DMA_INTERRUPT, mask);
 	dma_cap_set(DMA_SLAVE, mask);
 	dma_cap_set(DMA_SG, mask);
 
@@ -1109,7 +1107,7 @@ static struct of_device_id fpga_of_match[] = {
 	{},
 };
 
-static struct platform_driver fpga_of_driver = {
+static struct of_platform_driver fpga_of_driver = {
 	.probe		= fpga_of_probe,
 	.remove		= fpga_of_remove,
 	.driver		= {
@@ -1126,12 +1124,12 @@ static struct platform_driver fpga_of_driver = {
 static int __init fpga_init(void)
 {
 	led_trigger_register_simple("fpga", &ledtrig_fpga);
-	return platform_driver_register(&fpga_of_driver);
+	return of_register_platform_driver(&fpga_of_driver);
 }
 
 static void __exit fpga_exit(void)
 {
-	platform_driver_unregister(&fpga_of_driver);
+	of_unregister_platform_driver(&fpga_of_driver);
 	led_trigger_unregister_simple(ledtrig_fpga);
 }
 

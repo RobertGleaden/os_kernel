@@ -15,6 +15,7 @@
 
 #include <asm/openprom.h>
 #include <asm/oplib.h>
+#include <asm/system.h>
 #include <asm/ldc.h>
 
 static int prom_service_exists(const char *service_name)
@@ -80,6 +81,11 @@ void prom_feval(const char *fstring)
 	p1275_cmd_direct(args);
 }
 EXPORT_SYMBOL(prom_feval);
+
+#ifdef CONFIG_SMP
+extern void smp_capture(void);
+extern void smp_release(void);
+#endif
 
 /* Drop into the prom, with the chance to continue with the 'go'
  * prom command.

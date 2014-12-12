@@ -381,8 +381,22 @@ static int read_register(char regno, unsigned int *valptr);
 /* Serial port, reads one character. ETRAX 100 specific. from debugport.c */
 int getDebugChar(void);
 
+#ifdef CONFIG_ETRAX_VCS_SIM
+int getDebugChar(void)
+{
+  return socketread();
+}
+#endif
+
 /* Serial port, writes one character. ETRAX 100 specific. from debugport.c */
 void putDebugChar(int val);
+
+#ifdef CONFIG_ETRAX_VCS_SIM
+void putDebugChar(int val)
+{
+  socketwrite((char *)&val, 1);
+}
+#endif
 
 /* Returns the integer equivalent of a hexadecimal character. */
 static int hex(char ch);
@@ -663,7 +677,7 @@ mem2hex(char *buf, unsigned char *mem, int count)
                 /* Valid mem address. */
 		for (i = 0; i < count; i++) {
 			ch = *mem++;
-			buf = hex_byte_pack(buf, ch);
+			buf = pack_hex_byte(buf, ch);
 		}
         }
         /* Terminate properly. */
@@ -681,7 +695,7 @@ mem2hex_nbo(char *buf, unsigned char *mem, int count)
 	mem += count - 1;
 	for (i = 0; i < count; i++) {
 		ch = *mem--;
-		buf = hex_byte_pack(buf, ch);
+		buf = pack_hex_byte(buf, ch);
         }
 
         /* Terminate properly. */
@@ -866,7 +880,7 @@ stub_is_stopped(int sigval)
 	/* Send trap type (converted to signal) */
 
 	*ptr++ = 'T';
-	ptr = hex_byte_pack(ptr, sigval);
+	ptr = pack_hex_byte(ptr, sigval);
 
 	if (((reg.exs & 0xff00) >> 8) == 0xc) {
 
@@ -974,26 +988,26 @@ stub_is_stopped(int sigval)
 	}
 	/* Only send PC, frame and stack pointer. */
 	read_register(PC, &reg_cont);
-	ptr = hex_byte_pack(ptr, PC);
+	ptr = pack_hex_byte(ptr, PC);
 	*ptr++ = ':';
 	ptr = mem2hex(ptr, (unsigned char *)&reg_cont, register_size[PC]);
 	*ptr++ = ';';
 
 	read_register(R8, &reg_cont);
-	ptr = hex_byte_pack(ptr, R8);
+	ptr = pack_hex_byte(ptr, R8);
 	*ptr++ = ':';
 	ptr = mem2hex(ptr, (unsigned char *)&reg_cont, register_size[R8]);
 	*ptr++ = ';';
 
 	read_register(SP, &reg_cont);
-	ptr = hex_byte_pack(ptr, SP);
+	ptr = pack_hex_byte(ptr, SP);
 	*ptr++ = ':';
 	ptr = mem2hex(ptr, (unsigned char *)&reg_cont, register_size[SP]);
 	*ptr++ = ';';
 
 	/* Send ERP as well; this will save us an entire register fetch in some cases. */
         read_register(ERP, &reg_cont);
-	ptr = hex_byte_pack(ptr, ERP);
+	ptr = pack_hex_byte(ptr, ERP);
         *ptr++ = ':';
         ptr = mem2hex(ptr, (unsigned char *)&reg_cont, register_size[ERP]);
         *ptr++ = ';';

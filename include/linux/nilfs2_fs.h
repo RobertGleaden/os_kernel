@@ -41,7 +41,6 @@
 #include <linux/types.h>
 #include <linux/ioctl.h>
 #include <linux/magic.h>
-#include <linux/bug.h>
 
 
 #define NILFS_INODE_BMAP_SIZE	7
@@ -81,8 +80,6 @@ struct nilfs_inode {
 	__le32	i_generation;
 	__le32	i_pad;
 };
-
-#define NILFS_MIN_INODE_SIZE		128
 
 /**
  * struct nilfs_super_root - structure of super root
@@ -295,7 +292,7 @@ struct nilfs_dir_entry {
 	__le64	inode;			/* Inode number */
 	__le16	rec_len;		/* Directory entry length */
 	__u8	name_len;		/* Name length */
-	__u8	file_type;		/* Dir entry type (file, dir, etc) */
+	__u8	file_type;
 	char	name[NILFS_NAME_LEN];	/* File name */
 	char    pad;
 };
@@ -397,7 +394,7 @@ union nilfs_binfo {
 };
 
 /**
- * struct nilfs_segment_summary - segment summary header
+ * struct nilfs_segment_summary - segment summary
  * @ss_datasum: checksum of data
  * @ss_sumsum: checksum of segment summary
  * @ss_magic: magic number
@@ -484,8 +481,6 @@ struct nilfs_dat_entry {
 	__le64 de_rsv;
 };
 
-#define NILFS_MIN_DAT_ENTRY_SIZE	32
-
 /**
  * struct nilfs_snapshot_list - snapshot list
  * @ssl_next: next checkpoint number on snapshot list
@@ -523,8 +518,6 @@ struct nilfs_checkpoint {
 	   additional fields should be added behind cp_ifile_inode. */
 	struct nilfs_inode cp_ifile_inode;
 };
-
-#define NILFS_MIN_CHECKPOINT_SIZE	(64 + NILFS_MIN_INODE_SIZE)
 
 /* checkpoint flags */
 enum {
@@ -621,8 +614,6 @@ struct nilfs_segment_usage {
 	__le32 su_flags;
 };
 
-#define NILFS_MIN_SEGMENT_USAGE_SIZE	16
-
 /* segment usage flag */
 enum {
 	NILFS_SEGMENT_USAGE_ACTIVE,
@@ -691,9 +682,9 @@ struct nilfs_sufile_header {
 
 /**
  * nilfs_suinfo - segment usage information
- * @sui_lastmod: timestamp of last modification
- * @sui_nblocks: number of written blocks in segment
- * @sui_flags: segment usage flags
+ * @sui_lastmod:
+ * @sui_nblocks:
+ * @sui_flags:
  */
 struct nilfs_suinfo {
 	__u64 sui_lastmod;
@@ -718,58 +709,15 @@ static inline int nilfs_suinfo_clean(const struct nilfs_suinfo *si)
 }
 
 /* ioctl */
-/**
- * nilfs_suinfo_update - segment usage information update
- * @sup_segnum: segment number
- * @sup_flags: flags for which fields are active in sup_sui
- * @sup_reserved: reserved necessary for alignment
- * @sup_sui: segment usage information
- */
-struct nilfs_suinfo_update {
-	__u64 sup_segnum;
-	__u32 sup_flags;
-	__u32 sup_reserved;
-	struct nilfs_suinfo sup_sui;
-};
-
-enum {
-	NILFS_SUINFO_UPDATE_LASTMOD,
-	NILFS_SUINFO_UPDATE_NBLOCKS,
-	NILFS_SUINFO_UPDATE_FLAGS,
-	__NR_NILFS_SUINFO_UPDATE_FIELDS,
-};
-
-#define NILFS_SUINFO_UPDATE_FNS(flag, name)				\
-static inline void							\
-nilfs_suinfo_update_set_##name(struct nilfs_suinfo_update *sup)		\
-{									\
-	sup->sup_flags |= 1UL << NILFS_SUINFO_UPDATE_##flag;		\
-}									\
-static inline void							\
-nilfs_suinfo_update_clear_##name(struct nilfs_suinfo_update *sup)	\
-{									\
-	sup->sup_flags &= ~(1UL << NILFS_SUINFO_UPDATE_##flag);		\
-}									\
-static inline int							\
-nilfs_suinfo_update_##name(const struct nilfs_suinfo_update *sup)	\
-{									\
-	return !!(sup->sup_flags & (1UL << NILFS_SUINFO_UPDATE_##flag));\
-}
-
-NILFS_SUINFO_UPDATE_FNS(LASTMOD, lastmod)
-NILFS_SUINFO_UPDATE_FNS(NBLOCKS, nblocks)
-NILFS_SUINFO_UPDATE_FNS(FLAGS, flags)
-
 enum {
 	NILFS_CHECKPOINT,
 	NILFS_SNAPSHOT,
 };
 
 /**
- * struct nilfs_cpmode - change checkpoint mode structure
- * @cm_cno: checkpoint number
- * @cm_mode: mode of checkpoint
- * @cm_pad: padding
+ * struct nilfs_cpmode -
+ * @cc_cno:
+ * @cc_mode:
  */
 struct nilfs_cpmode {
 	__u64 cm_cno;
@@ -779,11 +727,11 @@ struct nilfs_cpmode {
 
 /**
  * struct nilfs_argv - argument vector
- * @v_base: pointer on data array from userspace
- * @v_nmembs: number of members in data array
- * @v_size: size of data array in bytes
- * @v_flags: flags
- * @v_index: start number of target data items
+ * @v_base:
+ * @v_nmembs:
+ * @v_size:
+ * @v_flags:
+ * @v_index:
  */
 struct nilfs_argv {
 	__u64 v_base;
@@ -794,9 +742,9 @@ struct nilfs_argv {
 };
 
 /**
- * struct nilfs_period - period of checkpoint numbers
- * @p_start: start checkpoint number (inclusive)
- * @p_end: end checkpoint number (exclusive)
+ * struct nilfs_period -
+ * @p_start:
+ * @p_end:
  */
 struct nilfs_period {
 	__u64 p_start;
@@ -804,7 +752,7 @@ struct nilfs_period {
 };
 
 /**
- * struct nilfs_cpstat - checkpoint statistics
+ * struct nilfs_cpstat -
  * @cs_cno: checkpoint number
  * @cs_ncps: number of checkpoints
  * @cs_nsss: number of snapshots
@@ -816,7 +764,7 @@ struct nilfs_cpstat {
 };
 
 /**
- * struct nilfs_sustat - segment usage statistics
+ * struct nilfs_sustat -
  * @ss_nsegs: number of segments
  * @ss_ncleansegs: number of clean segments
  * @ss_ndirtysegs: number of dirty segments
@@ -835,10 +783,10 @@ struct nilfs_sustat {
 
 /**
  * struct nilfs_vinfo - virtual block number information
- * @vi_vblocknr: virtual block number
- * @vi_start: start checkpoint number (inclusive)
- * @vi_end: end checkpoint number (exclusive)
- * @vi_blocknr: disk block number
+ * @vi_vblocknr:
+ * @vi_start:
+ * @vi_end:
+ * @vi_blocknr:
  */
 struct nilfs_vinfo {
 	__u64 vi_vblocknr;
@@ -848,15 +796,7 @@ struct nilfs_vinfo {
 };
 
 /**
- * struct nilfs_vdesc - descriptor of virtual block number
- * @vd_ino: inode number
- * @vd_cno: checkpoint number
- * @vd_vblocknr: virtual block number
- * @vd_period: period of checkpoint numbers
- * @vd_blocknr: disk block number
- * @vd_offset: logical block offset inside a file
- * @vd_flags: flags (data or node block)
- * @vd_pad: padding
+ * struct nilfs_vdesc -
  */
 struct nilfs_vdesc {
 	__u64 vd_ino;
@@ -870,13 +810,7 @@ struct nilfs_vdesc {
 };
 
 /**
- * struct nilfs_bdesc - descriptor of disk block number
- * @bd_ino: inode number
- * @bd_oblocknr: disk block address (for skipping dead blocks)
- * @bd_blocknr: disk block address
- * @bd_offset: logical block offset inside a file
- * @bd_level: level in the b-tree organization
- * @bd_pad: padding
+ * struct nilfs_bdesc -
  */
 struct nilfs_bdesc {
 	__u64 bd_ino;
@@ -913,7 +847,5 @@ struct nilfs_bdesc {
 	_IOW(NILFS_IOCTL_IDENT, 0x8B, __u64)
 #define NILFS_IOCTL_SET_ALLOC_RANGE  \
 	_IOW(NILFS_IOCTL_IDENT, 0x8C, __u64[2])
-#define NILFS_IOCTL_SET_SUINFO  \
-	_IOW(NILFS_IOCTL_IDENT, 0x8D, struct nilfs_argv)
 
 #endif	/* _LINUX_NILFS_FS_H */

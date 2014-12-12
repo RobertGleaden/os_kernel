@@ -10,7 +10,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/device.h>
 #include <linux/power_supply.h>
 #include <linux/apm-emulation.h>
 

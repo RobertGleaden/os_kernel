@@ -20,6 +20,7 @@
 #include <linux/platform_device.h>
 #include <linux/regulator/driver.h>
 #include <linux/regulator/machine.h>
+#include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/gpio.h>
 #include <linux/mfd/tps65912.h>
@@ -41,6 +42,8 @@
 #define TPS65912_REG_LDO8	11
 #define TPS65912_REG_LDO9	12
 #define TPS65912_REG_LDO10	13
+
+#define TPS65912_MAX_REG_ID	TPS65912_REG_LDO_10
 
 /* Number of step-down converters available */
 #define TPS65912_NUM_DCDC	4
@@ -113,45 +116,57 @@ struct tps65912_reg {
 	struct mutex io_lock;
 	int mode;
 	int (*get_ctrl_reg)(int);
-	int dcdc_range[TPS65912_NUM_DCDC];
+	int dcdc1_range;
+	int dcdc2_range;
+	int dcdc3_range;
+	int dcdc4_range;
 	int pwm_mode_reg;
 	int eco_reg;
-};
-
-static const struct regulator_linear_range tps65912_ldo_ranges[] = {
-	REGULATOR_LINEAR_RANGE(800000, 0, 32, 25000),
-	REGULATOR_LINEAR_RANGE(1650000, 33, 60, 50000),
-	REGULATOR_LINEAR_RANGE(3100000, 61, 63, 100000),
 };
 
 static int tps65912_get_range(struct tps65912_reg *pmic, int id)
 {
 	struct tps65912 *mfd = pmic->mfd;
-	int range;
+
+	if (id > TPS65912_REG_DCDC4)
+		return 0;
 
 	switch (id) {
 	case TPS65912_REG_DCDC1:
-		range = tps65912_reg_read(mfd, TPS65912_DCDC1_LIMIT);
-		break;
+		pmic->dcdc1_range = tps65912_reg_read(mfd,
+							TPS65912_DCDC1_LIMIT);
+		if (pmic->dcdc1_range < 0)
+			return pmic->dcdc1_range;
+		pmic->dcdc1_range = (pmic->dcdc1_range &
+			DCDC_LIMIT_RANGE_MASK) >> DCDC_LIMIT_RANGE_SHIFT;
+		return pmic->dcdc1_range;
 	case TPS65912_REG_DCDC2:
-		range = tps65912_reg_read(mfd, TPS65912_DCDC2_LIMIT);
-		break;
+		pmic->dcdc2_range = tps65912_reg_read(mfd,
+							TPS65912_DCDC2_LIMIT);
+		if (pmic->dcdc2_range < 0)
+			return pmic->dcdc2_range;
+		pmic->dcdc2_range = (pmic->dcdc2_range &
+			DCDC_LIMIT_RANGE_MASK) >> DCDC_LIMIT_RANGE_SHIFT;
+		return pmic->dcdc2_range;
 	case TPS65912_REG_DCDC3:
-		range = tps65912_reg_read(mfd, TPS65912_DCDC3_LIMIT);
-		break;
+		pmic->dcdc3_range = tps65912_reg_read(mfd,
+							TPS65912_DCDC3_LIMIT);
+		if (pmic->dcdc3_range < 0)
+			return pmic->dcdc3_range;
+		pmic->dcdc3_range = (pmic->dcdc3_range &
+			DCDC_LIMIT_RANGE_MASK) >> DCDC_LIMIT_RANGE_SHIFT;
+		return pmic->dcdc3_range;
 	case TPS65912_REG_DCDC4:
-		range = tps65912_reg_read(mfd, TPS65912_DCDC4_LIMIT);
-		break;
+		pmic->dcdc4_range = tps65912_reg_read(mfd,
+							TPS65912_DCDC4_LIMIT);
+		if (pmic->dcdc4_range < 0)
+			return pmic->dcdc4_range;
+		pmic->dcdc4_range = (pmic->dcdc4_range &
+			DCDC_LIMIT_RANGE_MASK) >> DCDC_LIMIT_RANGE_SHIFT;
+		return pmic->dcdc4_range;
 	default:
 		return 0;
 	}
-
-	if (range >= 0)
-		range = (range & DCDC_LIMIT_RANGE_MASK)
-			>> DCDC_LIMIT_RANGE_SHIFT;
-
-	pmic->dcdc_range[id] = range;
-	return range;
 }
 
 static unsigned long tps65912_vsel_to_uv_range0(u8 vsel)
@@ -190,32 +205,162 @@ static unsigned long tps65912_vsel_to_uv_range3(u8 vsel)
 	return uv;
 }
 
-static int tps65912_get_ctrl_register(int id)
+static unsigned long tps65912_vsel_to_uv_ldo(u8 vsel)
 {
-	if (id >= TPS65912_REG_DCDC1 && id <= TPS65912_REG_LDO4)
-		return id * 3 + TPS65912_DCDC1_AVS;
-	else if (id >= TPS65912_REG_LDO5 && id <= TPS65912_REG_LDO10)
-		return id - TPS65912_REG_LDO5 + TPS65912_LDO5;
-	else
-		return -EINVAL;
+	unsigned long uv = 0;
+
+	if (vsel <= 32)
+		uv = ((vsel * 25000) + 800000);
+	else if (vsel > 32 && vsel <= 60)
+		uv = (((vsel - 32) * 50000) + 1600000);
+	else if (vsel > 60)
+		uv = (((vsel - 60) * 100000) + 3000000);
+
+	return uv;
 }
 
-static int tps65912_get_sel_register(struct tps65912_reg *pmic, int id)
+static int tps65912_get_ctrl_register(int id)
+{
+	switch (id) {
+	case TPS65912_REG_DCDC1:
+		return TPS65912_DCDC1_AVS;
+	case TPS65912_REG_DCDC2:
+		return TPS65912_DCDC2_AVS;
+	case TPS65912_REG_DCDC3:
+		return TPS65912_DCDC3_AVS;
+	case TPS65912_REG_DCDC4:
+		return TPS65912_DCDC4_AVS;
+	case TPS65912_REG_LDO1:
+		return TPS65912_LDO1_AVS;
+	case TPS65912_REG_LDO2:
+		return TPS65912_LDO2_AVS;
+	case TPS65912_REG_LDO3:
+		return TPS65912_LDO3_AVS;
+	case TPS65912_REG_LDO4:
+		return TPS65912_LDO4_AVS;
+	case TPS65912_REG_LDO5:
+		return TPS65912_LDO5;
+	case TPS65912_REG_LDO6:
+		return TPS65912_LDO6;
+	case TPS65912_REG_LDO7:
+		return TPS65912_LDO7;
+	case TPS65912_REG_LDO8:
+		return TPS65912_LDO8;
+	case TPS65912_REG_LDO9:
+		return TPS65912_LDO9;
+	case TPS65912_REG_LDO10:
+		return TPS65912_LDO10;
+	default:
+		return -EINVAL;
+	}
+}
+
+static int tps65912_get_dcdc_sel_register(struct tps65912_reg *pmic, int id)
 {
 	struct tps65912 *mfd = pmic->mfd;
-	int opvsel;
+	int opvsel = 0, sr = 0;
 	u8 reg = 0;
 
-	if (id >= TPS65912_REG_DCDC1 && id <= TPS65912_REG_LDO4) {
-		opvsel = tps65912_reg_read(mfd, id * 3 + TPS65912_DCDC1_OP);
-		if (opvsel & OP_SELREG_MASK)
-			reg = id * 3 + TPS65912_DCDC1_AVS;
-		else
-			reg = id * 3 + TPS65912_DCDC1_OP;
-	} else if (id >= TPS65912_REG_LDO5 && id <= TPS65912_REG_LDO10) {
-		reg = id - TPS65912_REG_LDO5 + TPS65912_LDO5;
-	} else {
+	if (id < TPS65912_REG_DCDC1 || id > TPS65912_REG_DCDC4)
 		return -EINVAL;
+
+	switch (id) {
+	case TPS65912_REG_DCDC1:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC1_OP);
+		sr = ((opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT);
+		if (sr)
+			reg = TPS65912_DCDC1_AVS;
+		else
+			reg = TPS65912_DCDC1_OP;
+		break;
+	case TPS65912_REG_DCDC2:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC2_OP);
+		sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+		if (sr)
+			reg = TPS65912_DCDC2_AVS;
+		else
+			reg = TPS65912_DCDC2_OP;
+		break;
+	case TPS65912_REG_DCDC3:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC3_OP);
+		sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+		if (sr)
+			reg = TPS65912_DCDC3_AVS;
+		else
+			reg = TPS65912_DCDC3_OP;
+		break;
+	case TPS65912_REG_DCDC4:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC4_OP);
+		sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+		if (sr)
+			reg = TPS65912_DCDC4_AVS;
+		else
+			reg = TPS65912_DCDC4_OP;
+		break;
+	}
+	return reg;
+}
+
+static int tps65912_get_ldo_sel_register(struct tps65912_reg *pmic, int id)
+{
+	struct tps65912 *mfd = pmic->mfd;
+	int opvsel = 0, sr = 0;
+	u8 reg = 0;
+
+	if (id < TPS65912_REG_LDO1 || id > TPS65912_REG_LDO10)
+		return -EINVAL;
+
+	switch (id) {
+	case TPS65912_REG_LDO1:
+		opvsel = tps65912_reg_read(mfd, TPS65912_LDO1_OP);
+		sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+		if (sr)
+			reg = TPS65912_LDO1_AVS;
+		else
+			reg = TPS65912_LDO1_OP;
+		break;
+	case TPS65912_REG_LDO2:
+		opvsel = tps65912_reg_read(mfd, TPS65912_LDO2_OP);
+		sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+		if (sr)
+			reg = TPS65912_LDO2_AVS;
+		else
+			reg = TPS65912_LDO2_OP;
+		break;
+	case TPS65912_REG_LDO3:
+		opvsel = tps65912_reg_read(mfd, TPS65912_LDO3_OP);
+		sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+		if (sr)
+			reg = TPS65912_LDO3_AVS;
+		else
+			reg = TPS65912_LDO3_OP;
+		break;
+	case TPS65912_REG_LDO4:
+		opvsel = tps65912_reg_read(mfd, TPS65912_LDO4_OP);
+		sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+		if (sr)
+			reg = TPS65912_LDO4_AVS;
+		else
+			reg = TPS65912_LDO4_OP;
+		break;
+	case TPS65912_REG_LDO5:
+		reg = TPS65912_LDO5;
+		break;
+	case TPS65912_REG_LDO6:
+		reg = TPS65912_LDO6;
+		break;
+	case TPS65912_REG_LDO7:
+		reg = TPS65912_LDO7;
+		break;
+	case TPS65912_REG_LDO8:
+		reg = TPS65912_LDO8;
+		break;
+	case TPS65912_REG_LDO9:
+		reg = TPS65912_LDO9;
+		break;
+	case TPS65912_REG_LDO10:
+		reg = TPS65912_LDO10;
+		break;
 	}
 
 	return reg;
@@ -363,15 +508,131 @@ static unsigned int tps65912_get_mode(struct regulator_dev *dev)
 	return mode;
 }
 
-static int tps65912_list_voltage(struct regulator_dev *dev, unsigned selector)
+static int tps65912_get_voltage_dcdc(struct regulator_dev *dev)
+{
+	struct tps65912_reg *pmic = rdev_get_drvdata(dev);
+	struct tps65912 *mfd = pmic->mfd;
+	int id = rdev_get_id(dev), voltage = 0, range;
+	int opvsel = 0, avsel = 0, sr, vsel;
+
+	switch (id) {
+	case TPS65912_REG_DCDC1:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC1_OP);
+		avsel = tps65912_reg_read(mfd, TPS65912_DCDC1_AVS);
+		range = pmic->dcdc1_range;
+		break;
+	case TPS65912_REG_DCDC2:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC2_OP);
+		avsel = tps65912_reg_read(mfd, TPS65912_DCDC2_AVS);
+		range = pmic->dcdc2_range;
+		break;
+	case TPS65912_REG_DCDC3:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC3_OP);
+		avsel = tps65912_reg_read(mfd, TPS65912_DCDC3_AVS);
+		range = pmic->dcdc3_range;
+		break;
+	case TPS65912_REG_DCDC4:
+		opvsel = tps65912_reg_read(mfd, TPS65912_DCDC4_OP);
+		avsel = tps65912_reg_read(mfd, TPS65912_DCDC4_AVS);
+		range = pmic->dcdc4_range;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	sr = (opvsel & OP_SELREG_MASK) >> OP_SELREG_SHIFT;
+	if (sr)
+		vsel = avsel;
+	else
+		vsel = opvsel;
+	vsel &= 0x3F;
+
+	switch (range) {
+	case 0:
+		/* 0.5 - 1.2875V in 12.5mV steps */
+		voltage = tps65912_vsel_to_uv_range0(vsel);
+		break;
+	case 1:
+		/* 0.7 - 1.4875V in 12.5mV steps */
+		voltage = tps65912_vsel_to_uv_range1(vsel);
+		break;
+	case 2:
+		/* 0.5 - 2.075V in 25mV steps */
+		voltage = tps65912_vsel_to_uv_range2(vsel);
+		break;
+	case 3:
+		/* 0.5 - 3.8V in 50mV steps */
+		voltage = tps65912_vsel_to_uv_range3(vsel);
+		break;
+	}
+	return voltage;
+}
+
+static int tps65912_set_voltage_dcdc(struct regulator_dev *dev,
+						unsigned selector)
+{
+	struct tps65912_reg *pmic = rdev_get_drvdata(dev);
+	struct tps65912 *mfd = pmic->mfd;
+	int id = rdev_get_id(dev);
+	int value;
+	u8 reg;
+
+	reg = tps65912_get_dcdc_sel_register(pmic, id);
+	value = tps65912_reg_read(mfd, reg);
+	value &= 0xC0;
+	return tps65912_reg_write(mfd, reg, selector | value);
+}
+
+static int tps65912_get_voltage_ldo(struct regulator_dev *dev)
+{
+	struct tps65912_reg *pmic = rdev_get_drvdata(dev);
+	struct tps65912 *mfd = pmic->mfd;
+	int id = rdev_get_id(dev);
+	int vsel = 0;
+	u8 reg;
+
+	reg = tps65912_get_ldo_sel_register(pmic, id);
+	vsel = tps65912_reg_read(mfd, reg);
+	vsel &= 0x3F;
+
+	return tps65912_vsel_to_uv_ldo(vsel);
+}
+
+static int tps65912_set_voltage_ldo(struct regulator_dev *dev,
+						unsigned selector)
+{
+	struct tps65912_reg *pmic = rdev_get_drvdata(dev);
+	struct tps65912 *mfd = pmic->mfd;
+	int id = rdev_get_id(dev), reg, value;
+
+	reg = tps65912_get_ldo_sel_register(pmic, id);
+	value = tps65912_reg_read(mfd, reg);
+	value &= 0xC0;
+	return tps65912_reg_write(mfd, reg, selector | value);
+}
+
+static int tps65912_list_voltage_dcdc(struct regulator_dev *dev,
+					unsigned selector)
 {
 	struct tps65912_reg *pmic = rdev_get_drvdata(dev);
 	int range, voltage = 0, id = rdev_get_id(dev);
 
-	if (id > TPS65912_REG_DCDC4)
+	switch (id) {
+	case TPS65912_REG_DCDC1:
+		range = pmic->dcdc1_range;
+		break;
+	case TPS65912_REG_DCDC2:
+		range = pmic->dcdc2_range;
+		break;
+	case TPS65912_REG_DCDC3:
+		range = pmic->dcdc3_range;
+		break;
+	case TPS65912_REG_DCDC4:
+		range = pmic->dcdc4_range;
+		break;
+	default:
 		return -EINVAL;
-
-	range = pmic->dcdc_range[id];
+	}
 
 	switch (range) {
 	case 0:
@@ -394,36 +655,15 @@ static int tps65912_list_voltage(struct regulator_dev *dev, unsigned selector)
 	return voltage;
 }
 
-static int tps65912_get_voltage_sel(struct regulator_dev *dev)
+static int tps65912_list_voltage_ldo(struct regulator_dev *dev,
+					unsigned selector)
 {
-	struct tps65912_reg *pmic = rdev_get_drvdata(dev);
-	struct tps65912 *mfd = pmic->mfd;
-	int id = rdev_get_id(dev);
-	int reg, vsel;
+	int ldo = rdev_get_id(dev);
 
-	reg = tps65912_get_sel_register(pmic, id);
-	if (reg < 0)
-		return reg;
+	if (ldo < TPS65912_REG_LDO1 || ldo > TPS65912_REG_LDO10)
+		return -EINVAL;
 
-	vsel = tps65912_reg_read(mfd, reg);
-	vsel &= 0x3F;
-
-	return vsel;
-}
-
-static int tps65912_set_voltage_sel(struct regulator_dev *dev,
-					 unsigned selector)
-{
-	struct tps65912_reg *pmic = rdev_get_drvdata(dev);
-	struct tps65912 *mfd = pmic->mfd;
-	int id = rdev_get_id(dev);
-	int value;
-	u8 reg;
-
-	reg = tps65912_get_sel_register(pmic, id);
-	value = tps65912_reg_read(mfd, reg);
-	value &= 0xC0;
-	return tps65912_reg_write(mfd, reg, selector | value);
+	return tps65912_vsel_to_uv_ldo(selector);
 }
 
 /* Operations permitted on DCDCx */
@@ -433,9 +673,9 @@ static struct regulator_ops tps65912_ops_dcdc = {
 	.disable = tps65912_reg_disable,
 	.set_mode = tps65912_set_mode,
 	.get_mode = tps65912_get_mode,
-	.get_voltage_sel = tps65912_get_voltage_sel,
-	.set_voltage_sel = tps65912_set_voltage_sel,
-	.list_voltage = tps65912_list_voltage,
+	.get_voltage = tps65912_get_voltage_dcdc,
+	.set_voltage_sel = tps65912_set_voltage_dcdc,
+	.list_voltage = tps65912_list_voltage_dcdc,
 };
 
 /* Operations permitted on LDOx */
@@ -443,22 +683,20 @@ static struct regulator_ops tps65912_ops_ldo = {
 	.is_enabled = tps65912_reg_is_enabled,
 	.enable = tps65912_reg_enable,
 	.disable = tps65912_reg_disable,
-	.get_voltage_sel = tps65912_get_voltage_sel,
-	.set_voltage_sel = tps65912_set_voltage_sel,
-	.list_voltage = regulator_list_voltage_linear_range,
-	.map_voltage = regulator_map_voltage_linear_range,
+	.get_voltage = tps65912_get_voltage_ldo,
+	.set_voltage_sel = tps65912_set_voltage_ldo,
+	.list_voltage = tps65912_list_voltage_ldo,
 };
 
-static int tps65912_probe(struct platform_device *pdev)
+static __devinit int tps65912_probe(struct platform_device *pdev)
 {
 	struct tps65912 *tps65912 = dev_get_drvdata(pdev->dev.parent);
-	struct regulator_config config = { };
 	struct tps_info *info;
 	struct regulator_init_data *reg_data;
 	struct regulator_dev *rdev;
 	struct tps65912_reg *pmic;
 	struct tps65912_board *pmic_plat_data;
-	int i;
+	int i, err;
 
 	pmic_plat_data = dev_get_platdata(tps65912->dev);
 	if (!pmic_plat_data)
@@ -466,7 +704,7 @@ static int tps65912_probe(struct platform_device *pdev)
 
 	reg_data = pmic_plat_data->tps65912_pmic_init_data;
 
-	pmic = devm_kzalloc(&pdev->dev, sizeof(*pmic), GFP_KERNEL);
+	pmic = kzalloc(sizeof(*pmic), GFP_KERNEL);
 	if (!pmic)
 		return -ENOMEM;
 
@@ -485,34 +723,43 @@ static int tps65912_probe(struct platform_device *pdev)
 		pmic->desc[i].name = info->name;
 		pmic->desc[i].id = i;
 		pmic->desc[i].n_voltages = 64;
-		if (i > TPS65912_REG_DCDC4) {
-			pmic->desc[i].ops = &tps65912_ops_ldo;
-			pmic->desc[i].linear_ranges = tps65912_ldo_ranges;
-			pmic->desc[i].n_linear_ranges =
-					ARRAY_SIZE(tps65912_ldo_ranges);
-		} else {
-			pmic->desc[i].ops = &tps65912_ops_dcdc;
-		}
+		pmic->desc[i].ops = (i > TPS65912_REG_DCDC4 ?
+			&tps65912_ops_ldo : &tps65912_ops_dcdc);
 		pmic->desc[i].type = REGULATOR_VOLTAGE;
 		pmic->desc[i].owner = THIS_MODULE;
 		range = tps65912_get_range(pmic, i);
-
-		config.dev = tps65912->dev;
-		config.init_data = reg_data;
-		config.driver_data = pmic;
-
-		rdev = devm_regulator_register(&pdev->dev, &pmic->desc[i],
-					       &config);
+		rdev = regulator_register(&pmic->desc[i],
+					tps65912->dev, reg_data, pmic);
 		if (IS_ERR(rdev)) {
 			dev_err(tps65912->dev,
 				"failed to register %s regulator\n",
 				pdev->name);
-			return PTR_ERR(rdev);
+			err = PTR_ERR(rdev);
+			goto err;
 		}
 
 		/* Save regulator for cleanup */
 		pmic->rdev[i] = rdev;
 	}
+	return 0;
+
+err:
+	while (--i >= 0)
+		regulator_unregister(pmic->rdev[i]);
+
+	kfree(pmic);
+	return err;
+}
+
+static int __devexit tps65912_remove(struct platform_device *pdev)
+{
+	struct tps65912_reg *tps65912_reg = platform_get_drvdata(pdev);
+	int i;
+
+	for (i = 0; i < TPS65912_NUM_REGULATOR; i++)
+		regulator_unregister(tps65912_reg->rdev[i]);
+
+	kfree(tps65912_reg);
 	return 0;
 }
 
@@ -522,14 +769,25 @@ static struct platform_driver tps65912_driver = {
 		.owner = THIS_MODULE,
 	},
 	.probe = tps65912_probe,
+	.remove = __devexit_p(tps65912_remove),
 };
 
+/**
+ * tps65912_init
+ *
+ * Module init function
+ */
 static int __init tps65912_init(void)
 {
 	return platform_driver_register(&tps65912_driver);
 }
 subsys_initcall(tps65912_init);
 
+/**
+ * tps65912_cleanup
+ *
+ * Module exit function
+ */
 static void __exit tps65912_cleanup(void)
 {
 	platform_driver_unregister(&tps65912_driver);

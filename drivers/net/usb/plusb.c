@@ -13,13 +13,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 // #define	DEBUG			// error path messages, extra info
 // #define	VERBOSE			// more; success messages
 
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
@@ -69,10 +71,13 @@
 static inline int
 pl_vendor_req(struct usbnet *dev, u8 req, u8 val, u8 index)
 {
-	return usbnet_read_cmd(dev, req,
-				USB_DIR_IN | USB_TYPE_VENDOR |
-				USB_RECIP_DEVICE,
-				val, index, NULL, 0);
+	return usb_control_msg(dev->udev,
+		usb_rcvctrlpipe(dev->udev, 0),
+		req,
+		USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+		val, index,
+		NULL, 0,
+		USB_CTRL_GET_TIMEOUT);
 }
 
 static inline int
@@ -147,10 +152,19 @@ static struct usb_driver plusb_driver = {
 	.disconnect =	usbnet_disconnect,
 	.suspend =	usbnet_suspend,
 	.resume =	usbnet_resume,
-	.disable_hub_initiated_lpm = 1,
 };
 
-module_usb_driver(plusb_driver);
+static int __init plusb_init(void)
+{
+	return usb_register(&plusb_driver);
+}
+module_init(plusb_init);
+
+static void __exit plusb_exit(void)
+{
+	usb_deregister(&plusb_driver);
+}
+module_exit(plusb_exit);
 
 MODULE_AUTHOR("David Brownell");
 MODULE_DESCRIPTION("Prolific PL-2301/2302/25A1 USB Host to Host Link Driver");

@@ -9,11 +9,10 @@
 
 #include <linux/gpio.h>
 #include <linux/clk.h>
-#include <linux/module.h>
 
 #include <sound/soc.h>
 
-#include <linux/platform_data/asoc-s3c24xx_simtec.h>
+#include <plat/audio-simtec.h>
 
 #include "s3c24xx-i2s.h"
 #include "s3c24xx_simtec.h"
@@ -134,18 +133,18 @@ static const struct snd_kcontrol_new amp_unmute_controls[] = {
 
 void simtec_audio_init(struct snd_soc_pcm_runtime *rtd)
 {
-	struct snd_soc_card *card = rtd->card;
+	struct snd_soc_codec *codec = rtd->codec;
 
 	if (pdata->amp_gpio > 0) {
 		pr_debug("%s: adding amp routes\n", __func__);
 
-		snd_soc_add_card_controls(card, amp_unmute_controls,
+		snd_soc_add_controls(codec, amp_unmute_controls,
 				     ARRAY_SIZE(amp_unmute_controls));
 	}
 
 	if (pdata->amp_gain[0] > 0) {
 		pr_debug("%s: adding amp controls\n", __func__);
-		snd_soc_add_card_controls(card, amp_gain_controls,
+		snd_soc_add_controls(codec, amp_gain_controls,
 				     ARRAY_SIZE(amp_gain_controls));
 	}
 }
@@ -301,7 +300,7 @@ static void detach_gpio_amp(struct s3c24xx_audio_simtec_pdata *pd)
 }
 
 #ifdef CONFIG_PM
-static int simtec_audio_resume(struct device *dev)
+int simtec_audio_resume(struct device *dev)
 {
 	simtec_call_startup(pdata);
 	return 0;
@@ -313,8 +312,8 @@ const struct dev_pm_ops simtec_audio_pmops = {
 EXPORT_SYMBOL_GPL(simtec_audio_pmops);
 #endif
 
-int simtec_audio_core_probe(struct platform_device *pdev,
-			    struct snd_soc_card *card)
+int __devinit simtec_audio_core_probe(struct platform_device *pdev,
+				      struct snd_soc_card *card)
 {
 	struct platform_device *snd_dev;
 	int ret;
@@ -371,7 +370,7 @@ err_clk:
 }
 EXPORT_SYMBOL_GPL(simtec_audio_core_probe);
 
-int simtec_audio_remove(struct platform_device *pdev)
+int __devexit simtec_audio_remove(struct platform_device *pdev)
 {
 	struct platform_device *snd_dev = platform_get_drvdata(pdev);
 

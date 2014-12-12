@@ -21,7 +21,7 @@
  */
 
 #include <linux/init.h>
-#include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/mutex.h>
 #include <sound/core.h>
 #include <sound/minors.h>
@@ -38,6 +38,12 @@ MODULE_LICENSE("GPL");
 /* Takashi says this is really only for sound-service-0-, but this is OK. */
 MODULE_ALIAS_SNDRV_MINOR(SNDRV_MINOR_OSS_SEQUENCER);
 MODULE_ALIAS_SNDRV_MINOR(SNDRV_MINOR_OSS_MUSIC);
+
+#ifdef SNDRV_SEQ_OSS_DEBUG
+module_param(seq_oss_debug, int, 0644);
+MODULE_PARM_DESC(seq_oss_debug, "debug option");
+int seq_oss_debug = 0;
+#endif
 
 
 /*
@@ -225,19 +231,22 @@ register_device(void)
 	mutex_lock(&register_mutex);
 	if ((rc = snd_register_oss_device(SNDRV_OSS_DEVICE_TYPE_SEQUENCER,
 					  NULL, 0,
-					  &seq_oss_f_ops, NULL)) < 0) {
-		pr_err("ALSA: seq_oss: can't register device seq\n");
+					  &seq_oss_f_ops, NULL,
+					  SNDRV_SEQ_OSS_DEVNAME)) < 0) {
+		snd_printk(KERN_ERR "can't register device seq\n");
 		mutex_unlock(&register_mutex);
 		return rc;
 	}
 	if ((rc = snd_register_oss_device(SNDRV_OSS_DEVICE_TYPE_MUSIC,
 					  NULL, 0,
-					  &seq_oss_f_ops, NULL)) < 0) {
-		pr_err("ALSA: seq_oss: can't register device music\n");
+					  &seq_oss_f_ops, NULL,
+					  SNDRV_SEQ_OSS_DEVNAME)) < 0) {
+		snd_printk(KERN_ERR "can't register device music\n");
 		snd_unregister_oss_device(SNDRV_OSS_DEVICE_TYPE_SEQUENCER, NULL, 0);
 		mutex_unlock(&register_mutex);
 		return rc;
 	}
+	debug_printk(("device registered\n"));
 	mutex_unlock(&register_mutex);
 	return 0;
 }
@@ -246,10 +255,11 @@ static void
 unregister_device(void)
 {
 	mutex_lock(&register_mutex);
+	debug_printk(("device unregistered\n"));
 	if (snd_unregister_oss_device(SNDRV_OSS_DEVICE_TYPE_MUSIC, NULL, 0) < 0)		
-		pr_err("ALSA: seq_oss: error unregister device music\n");
+		snd_printk(KERN_ERR "error unregister device music\n");
 	if (snd_unregister_oss_device(SNDRV_OSS_DEVICE_TYPE_SEQUENCER, NULL, 0) < 0)
-		pr_err("ALSA: seq_oss: error unregister device seq\n");
+		snd_printk(KERN_ERR "error unregister device seq\n");
 	mutex_unlock(&register_mutex);
 }
 

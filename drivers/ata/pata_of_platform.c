@@ -11,18 +11,16 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/of_address.h>
-#include <linux/platform_device.h>
+#include <linux/of_platform.h>
 #include <linux/ata_platform.h>
-#include <linux/libata.h>
 
-static int pata_of_platform_probe(struct platform_device *ofdev)
+static int __devinit pata_of_platform_probe(struct platform_device *ofdev)
 {
 	int ret;
 	struct device_node *dn = ofdev->dev.of_node;
 	struct resource io_res;
 	struct resource ctl_res;
-	struct resource *irq_res;
+	struct resource irq_res;
 	unsigned int reg_shift = 0;
 	int pio_mode = 0;
 	int pio_mask;
@@ -51,17 +49,19 @@ static int pata_of_platform_probe(struct platform_device *ofdev)
 		}
 	}
 
-	irq_res = platform_get_resource(ofdev, IORESOURCE_IRQ, 0);
-	if (irq_res)
-		irq_res->flags = 0;
+	ret = of_irq_to_resource(dn, 0, &irq_res);
+	if (ret == NO_IRQ)
+		irq_res.start = irq_res.end = 0;
+	else
+		irq_res.flags = 0;
 
 	prop = of_get_property(dn, "reg-shift", NULL);
 	if (prop)
-		reg_shift = be32_to_cpup(prop);
+		reg_shift = *prop;
 
 	prop = of_get_property(dn, "pio-mode", NULL);
 	if (prop) {
-		pio_mode = be32_to_cpup(prop);
+		pio_mode = *prop;
 		if (pio_mode > 6) {
 			dev_err(&ofdev->dev, "invalid pio-mode\n");
 			return -EINVAL;
@@ -73,8 +73,13 @@ static int pata_of_platform_probe(struct platform_device *ofdev)
 	pio_mask = 1 << pio_mode;
 	pio_mask |= (1 << pio_mode) - 1;
 
-	return __pata_platform_probe(&ofdev->dev, &io_res, &ctl_res, irq_res,
+	return __pata_platform_probe(&ofdev->dev, &io_res, &ctl_res, &irq_res,
 				     reg_shift, pio_mask);
+}
+
+static int __devexit pata_of_platform_remove(struct platform_device *ofdev)
+{
+	return __pata_platform_remove(&ofdev->dev);
 }
 
 static struct of_device_id pata_of_platform_match[] = {
@@ -91,10 +96,20 @@ static struct platform_driver pata_of_platform_driver = {
 		.of_match_table = pata_of_platform_match,
 	},
 	.probe		= pata_of_platform_probe,
-	.remove		= ata_platform_remove_one,
+	.remove		= __devexit_p(pata_of_platform_remove),
 };
 
-module_platform_driver(pata_of_platform_driver);
+static int __init pata_of_platform_init(void)
+{
+	return platform_driver_register(&pata_of_platform_driver);
+}
+module_init(pata_of_platform_init);
+
+static void __exit pata_of_platform_exit(void)
+{
+	platform_driver_unregister(&pata_of_platform_driver);
+}
+module_exit(pata_of_platform_exit);
 
 MODULE_DESCRIPTION("OF-platform PATA driver");
 MODULE_AUTHOR("Anton Vorontsov <avorontsov@ru.mvista.com>");

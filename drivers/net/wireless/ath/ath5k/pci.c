@@ -14,13 +14,10 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/nl80211.h>
 #include <linux/pci.h>
 #include <linux/pci-aspm.h>
 #include <linux/etherdevice.h>
-#include <linux/module.h>
 #include "../ath.h"
 #include "ath5k.h"
 #include "debug.h"
@@ -47,7 +44,6 @@ static DEFINE_PCI_DEVICE_TABLE(ath5k_pci_id_table) = {
 	{ PCI_VDEVICE(ATHEROS, 0x001b) }, /* 5413 Eagle */
 	{ PCI_VDEVICE(ATHEROS, 0x001c) }, /* PCI-E cards */
 	{ PCI_VDEVICE(ATHEROS, 0x001d) }, /* 2417 Nala */
-	{ PCI_VDEVICE(ATHEROS, 0xff1b) }, /* AR5BXB63 */
 	{ 0 }
 };
 MODULE_DEVICE_TABLE(pci, ath5k_pci_id_table);
@@ -101,7 +97,7 @@ ath5k_pci_eeprom_read(struct ath_common *common, u32 offset, u16 *data)
 					0xffff);
 			return true;
 		}
-		usleep_range(15, 20);
+		udelay(15);
 	}
 
 	return false;
@@ -155,7 +151,7 @@ static const struct ath_bus_ops ath_pci_bus_ops = {
 * PCI Initialization *
 \********************/
 
-static int
+static int __devinit
 ath5k_pci_probe(struct pci_dev *pdev,
 		const struct pci_device_id *id)
 {
@@ -265,7 +261,7 @@ ath5k_pci_probe(struct pci_dev *pdev,
 	ah->iobase = mem; /* So we can unmap it on detach */
 
 	/* Initialize */
-	ret = ath5k_init_ah(ah, &ath_pci_bus_ops);
+	ret = ath5k_init_softc(ah, &ath_pci_bus_ops);
 	if (ret)
 		goto err_free;
 
@@ -285,13 +281,13 @@ err:
 	return ret;
 }
 
-static void
+static void __devexit
 ath5k_pci_remove(struct pci_dev *pdev)
 {
 	struct ieee80211_hw *hw = pci_get_drvdata(pdev);
 	struct ath5k_hw *ah = hw->priv;
 
-	ath5k_deinit_ah(ah);
+	ath5k_deinit_softc(ah);
 	pci_iounmap(pdev, ah->iobase);
 	pci_release_region(pdev, 0);
 	pci_disable_device(pdev);
@@ -336,8 +332,32 @@ static struct pci_driver ath5k_pci_driver = {
 	.name		= KBUILD_MODNAME,
 	.id_table	= ath5k_pci_id_table,
 	.probe		= ath5k_pci_probe,
-	.remove		= ath5k_pci_remove,
+	.remove		= __devexit_p(ath5k_pci_remove),
 	.driver.pm	= ATH5K_PM_OPS,
 };
 
-module_pci_driver(ath5k_pci_driver);
+/*
+ * Module init/exit functions
+ */
+static int __init
+init_ath5k_pci(void)
+{
+	int ret;
+
+	ret = pci_register_driver(&ath5k_pci_driver);
+	if (ret) {
+		printk(KERN_ERR "ath5k_pci: can't register pci driver\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+static void __exit
+exit_ath5k_pci(void)
+{
+	pci_unregister_driver(&ath5k_pci_driver);
+}
+
+module_init(init_ath5k_pci);
+module_exit(exit_ath5k_pci);

@@ -18,8 +18,6 @@
  */
 
 #include <linux/string.h>
-#include <linux/module.h>
-#include <linux/device.h>
 
 #include "usbip_common.h"
 #include "stub.h"
@@ -39,11 +37,11 @@ static spinlock_t busid_table_lock;
 
 static void init_busid_table(void)
 {
-	/*
-	 * This also sets the bus_table[i].status to
-	 * STUB_BUSID_OTHER, which is 0.
-	 */
+	int i;
+
 	memset(busid_table, 0, sizeof(busid_table));
+	for (i = 0; i < MAX_BUSID; i++)
+		busid_table[i].status = STUB_BUSID_OTHER;
 
 	spin_lock_init(&busid_table_lock);
 }
@@ -168,53 +166,25 @@ static ssize_t store_match_busid(struct device_driver *dev, const char *buf,
 	strncpy(busid, buf + 4, BUSID_SIZE);
 
 	if (!strncmp(buf, "add ", 4)) {
-		if (add_match_busid(busid) < 0)
+		if (add_match_busid(busid) < 0) {
 			return -ENOMEM;
-
-		pr_debug("add busid %s\n", busid);
-		return count;
-	}
-
-	if (!strncmp(buf, "del ", 4)) {
-		if (del_match_busid(busid) < 0)
+		} else {
+			pr_debug("add busid %s\n", busid);
+			return count;
+		}
+	} else if (!strncmp(buf, "del ", 4)) {
+		if (del_match_busid(busid) < 0) {
 			return -ENODEV;
-
-		pr_debug("del busid %s\n", busid);
-		return count;
+		} else {
+			pr_debug("del busid %s\n", busid);
+			return count;
+		}
+	} else {
+		return -EINVAL;
 	}
-
-	return -EINVAL;
 }
 static DRIVER_ATTR(match_busid, S_IRUSR | S_IWUSR, show_match_busid,
 		   store_match_busid);
-
-static ssize_t rebind_store(struct device_driver *dev, const char *buf,
-				 size_t count)
-{
-	int ret;
-	int len;
-	struct bus_id_priv *bid;
-
-	/* buf length should be less that BUSID_SIZE */
-	len = strnlen(buf, BUSID_SIZE);
-
-	if (!(len < BUSID_SIZE))
-		return -EINVAL;
-
-	bid = get_busid_priv(buf);
-	if (!bid)
-		return -ENODEV;
-
-	ret = device_attach(&bid->udev->dev);
-	if (ret < 0) {
-		dev_err(&bid->udev->dev, "rebind failed\n");
-		return ret;
-	}
-
-	return count;
-}
-
-static DRIVER_ATTR_WO(rebind);
 
 static struct stub_priv *stub_priv_pop_from_listhead(struct list_head *listhead)
 {
@@ -275,39 +245,32 @@ static int __init usbip_host_init(void)
 {
 	int ret;
 
-	init_busid_table();
-
 	stub_priv_cache = KMEM_CACHE(stub_priv, SLAB_HWCACHE_ALIGN);
+
 	if (!stub_priv_cache) {
 		pr_err("kmem_cache_create failed\n");
 		return -ENOMEM;
 	}
 
-	ret = usb_register_device_driver(&stub_driver, THIS_MODULE);
-	if (ret) {
+	ret = usb_register(&stub_driver);
+	if (ret < 0) {
 		pr_err("usb_register failed %d\n", ret);
 		goto err_usb_register;
 	}
 
 	ret = driver_create_file(&stub_driver.drvwrap.driver,
 				 &driver_attr_match_busid);
-	if (ret) {
+	if (ret < 0) {
 		pr_err("driver_create_file failed\n");
 		goto err_create_file;
 	}
 
-	ret = driver_create_file(&stub_driver.drvwrap.driver,
-				 &driver_attr_rebind);
-	if (ret) {
-		pr_err("driver_create_file failed\n");
-		goto err_create_file;
-	}
-
+	init_busid_table();
 	pr_info(DRIVER_DESC " v" USBIP_VERSION "\n");
 	return ret;
 
 err_create_file:
-	usb_deregister_device_driver(&stub_driver);
+	usb_deregister(&stub_driver);
 err_usb_register:
 	kmem_cache_destroy(stub_priv_cache);
 	return ret;
@@ -318,14 +281,11 @@ static void __exit usbip_host_exit(void)
 	driver_remove_file(&stub_driver.drvwrap.driver,
 			   &driver_attr_match_busid);
 
-	driver_remove_file(&stub_driver.drvwrap.driver,
-			   &driver_attr_rebind);
-
 	/*
 	 * deregister() calls stub_disconnect() for all devices. Device
 	 * specific data is cleared in stub_disconnect().
 	 */
-	usb_deregister_device_driver(&stub_driver);
+	usb_deregister(&stub_driver);
 
 	kmem_cache_destroy(stub_priv_cache);
 }

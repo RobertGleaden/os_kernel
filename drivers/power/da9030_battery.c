@@ -22,7 +22,6 @@
 
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
-#include <linux/notifier.h>
 
 #define DA9030_FAULT_LOG		0x0a
 #define DA9030_FAULT_LOG_OVER_TEMP	(1 << 7)
@@ -188,8 +187,8 @@ static const struct file_operations bat_debug_fops = {
 
 static struct dentry *da9030_bat_create_debugfs(struct da9030_charger *charger)
 {
-	charger->debug_file = debugfs_create_file("charger", 0666, NULL,
-						  charger, &bat_debug_fops);
+	charger->debug_file = debugfs_create_file("charger", 0666, 0, charger,
+						 &bat_debug_fops);
 	return charger->debug_file;
 }
 
@@ -505,7 +504,7 @@ static int da9030_battery_probe(struct platform_device *pdev)
 	    pdata->charge_millivolt > 4350)
 		return -EINVAL;
 
-	charger = devm_kzalloc(&pdev->dev, sizeof(*charger), GFP_KERNEL);
+	charger = kzalloc(sizeof(*charger), GFP_KERNEL);
 	if (charger == NULL)
 		return -ENOMEM;
 
@@ -557,6 +556,8 @@ err_notifier:
 	cancel_delayed_work(&charger->work);
 
 err_charger_init:
+	kfree(charger);
+
 	return ret;
 }
 
@@ -573,6 +574,8 @@ static int da9030_battery_remove(struct platform_device *dev)
 	da9030_set_charge(charger, 0);
 	power_supply_unregister(&charger->psy);
 
+	kfree(charger);
+
 	return 0;
 }
 
@@ -585,7 +588,18 @@ static struct platform_driver da903x_battery_driver = {
 	.remove = da9030_battery_remove,
 };
 
-module_platform_driver(da903x_battery_driver);
+static int da903x_battery_init(void)
+{
+	return platform_driver_register(&da903x_battery_driver);
+}
+
+static void da903x_battery_exit(void)
+{
+	platform_driver_unregister(&da903x_battery_driver);
+}
+
+module_init(da903x_battery_init);
+module_exit(da903x_battery_exit);
 
 MODULE_DESCRIPTION("DA9030 battery charger driver");
 MODULE_AUTHOR("Mike Rapoport, CompuLab");

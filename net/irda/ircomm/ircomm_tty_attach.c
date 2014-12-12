@@ -23,7 +23,9 @@
  *     GNU General Public License for more details.
  *
  *     You should have received a copy of the GNU General Public License
- *     along with this program; if not, see <http://www.gnu.org/licenses/>.
+ *     along with this program; if not, write to the Free Software
+ *     Foundation, Inc., 59 Temple Place, Suite 330, Boston,
+ *     MA 02111-1307 USA
  *
  ********************************************************************/
 
@@ -128,8 +130,6 @@ static int (*state[])(struct ircomm_tty_cb *self, IRCOMM_TTY_EVENT event,
  */
 int ircomm_tty_attach_cable(struct ircomm_tty_cb *self)
 {
-	struct tty_struct *tty;
-
 	IRDA_DEBUG(0, "%s()\n", __func__ );
 
 	IRDA_ASSERT(self != NULL, return -1;);
@@ -142,11 +142,7 @@ int ircomm_tty_attach_cable(struct ircomm_tty_cb *self)
 	}
 
 	/* Make sure nobody tries to write before the link is up */
-	tty = tty_port_tty_get(&self->port);
-	if (tty) {
-		tty->hw_stopped = 1;
-		tty_kref_put(tty);
-	}
+	self->tty->hw_stopped = 1;
 
 	ircomm_tty_ias_register(self);
 
@@ -402,26 +398,23 @@ void ircomm_tty_disconnect_indication(void *instance, void *sap,
 				      struct sk_buff *skb)
 {
 	struct ircomm_tty_cb *self = (struct ircomm_tty_cb *) instance;
-	struct tty_struct *tty;
 
 	IRDA_DEBUG(2, "%s()\n", __func__ );
 
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRCOMM_TTY_MAGIC, return;);
 
-	tty = tty_port_tty_get(&self->port);
-	if (!tty)
+	if (!self->tty)
 		return;
 
 	/* This will stop control data transfers */
 	self->flow = FLOW_STOP;
 
 	/* Stop data transfers */
-	tty->hw_stopped = 1;
+	self->tty->hw_stopped = 1;
 
 	ircomm_tty_do_event(self, IRCOMM_TTY_DISCONNECT_INDICATION, NULL,
 			    NULL);
-	tty_kref_put(tty);
 }
 
 /*
@@ -557,15 +550,12 @@ void ircomm_tty_connect_indication(void *instance, void *sap,
  */
 void ircomm_tty_link_established(struct ircomm_tty_cb *self)
 {
-	struct tty_struct *tty;
-
 	IRDA_DEBUG(2, "%s()\n", __func__ );
 
 	IRDA_ASSERT(self != NULL, return;);
 	IRDA_ASSERT(self->magic == IRCOMM_TTY_MAGIC, return;);
 
-	tty = tty_port_tty_get(&self->port);
-	if (!tty)
+	if (!self->tty)
 		return;
 
 	del_timer(&self->watchdog_timer);
@@ -576,22 +566,19 @@ void ircomm_tty_link_established(struct ircomm_tty_cb *self)
 	 * will have to wait for the peer device (DCE) to raise the CTS
 	 * line.
 	 */
-	if (tty_port_cts_enabled(&self->port) &&
-			((self->settings.dce & IRCOMM_CTS) == 0)) {
+	if ((self->flags & ASYNC_CTS_FLOW) && ((self->settings.dce & IRCOMM_CTS) == 0)) {
 		IRDA_DEBUG(0, "%s(), waiting for CTS ...\n", __func__ );
-		goto put;
+		return;
 	} else {
 		IRDA_DEBUG(1, "%s(), starting hardware!\n", __func__ );
 
-		tty->hw_stopped = 0;
+		self->tty->hw_stopped = 0;
 
 		/* Wake up processes blocked on open */
-		wake_up_interruptible(&self->port.open_wait);
+		wake_up_interruptible(&self->open_wait);
 	}
 
 	schedule_work(&self->tqueue);
-put:
-	tty_kref_put(tty);
 }
 
 /*
@@ -990,13 +977,14 @@ static int ircomm_tty_state_ready(struct ircomm_tty_cb *self,
 		ircomm_tty_next_state(self, IRCOMM_TTY_SEARCH);
 		ircomm_tty_start_watchdog_timer(self, 3*HZ);
 
-		if (self->port.flags & ASYNC_CHECK_CD) {
+		if (self->flags & ASYNC_CHECK_CD) {
 			/* Drop carrier */
 			self->settings.dce = IRCOMM_DELTA_CD;
 			ircomm_tty_check_modem_status(self);
 		} else {
 			IRDA_DEBUG(0, "%s(), hanging up!\n", __func__ );
-			tty_port_tty_hangup(&self->port, false);
+			if (self->tty)
+				tty_hangup(self->tty);
 		}
 		break;
 	default:

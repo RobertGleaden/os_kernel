@@ -15,7 +15,6 @@
 #include <linux/list.h>
 #include <linux/of.h>
 #include <linux/slab.h>
-#include <linux/export.h>
 
 #include <asm/processor.h>
 #include <asm/io.h>
@@ -208,20 +207,20 @@ pci_create_OF_bus_map(void)
 		of_prop->name = "pci-OF-bus-map";
 		of_prop->length = 256;
 		of_prop->value = &of_prop[1];
-		of_add_property(dn, of_prop);
+		prom_add_property(dn, of_prop);
 		of_node_put(dn);
 	}
 }
 
-void pcibios_setup_phb_io_space(struct pci_controller *hose)
+void __devinit pcibios_setup_phb_io_space(struct pci_controller *hose)
 {
 	unsigned long io_offset;
 	struct resource *res = &hose->io_resource;
 
 	/* Fixup IO space offset */
-	io_offset = pcibios_io_space_offset(hose);
-	res->start += io_offset;
-	res->end += io_offset;
+	io_offset = (unsigned long)hose->io_base_virt - isa_io_base;
+	res->start = (res->start + io_offset) & 0xffffffffu;
+	res->end = (res->end + io_offset) & 0xffffffffu;
 }
 
 static int __init pcibios_init(void)
@@ -295,7 +294,7 @@ long sys_pciconfig_iobase(long which, unsigned long bus, unsigned long devfn)
 	case IOBASE_BRIDGE_NUMBER:
 		return (long)hose->first_busno;
 	case IOBASE_MEMORY:
-		return (long)hose->mem_offset[0];
+		return (long)hose->pci_mem_offset;
 	case IOBASE_IO:
 		return (long)hose->io_base_phys;
 	case IOBASE_ISA_IO:

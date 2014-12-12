@@ -24,7 +24,6 @@
 #include <linux/platform_device.h>
 #include <linux/hw_random.h>
 #include <linux/delay.h>
-#include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <asm/io.h>
 
@@ -95,7 +94,7 @@ static struct hwrng pasemi_rng = {
 	.data_read	= pasemi_rng_data_read,
 };
 
-static int rng_probe(struct platform_device *ofdev)
+static int __devinit rng_probe(struct platform_device *ofdev)
 {
 	void __iomem *rng_regs;
 	struct device_node *rng_np = ofdev->dev.of_node;
@@ -123,7 +122,7 @@ static int rng_probe(struct platform_device *ofdev)
 	return err;
 }
 
-static int rng_remove(struct platform_device *dev)
+static int __devexit rng_remove(struct platform_device *dev)
 {
 	void __iomem *rng_regs = (void __iomem *)pasemi_rng.priv;
 
@@ -149,7 +148,17 @@ static struct platform_driver rng_driver = {
 	.remove		= rng_remove,
 };
 
-module_platform_driver(rng_driver);
+static int __init rng_init(void)
+{
+	return platform_driver_register(&rng_driver);
+}
+module_init(rng_init);
+
+static void __exit rng_exit(void)
+{
+	platform_driver_unregister(&rng_driver);
+}
+module_exit(rng_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Egor Martovetsky <egor@pasemi.com>");

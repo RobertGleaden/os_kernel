@@ -1,22 +1,25 @@
-# common
-obj-$(CONFIG_IWLWIFI)	+= iwlwifi.o
-iwlwifi-objs		+= iwl-io.o
-iwlwifi-objs		+= iwl-drv.o
-iwlwifi-objs		+= iwl-debug.o
-iwlwifi-objs		+= iwl-notif-wait.o
-iwlwifi-objs		+= iwl-eeprom-read.o iwl-eeprom-parse.o
-iwlwifi-objs		+= iwl-phy-db.o iwl-nvm-parse.o
-iwlwifi-objs		+= pcie/drv.o pcie/rx.o pcie/tx.o pcie/trans.o
-iwlwifi-$(CONFIG_IWLDVM) += iwl-1000.o iwl-2000.o iwl-5000.o iwl-6000.o
-iwlwifi-$(CONFIG_IWLMVM) += iwl-7000.o iwl-8000.o
+# AGN
+obj-$(CONFIG_IWLAGN)	+= iwlagn.o
+iwlagn-objs		:= iwl-agn.o iwl-agn-rs.o
+iwlagn-objs		+= iwl-agn-ucode.o iwl-agn-tx.o
+iwlagn-objs		+= iwl-agn-lib.o iwl-agn-calib.o iwl-io.o
+iwlagn-objs		+= iwl-agn-tt.o iwl-agn-sta.o iwl-agn-eeprom.o
 
-iwlwifi-objs += $(iwlwifi-m)
+iwlagn-objs 		+= iwl-core.o iwl-eeprom.o iwl-power.o
+iwlagn-objs 		+= iwl-rx.o iwl-sta.o
+iwlagn-objs 		+= iwl-scan.o iwl-led.o
+iwlagn-objs             += iwl-agn-rxon.o
+iwlagn-objs             += iwl-5000.o
+iwlagn-objs             += iwl-6000.o
+iwlagn-objs             += iwl-1000.o
+iwlagn-objs             += iwl-2000.o
+iwlagn-objs             += iwl-pci.o
+iwlagn-objs             += iwl-trans.o iwl-trans-rx-pcie.o iwl-trans-tx-pcie.o
 
-iwlwifi-$(CONFIG_IWLWIFI_DEVICE_TRACING) += iwl-devtrace.o
-
-ccflags-y += -D__CHECK_ENDIAN__ -I$(src)
-
-obj-$(CONFIG_IWLDVM)	+= dvm/
-obj-$(CONFIG_IWLMVM)	+= mvm/
+iwlagn-$(CONFIG_IWLWIFI_DEBUGFS) += iwl-debugfs.o
+iwlagn-$(CONFIG_IWLWIFI_DEVICE_TRACING) += iwl-devtrace.o
+iwlagn-$(CONFIG_IWLWIFI_DEVICE_SVTOOL) += iwl-sv-open.o
 
 CFLAGS_iwl-devtrace.o := -I$(src)
+
+ccflags-y += -D__CHECK_ENDIAN__

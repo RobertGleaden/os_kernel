@@ -2,7 +2,7 @@
  * adm1025.c
  *
  * Copyright (C) 2000       Chen-Yuan Wu <gwu@esoft.com>
- * Copyright (C) 2003-2009  Jean Delvare <jdelvare@suse.de>
+ * Copyright (C) 2003-2009  Jean Delvare <khali@linux-fr.org>
  *
  * The ADM1025 is a sensor chip made by Analog Devices. It reports up to 6
  * voltages (including its own power source) and up to two temperatures
@@ -12,7 +12,7 @@
  * resolution of about 0.5% of the nominal value). Temperature values are
  * reported with a 1 deg resolution and a 3 deg accuracy. Complete
  * datasheet can be obtained from Analog's website at:
- *   http://www.onsemi.com/PowerSolutions/product.do?id=ADM1025
+ *   http://www.onsemi.com/PowerSolutions/product.do?id=ADM1025 
  *
  * This driver also supports the ADM1025A, which differs from the ADM1025
  * only in that it has "open-drain VID inputs while the ADM1025 has
@@ -91,16 +91,15 @@ enum chips { adm1025, ne1619 };
 
 static const int in_scale[6] = { 2500, 2250, 3300, 5000, 12000, 3300 };
 
-#define IN_FROM_REG(reg, scale)	(((reg) * (scale) + 96) / 192)
-#define IN_TO_REG(val, scale)	((val) <= 0 ? 0 : \
+#define IN_FROM_REG(reg,scale)	(((reg) * (scale) + 96) / 192)
+#define IN_TO_REG(val,scale)	((val) <= 0 ? 0 : \
 				 (val) * 192 >= (scale) * 255 ? 255 : \
-				 ((val) * 192 + (scale) / 2) / (scale))
+				 ((val) * 192 + (scale)/2) / (scale))
 
 #define TEMP_FROM_REG(reg)	((reg) * 1000)
 #define TEMP_TO_REG(val)	((val) <= -127500 ? -128 : \
 				 (val) >= 126500 ? 127 : \
-				 (((val) < 0 ? (val) - 500 : \
-				   (val) + 500) / 1000))
+				 (((val) < 0 ? (val)-500 : (val)+500) / 1000))
 
 /*
  * Functions declaration
@@ -219,12 +218,7 @@ static ssize_t set_in_min(struct device *dev, struct device_attribute *attr,
 	int index = to_sensor_dev_attr(attr)->index;
 	struct i2c_client *client = to_i2c_client(dev);
 	struct adm1025_data *data = i2c_get_clientdata(client);
-	long val;
-	int err;
-
-	err = kstrtol(buf, 10, &val);
-	if (err)
-		return err;
+	long val = simple_strtol(buf, NULL, 10);
 
 	mutex_lock(&data->update_lock);
 	data->in_min[index] = IN_TO_REG(val, in_scale[index]);
@@ -240,12 +234,7 @@ static ssize_t set_in_max(struct device *dev, struct device_attribute *attr,
 	int index = to_sensor_dev_attr(attr)->index;
 	struct i2c_client *client = to_i2c_client(dev);
 	struct adm1025_data *data = i2c_get_clientdata(client);
-	long val;
-	int err;
-
-	err = kstrtol(buf, 10, &val);
-	if (err)
-		return err;
+	long val = simple_strtol(buf, NULL, 10);
 
 	mutex_lock(&data->update_lock);
 	data->in_max[index] = IN_TO_REG(val, in_scale[index]);
@@ -275,12 +264,7 @@ static ssize_t set_temp_min(struct device *dev, struct device_attribute *attr,
 	int index = to_sensor_dev_attr(attr)->index;
 	struct i2c_client *client = to_i2c_client(dev);
 	struct adm1025_data *data = i2c_get_clientdata(client);
-	long val;
-	int err;
-
-	err = kstrtol(buf, 10, &val);
-	if (err)
-		return err;
+	long val = simple_strtol(buf, NULL, 10);
 
 	mutex_lock(&data->update_lock);
 	data->temp_min[index] = TEMP_TO_REG(val);
@@ -296,12 +280,7 @@ static ssize_t set_temp_max(struct device *dev, struct device_attribute *attr,
 	int index = to_sensor_dev_attr(attr)->index;
 	struct i2c_client *client = to_i2c_client(dev);
 	struct adm1025_data *data = i2c_get_clientdata(client);
-	long val;
-	int err;
-
-	err = kstrtol(buf, 10, &val);
-	if (err)
-		return err;
+	long val = simple_strtol(buf, NULL, 10);
 
 	mutex_lock(&data->update_lock);
 	data->temp_max[index] = TEMP_TO_REG(val);
@@ -364,14 +343,7 @@ static ssize_t set_vrm(struct device *dev, struct device_attribute *attr,
 		       const char *buf, size_t count)
 {
 	struct adm1025_data *data = dev_get_drvdata(dev);
-	unsigned long val;
-	int err;
-
-	err = kstrtoul(buf, 10, &val);
-	if (err)
-		return err;
-
-	data->vrm = val;
+	data->vrm = simple_strtoul(buf, NULL, 10);
 	return count;
 }
 static DEVICE_ATTR(vrm, S_IRUGO | S_IWUSR, show_vrm, set_vrm);
@@ -477,10 +449,11 @@ static int adm1025_probe(struct i2c_client *client,
 	int err;
 	u8 config;
 
-	data = devm_kzalloc(&client->dev, sizeof(struct adm1025_data),
-			    GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct adm1025_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
 	i2c_set_clientdata(client, data);
 	mutex_init(&data->update_lock);
@@ -489,15 +462,14 @@ static int adm1025_probe(struct i2c_client *client,
 	adm1025_init_client(client);
 
 	/* Register sysfs hooks */
-	err = sysfs_create_group(&client->dev.kobj, &adm1025_group);
-	if (err)
-		return err;
+	if ((err = sysfs_create_group(&client->dev.kobj, &adm1025_group)))
+		goto exit_free;
 
 	/* Pin 11 is either in4 (+12V) or VID4 */
 	config = i2c_smbus_read_byte_data(client, ADM1025_REG_CONFIG);
 	if (!(config & 0x20)) {
-		err = sysfs_create_group(&client->dev.kobj, &adm1025_group_in4);
-		if (err)
+		if ((err = sysfs_create_group(&client->dev.kobj,
+					      &adm1025_group_in4)))
 			goto exit_remove;
 	}
 
@@ -512,6 +484,9 @@ static int adm1025_probe(struct i2c_client *client,
 exit_remove:
 	sysfs_remove_group(&client->dev.kobj, &adm1025_group);
 	sysfs_remove_group(&client->dev.kobj, &adm1025_group_in4);
+exit_free:
+	kfree(data);
+exit:
 	return err;
 }
 
@@ -531,7 +506,7 @@ static void adm1025_init_client(struct i2c_client *client)
 	 * setting yet, we better set the high limits to the max so that
 	 * no alarm triggers.
 	 */
-	for (i = 0; i < 6; i++) {
+	for (i=0; i<6; i++) {
 		reg = i2c_smbus_read_byte_data(client,
 					       ADM1025_REG_IN_MAX(i));
 		if (reg == 0)
@@ -539,7 +514,7 @@ static void adm1025_init_client(struct i2c_client *client)
 						  ADM1025_REG_IN_MAX(i),
 						  0xFF);
 	}
-	for (i = 0; i < 2; i++) {
+	for (i=0; i<2; i++) {
 		reg = i2c_smbus_read_byte_data(client,
 					       ADM1025_REG_TEMP_HIGH(i));
 		if (reg == 0)
@@ -565,6 +540,7 @@ static int adm1025_remove(struct i2c_client *client)
 	sysfs_remove_group(&client->dev.kobj, &adm1025_group);
 	sysfs_remove_group(&client->dev.kobj, &adm1025_group_in4);
 
+	kfree(data);
 	return 0;
 }
 
@@ -579,7 +555,7 @@ static struct adm1025_data *adm1025_update_device(struct device *dev)
 		int i;
 
 		dev_dbg(&client->dev, "Updating data.\n");
-		for (i = 0; i < 6; i++) {
+		for (i=0; i<6; i++) {
 			data->in[i] = i2c_smbus_read_byte_data(client,
 				      ADM1025_REG_IN(i));
 			data->in_min[i] = i2c_smbus_read_byte_data(client,
@@ -587,7 +563,7 @@ static struct adm1025_data *adm1025_update_device(struct device *dev)
 			data->in_max[i] = i2c_smbus_read_byte_data(client,
 					  ADM1025_REG_IN_MAX(i));
 		}
-		for (i = 0; i < 2; i++) {
+		for (i=0; i<2; i++) {
 			data->temp[i] = i2c_smbus_read_byte_data(client,
 					ADM1025_REG_TEMP(i));
 			data->temp_min[i] = i2c_smbus_read_byte_data(client,
@@ -613,8 +589,19 @@ static struct adm1025_data *adm1025_update_device(struct device *dev)
 	return data;
 }
 
-module_i2c_driver(adm1025_driver);
+static int __init sensors_adm1025_init(void)
+{
+	return i2c_add_driver(&adm1025_driver);
+}
 
-MODULE_AUTHOR("Jean Delvare <jdelvare@suse.de>");
+static void __exit sensors_adm1025_exit(void)
+{
+	i2c_del_driver(&adm1025_driver);
+}
+
+MODULE_AUTHOR("Jean Delvare <khali@linux-fr.org>");
 MODULE_DESCRIPTION("ADM1025 driver");
 MODULE_LICENSE("GPL");
+
+module_init(sensors_adm1025_init);
+module_exit(sensors_adm1025_exit);

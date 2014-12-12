@@ -21,7 +21,6 @@
 #include <linux/rtc.h>
 #include <linux/platform_device.h>
 #include <linux/io.h>
-#include <linux/module.h>
 
 #define DRV_VERSION "0.1"
 
@@ -214,7 +213,8 @@ static irqreturn_t stk17ta8_rtc_interrupt(int irq, void *dev_id)
 			events |= RTC_UF;
 		else
 			events |= RTC_AF;
-		rtc_update_irq(pdata->rtc, 1, events);
+		if (likely(pdata->rtc))
+			rtc_update_irq(pdata->rtc, 1, events);
 	}
 	spin_unlock(&pdata->lock);
 	return events ? IRQ_HANDLED : IRQ_NONE;
@@ -284,7 +284,7 @@ static struct bin_attribute stk17ta8_nvram_attr = {
 	.write = stk17ta8_nvram_write,
 };
 
-static int stk17ta8_rtc_probe(struct platform_device *pdev)
+static int __devinit stk17ta8_rtc_probe(struct platform_device *pdev)
 {
 	struct resource *res;
 	unsigned int cal;
@@ -293,14 +293,19 @@ static int stk17ta8_rtc_probe(struct platform_device *pdev)
 	void __iomem *ioaddr;
 	int ret = 0;
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -ENODEV;
+
 	pdata = devm_kzalloc(&pdev->dev, sizeof(*pdata), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	ioaddr = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(ioaddr))
-		return PTR_ERR(ioaddr);
+	if (!devm_request_mem_region(&pdev->dev, res->start, RTC_REG_SIZE,
+			pdev->name))
+		return -EBUSY;
+	ioaddr = devm_ioremap(&pdev->dev, res->start, RTC_REG_SIZE);
+	if (!ioaddr)
+		return -ENOMEM;
 	pdata->ioaddr = ioaddr;
 	pdata->irq = platform_get_irq(pdev, 0);
 
@@ -323,28 +328,30 @@ static int stk17ta8_rtc_probe(struct platform_device *pdev)
 		writeb(0, ioaddr + RTC_INTERRUPTS);
 		if (devm_request_irq(&pdev->dev, pdata->irq,
 				stk17ta8_rtc_interrupt,
-				IRQF_SHARED,
+				IRQF_DISABLED | IRQF_SHARED,
 				pdev->name, pdev) < 0) {
 			dev_warn(&pdev->dev, "interrupt not available.\n");
 			pdata->irq = 0;
 		}
 	}
 
-	pdata->rtc = devm_rtc_device_register(&pdev->dev, pdev->name,
+	pdata->rtc = rtc_device_register(pdev->name, &pdev->dev,
 				  &stk17ta8_rtc_ops, THIS_MODULE);
 	if (IS_ERR(pdata->rtc))
 		return PTR_ERR(pdata->rtc);
 
 	ret = sysfs_create_bin_file(&pdev->dev.kobj, &stk17ta8_nvram_attr);
-
+	if (ret)
+		rtc_device_unregister(pdata->rtc);
 	return ret;
 }
 
-static int stk17ta8_rtc_remove(struct platform_device *pdev)
+static int __devexit stk17ta8_rtc_remove(struct platform_device *pdev)
 {
 	struct rtc_plat_data *pdata = platform_get_drvdata(pdev);
 
 	sysfs_remove_bin_file(&pdev->dev.kobj, &stk17ta8_nvram_attr);
+	rtc_device_unregister(pdata->rtc);
 	if (pdata->irq > 0)
 		writeb(0, pdata->ioaddr + RTC_INTERRUPTS);
 	return 0;
@@ -355,14 +362,25 @@ MODULE_ALIAS("platform:stk17ta8");
 
 static struct platform_driver stk17ta8_rtc_driver = {
 	.probe		= stk17ta8_rtc_probe,
-	.remove		= stk17ta8_rtc_remove,
+	.remove		= __devexit_p(stk17ta8_rtc_remove),
 	.driver		= {
 		.name	= "stk17ta8",
 		.owner	= THIS_MODULE,
 	},
 };
 
-module_platform_driver(stk17ta8_rtc_driver);
+static __init int stk17ta8_init(void)
+{
+	return platform_driver_register(&stk17ta8_rtc_driver);
+}
+
+static __exit void stk17ta8_exit(void)
+{
+	platform_driver_unregister(&stk17ta8_rtc_driver);
+}
+
+module_init(stk17ta8_init);
+module_exit(stk17ta8_exit);
 
 MODULE_AUTHOR("Thomas Hommel <thomas.hommel@ge.com>");
 MODULE_DESCRIPTION("Simtek STK17TA8 RTC driver");

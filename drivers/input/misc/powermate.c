@@ -31,6 +31,7 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/spinlock.h>
 #include <linux/usb/input.h>
 
@@ -64,7 +65,6 @@ struct powermate_device {
 	struct urb *irq, *config;
 	struct usb_ctrlrequest *configcr;
 	struct usb_device *udev;
-	struct usb_interface *intf;
 	struct input_dev *input;
 	spinlock_t lock;
 	int static_brightness;
@@ -85,7 +85,6 @@ static void powermate_config_complete(struct urb *urb);
 static void powermate_irq(struct urb *urb)
 {
 	struct powermate_device *pm = urb->context;
-	struct device *dev = &pm->intf->dev;
 	int retval;
 
 	switch (urb->status) {
@@ -96,12 +95,10 @@ static void powermate_irq(struct urb *urb)
 	case -ENOENT:
 	case -ESHUTDOWN:
 		/* this urb is terminated, clean up */
-		dev_dbg(dev, "%s - urb shutting down with status: %d\n",
-			__func__, urb->status);
+		dbg("%s - urb shutting down with status: %d", __func__, urb->status);
 		return;
 	default:
-		dev_dbg(dev, "%s - nonzero urb status received: %d\n",
-			__func__, urb->status);
+		dbg("%s - nonzero urb status received: %d", __func__, urb->status);
 		goto exit;
 	}
 
@@ -113,8 +110,8 @@ static void powermate_irq(struct urb *urb)
 exit:
 	retval = usb_submit_urb (urb, GFP_ATOMIC);
 	if (retval)
-		dev_err(dev, "%s - usb_submit_urb failed with result: %d\n",
-			__func__, retval);
+		err ("%s - usb_submit_urb failed with result %d",
+		     __func__, retval);
 }
 
 /* Decide if we need to issue a control message and do so. Must be called with pm->lock taken */
@@ -333,7 +330,6 @@ static int powermate_probe(struct usb_interface *intf, const struct usb_device_i
 		goto fail3;
 
 	pm->udev = udev;
-	pm->intf = intf;
 	pm->input = input_dev;
 
 	usb_make_path(udev, pm->phys, sizeof(pm->phys));
@@ -445,7 +441,18 @@ static struct usb_driver powermate_driver = {
         .id_table =     powermate_devices,
 };
 
-module_usb_driver(powermate_driver);
+static int __init powermate_init(void)
+{
+	return usb_register(&powermate_driver);
+}
+
+static void __exit powermate_cleanup(void)
+{
+	usb_deregister(&powermate_driver);
+}
+
+module_init(powermate_init);
+module_exit(powermate_cleanup);
 
 MODULE_AUTHOR( "William R Sowerbutts" );
 MODULE_DESCRIPTION( "Griffin Technology, Inc PowerMate driver" );

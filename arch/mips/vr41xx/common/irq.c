@@ -22,6 +22,7 @@
 #include <linux/irq.h>
 
 #include <asm/irq_cpu.h>
+#include <asm/system.h>
 #include <asm/vr41xx/irq.h>
 
 typedef struct irq_cascade {

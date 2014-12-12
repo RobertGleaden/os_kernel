@@ -70,7 +70,7 @@ void ipath_disarm_senderrbufs(struct ipath_devdata *dd)
 	if (sbuf[0] || sbuf[1] || (piobcnt > 128 && (sbuf[2] || sbuf[3]))) {
 		int i;
 		if (ipath_debug & (__IPATH_PKTDBG|__IPATH_DBG) &&
-			time_after(dd->ipath_lastcancel, jiffies)) {
+			dd->ipath_lastcancel > jiffies) {
 			__IPATH_DBG_WHICH(__IPATH_PKTDBG|__IPATH_DBG,
 					  "SendbufErrs %lx %lx", sbuf[0],
 					  sbuf[1]);
@@ -209,7 +209,8 @@ void ipath_format_hwerrors(u64 hwerrs,
 {
 	int i;
 	const int glen =
-	    ARRAY_SIZE(ipath_generic_hwerror_msgs);
+	    sizeof(ipath_generic_hwerror_msgs) /
+	    sizeof(ipath_generic_hwerror_msgs[0]);
 
 	for (i=0; i<glen; i++) {
 		if (hwerrs & ipath_generic_hwerror_msgs[i].mask) {
@@ -755,7 +756,7 @@ static int handle_errors(struct ipath_devdata *dd, ipath_err_t errs)
 
 	/* likely due to cancel; so suppress message unless verbose */
 	if ((errs & (INFINIPATH_E_SPKTLEN | INFINIPATH_E_SPIOARMLAUNCH)) &&
-		time_after(dd->ipath_lastcancel, jiffies)) {
+		dd->ipath_lastcancel > jiffies) {
 		/* armlaunch takes precedence; it often causes both. */
 		ipath_cdbg(VERBOSE,
 			"Suppressed %s error (%llx) after sendbuf cancel\n",

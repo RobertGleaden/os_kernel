@@ -89,7 +89,7 @@ static const u8 lm95241_reg_address[] = {
 
 /* Client data (each client gets its own) */
 struct lm95241_data {
-	struct i2c_client *client;
+	struct device *hwmon_dev;
 	struct mutex update_lock;
 	unsigned long last_updated, interval;	/* in jiffies */
 	char valid;		/* zero until following fields are valid */
@@ -113,8 +113,8 @@ static int temp_from_reg_unsigned(u8 val_h, u8 val_l)
 
 static struct lm95241_data *lm95241_update_device(struct device *dev)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 
 	mutex_lock(&data->update_lock);
 
@@ -122,7 +122,7 @@ static struct lm95241_data *lm95241_update_device(struct device *dev)
 	    !data->valid) {
 		int i;
 
-		dev_dbg(dev, "Updating lm95241 data.\n");
+		dev_dbg(&client->dev, "Updating lm95241 data.\n");
 		for (i = 0; i < ARRAY_SIZE(lm95241_reg_address); i++)
 			data->temp[i]
 			  = i2c_smbus_read_byte_data(client,
@@ -153,7 +153,8 @@ static ssize_t show_input(struct device *dev, struct device_attribute *attr,
 static ssize_t show_type(struct device *dev, struct device_attribute *attr,
 			 char *buf)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 
 	return snprintf(buf, PAGE_SIZE - 1,
 		data->model & to_sensor_dev_attr(attr)->index ? "1\n" : "2\n");
@@ -162,13 +163,13 @@ static ssize_t show_type(struct device *dev, struct device_attribute *attr,
 static ssize_t set_type(struct device *dev, struct device_attribute *attr,
 			const char *buf, size_t count)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 	unsigned long val;
 	int shift;
 	u8 mask = to_sensor_dev_attr(attr)->index;
 
-	if (kstrtoul(buf, 10, &val) < 0)
+	if (strict_strtoul(buf, 10, &val) < 0)
 		return -EINVAL;
 	if (val != 1 && val != 2)
 		return -EINVAL;
@@ -200,7 +201,8 @@ static ssize_t set_type(struct device *dev, struct device_attribute *attr,
 static ssize_t show_min(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 
 	return snprintf(buf, PAGE_SIZE - 1,
 			data->config & to_sensor_dev_attr(attr)->index ?
@@ -210,10 +212,11 @@ static ssize_t show_min(struct device *dev, struct device_attribute *attr,
 static ssize_t set_min(struct device *dev, struct device_attribute *attr,
 		       const char *buf, size_t count)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 	long val;
 
-	if (kstrtol(buf, 10, &val) < 0)
+	if (strict_strtol(buf, 10, &val) < 0)
 		return -EINVAL;
 	if (val < -128000)
 		return -EINVAL;
@@ -226,8 +229,7 @@ static ssize_t set_min(struct device *dev, struct device_attribute *attr,
 		data->config &= ~to_sensor_dev_attr(attr)->index;
 	data->valid = 0;
 
-	i2c_smbus_write_byte_data(data->client, LM95241_REG_RW_CONFIG,
-				  data->config);
+	i2c_smbus_write_byte_data(client, LM95241_REG_RW_CONFIG, data->config);
 
 	mutex_unlock(&data->update_lock);
 
@@ -237,7 +239,8 @@ static ssize_t set_min(struct device *dev, struct device_attribute *attr,
 static ssize_t show_max(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 
 	return snprintf(buf, PAGE_SIZE - 1,
 			data->config & to_sensor_dev_attr(attr)->index ?
@@ -247,10 +250,11 @@ static ssize_t show_max(struct device *dev, struct device_attribute *attr,
 static ssize_t set_max(struct device *dev, struct device_attribute *attr,
 		       const char *buf, size_t count)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 	long val;
 
-	if (kstrtol(buf, 10, &val) < 0)
+	if (strict_strtol(buf, 10, &val) < 0)
 		return -EINVAL;
 	if (val >= 256000)
 		return -EINVAL;
@@ -263,8 +267,7 @@ static ssize_t set_max(struct device *dev, struct device_attribute *attr,
 		data->config &= ~to_sensor_dev_attr(attr)->index;
 	data->valid = 0;
 
-	i2c_smbus_write_byte_data(data->client, LM95241_REG_RW_CONFIG,
-				  data->config);
+	i2c_smbus_write_byte_data(client, LM95241_REG_RW_CONFIG, data->config);
 
 	mutex_unlock(&data->update_lock);
 
@@ -283,10 +286,11 @@ static ssize_t show_interval(struct device *dev, struct device_attribute *attr,
 static ssize_t set_interval(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t count)
 {
-	struct lm95241_data *data = dev_get_drvdata(dev);
+	struct i2c_client *client = to_i2c_client(dev);
+	struct lm95241_data *data = i2c_get_clientdata(client);
 	unsigned long val;
 
-	if (kstrtoul(buf, 10, &val) < 0)
+	if (strict_strtoul(buf, 10, &val) < 0)
 		return -EINVAL;
 
 	data->interval = val * HZ / 1000;
@@ -312,7 +316,7 @@ static SENSOR_DEVICE_ATTR(temp3_max, S_IWUSR | S_IRUGO, show_max, set_max,
 static DEVICE_ATTR(update_interval, S_IWUSR | S_IRUGO, show_interval,
 		   set_interval);
 
-static struct attribute *lm95241_attrs[] = {
+static struct attribute *lm95241_attributes[] = {
 	&sensor_dev_attr_temp1_input.dev_attr.attr,
 	&sensor_dev_attr_temp2_input.dev_attr.attr,
 	&sensor_dev_attr_temp3_input.dev_attr.attr,
@@ -325,7 +329,10 @@ static struct attribute *lm95241_attrs[] = {
 	&dev_attr_update_interval.attr,
 	NULL
 };
-ATTRIBUTE_GROUPS(lm95241);
+
+static const struct attribute_group lm95241_group = {
+	.attrs = lm95241_attributes,
+};
 
 /* Return 0 if detection is successful, -ENODEV otherwise */
 static int lm95241_detect(struct i2c_client *new_client,
@@ -359,11 +366,14 @@ static int lm95241_detect(struct i2c_client *new_client,
 	return 0;
 }
 
-static void lm95241_init_client(struct i2c_client *client,
-				struct lm95241_data *data)
+static void lm95241_init_client(struct i2c_client *client)
 {
+	struct lm95241_data *data = i2c_get_clientdata(client);
+
 	data->interval = HZ;	/* 1 sec default */
+	data->valid = 0;
 	data->config = CFG_CR0076;
+	data->model = 0;
 	data->trutherm = (TT_OFF << TT1_SHIFT) | (TT_OFF << TT2_SHIFT);
 
 	i2c_smbus_write_byte_data(client, LM95241_REG_RW_CONFIG, data->config);
@@ -375,27 +385,54 @@ static void lm95241_init_client(struct i2c_client *client,
 				  data->model);
 }
 
-static int lm95241_probe(struct i2c_client *client,
+static int lm95241_probe(struct i2c_client *new_client,
 			 const struct i2c_device_id *id)
 {
-	struct device *dev = &client->dev;
 	struct lm95241_data *data;
-	struct device *hwmon_dev;
+	int err;
 
-	data = devm_kzalloc(dev, sizeof(struct lm95241_data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	data = kzalloc(sizeof(struct lm95241_data), GFP_KERNEL);
+	if (!data) {
+		err = -ENOMEM;
+		goto exit;
+	}
 
-	data->client = client;
+	i2c_set_clientdata(new_client, data);
 	mutex_init(&data->update_lock);
 
 	/* Initialize the LM95241 chip */
-	lm95241_init_client(client, data);
+	lm95241_init_client(new_client);
 
-	hwmon_dev = devm_hwmon_device_register_with_groups(dev, client->name,
-							   data,
-							   lm95241_groups);
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	/* Register sysfs hooks */
+	err = sysfs_create_group(&new_client->dev.kobj, &lm95241_group);
+	if (err)
+		goto exit_free;
+
+	data->hwmon_dev = hwmon_device_register(&new_client->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
+		goto exit_remove_files;
+	}
+
+	return 0;
+
+exit_remove_files:
+	sysfs_remove_group(&new_client->dev.kobj, &lm95241_group);
+exit_free:
+	kfree(data);
+exit:
+	return err;
+}
+
+static int lm95241_remove(struct i2c_client *client)
+{
+	struct lm95241_data *data = i2c_get_clientdata(client);
+
+	hwmon_device_unregister(data->hwmon_dev);
+	sysfs_remove_group(&client->dev.kobj, &lm95241_group);
+
+	kfree(data);
+	return 0;
 }
 
 /* Driver data (common to all clients) */
@@ -412,13 +449,25 @@ static struct i2c_driver lm95241_driver = {
 		.name	= DEVNAME,
 	},
 	.probe		= lm95241_probe,
+	.remove		= lm95241_remove,
 	.id_table	= lm95241_id,
 	.detect		= lm95241_detect,
 	.address_list	= normal_i2c,
 };
 
-module_i2c_driver(lm95241_driver);
+static int __init sensors_lm95241_init(void)
+{
+	return i2c_add_driver(&lm95241_driver);
+}
+
+static void __exit sensors_lm95241_exit(void)
+{
+	i2c_del_driver(&lm95241_driver);
+}
 
 MODULE_AUTHOR("Davide Rizzo <elpa.rizzo@gmail.com>");
 MODULE_DESCRIPTION("LM95241 sensor driver");
 MODULE_LICENSE("GPL");
+
+module_init(sensors_lm95241_init);
+module_exit(sensors_lm95241_exit);

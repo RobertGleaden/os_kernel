@@ -17,25 +17,24 @@
  */
 
 #include <linux/slab.h>
+#include <linux/init.h>
 #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/nand.h>
 #include <linux/mtd/partitions.h>
-#include <linux/gpio.h>
-#include <linux/platform_data/gpio-omap.h>
-
 #include <asm/io.h>
-#include <asm/sizes.h>
-
-#include <mach/board-ams-delta.h>
-
 #include <mach/hardware.h>
+#include <asm/sizes.h>
+#include <mach/gpio.h>
+#include <plat/board-ams-delta.h>
 
 /*
  * MTD structure for E3 (Delta)
  */
 static struct mtd_info *ams_delta_mtd = NULL;
+
+#define NAND_MASK (AMS_DELTA_LATCH2_NAND_NRE | AMS_DELTA_LATCH2_NAND_NWE | AMS_DELTA_LATCH2_NAND_CLE | AMS_DELTA_LATCH2_NAND_ALE | AMS_DELTA_LATCH2_NAND_NCE | AMS_DELTA_LATCH2_NAND_NWP)
 
 /*
  * Define partitions for flash devices
@@ -69,9 +68,10 @@ static void ams_delta_write_byte(struct mtd_info *mtd, u_char byte)
 
 	writew(0, io_base + OMAP_MPUIO_IO_CNTL);
 	writew(byte, this->IO_ADDR_W);
-	gpio_set_value(AMS_DELTA_GPIO_PIN_NAND_NWE, 0);
+	ams_delta_latch2_write(AMS_DELTA_LATCH2_NAND_NWE, 0);
 	ndelay(40);
-	gpio_set_value(AMS_DELTA_GPIO_PIN_NAND_NWE, 1);
+	ams_delta_latch2_write(AMS_DELTA_LATCH2_NAND_NWE,
+			       AMS_DELTA_LATCH2_NAND_NWE);
 }
 
 static u_char ams_delta_read_byte(struct mtd_info *mtd)
@@ -80,11 +80,12 @@ static u_char ams_delta_read_byte(struct mtd_info *mtd)
 	struct nand_chip *this = mtd->priv;
 	void __iomem *io_base = this->priv;
 
-	gpio_set_value(AMS_DELTA_GPIO_PIN_NAND_NRE, 0);
+	ams_delta_latch2_write(AMS_DELTA_LATCH2_NAND_NRE, 0);
 	ndelay(40);
 	writew(~0, io_base + OMAP_MPUIO_IO_CNTL);
 	res = readw(this->IO_ADDR_R);
-	gpio_set_value(AMS_DELTA_GPIO_PIN_NAND_NRE, 1);
+	ams_delta_latch2_write(AMS_DELTA_LATCH2_NAND_NRE,
+			       AMS_DELTA_LATCH2_NAND_NRE);
 
 	return res;
 }
@@ -106,6 +107,18 @@ static void ams_delta_read_buf(struct mtd_info *mtd, u_char *buf, int len)
 		buf[i] = ams_delta_read_byte(mtd);
 }
 
+static int ams_delta_verify_buf(struct mtd_info *mtd, const u_char *buf,
+				int len)
+{
+	int i;
+
+	for (i=0; i<len; i++)
+		if (buf[i] != ams_delta_read_byte(mtd))
+			return -EFAULT;
+
+	return 0;
+}
+
 /*
  * Command control function
  *
@@ -119,12 +132,15 @@ static void ams_delta_hwcontrol(struct mtd_info *mtd, int cmd,
 {
 
 	if (ctrl & NAND_CTRL_CHANGE) {
-		gpio_set_value(AMS_DELTA_GPIO_PIN_NAND_NCE,
-				(ctrl & NAND_NCE) == 0);
-		gpio_set_value(AMS_DELTA_GPIO_PIN_NAND_CLE,
-				(ctrl & NAND_CLE) != 0);
-		gpio_set_value(AMS_DELTA_GPIO_PIN_NAND_ALE,
-				(ctrl & NAND_ALE) != 0);
+		unsigned long bits;
+
+		bits = (~ctrl & NAND_NCE) ? AMS_DELTA_LATCH2_NAND_NCE : 0;
+		bits |= (ctrl & NAND_CLE) ? AMS_DELTA_LATCH2_NAND_CLE : 0;
+		bits |= (ctrl & NAND_ALE) ? AMS_DELTA_LATCH2_NAND_ALE : 0;
+
+		ams_delta_latch2_write(AMS_DELTA_LATCH2_NAND_CLE |
+				AMS_DELTA_LATCH2_NAND_ALE |
+				AMS_DELTA_LATCH2_NAND_NCE, bits);
 	}
 
 	if (cmd != NAND_CMD_NONE)
@@ -136,43 +152,10 @@ static int ams_delta_nand_ready(struct mtd_info *mtd)
 	return gpio_get_value(AMS_DELTA_GPIO_PIN_NAND_RB);
 }
 
-static const struct gpio _mandatory_gpio[] = {
-	{
-		.gpio	= AMS_DELTA_GPIO_PIN_NAND_NCE,
-		.flags	= GPIOF_OUT_INIT_HIGH,
-		.label	= "nand_nce",
-	},
-	{
-		.gpio	= AMS_DELTA_GPIO_PIN_NAND_NRE,
-		.flags	= GPIOF_OUT_INIT_HIGH,
-		.label	= "nand_nre",
-	},
-	{
-		.gpio	= AMS_DELTA_GPIO_PIN_NAND_NWP,
-		.flags	= GPIOF_OUT_INIT_HIGH,
-		.label	= "nand_nwp",
-	},
-	{
-		.gpio	= AMS_DELTA_GPIO_PIN_NAND_NWE,
-		.flags	= GPIOF_OUT_INIT_HIGH,
-		.label	= "nand_nwe",
-	},
-	{
-		.gpio	= AMS_DELTA_GPIO_PIN_NAND_ALE,
-		.flags	= GPIOF_OUT_INIT_LOW,
-		.label	= "nand_ale",
-	},
-	{
-		.gpio	= AMS_DELTA_GPIO_PIN_NAND_CLE,
-		.flags	= GPIOF_OUT_INIT_LOW,
-		.label	= "nand_cle",
-	},
-};
-
 /*
  * Main initialization routine
  */
-static int ams_delta_init(struct platform_device *pdev)
+static int __devinit ams_delta_init(struct platform_device *pdev)
 {
 	struct nand_chip *this;
 	struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -203,17 +186,18 @@ static int ams_delta_init(struct platform_device *pdev)
 	/* Link the private data with the MTD structure */
 	ams_delta_mtd->priv = this;
 
-	/*
-	 * Don't try to request the memory region from here,
-	 * it should have been already requested from the
-	 * gpio-omap driver and requesting it again would fail.
-	 */
+	if (!request_mem_region(res->start, resource_size(res),
+			dev_name(&pdev->dev))) {
+		dev_err(&pdev->dev, "request_mem_region failed\n");
+		err = -EBUSY;
+		goto out_free;
+	}
 
 	io_base = ioremap(res->start, resource_size(res));
 	if (io_base == NULL) {
 		dev_err(&pdev->dev, "ioremap failed\n");
 		err = -EIO;
-		goto out_free;
+		goto out_release_io;
 	}
 
 	this->priv = io_base;
@@ -224,6 +208,7 @@ static int ams_delta_init(struct platform_device *pdev)
 	this->read_byte = ams_delta_read_byte;
 	this->write_buf = ams_delta_write_buf;
 	this->read_buf = ams_delta_read_buf;
+	this->verify_buf = ams_delta_verify_buf;
 	this->cmd_ctrl = ams_delta_hwcontrol;
 	if (gpio_request(AMS_DELTA_GPIO_PIN_NAND_RB, "nand_rdy") == 0) {
 		this->dev_ready = ams_delta_nand_ready;
@@ -238,9 +223,10 @@ static int ams_delta_init(struct platform_device *pdev)
 	platform_set_drvdata(pdev, io_base);
 
 	/* Set chip enabled, but  */
-	err = gpio_request_array(_mandatory_gpio, ARRAY_SIZE(_mandatory_gpio));
-	if (err)
-		goto out_gpio;
+	ams_delta_latch2_write(NAND_MASK, AMS_DELTA_LATCH2_NAND_NRE |
+					  AMS_DELTA_LATCH2_NAND_NWE |
+					  AMS_DELTA_LATCH2_NAND_NCE |
+					  AMS_DELTA_LATCH2_NAND_NWP);
 
 	/* Scan to find existence of the device */
 	if (nand_scan(ams_delta_mtd, 1)) {
@@ -255,10 +241,10 @@ static int ams_delta_init(struct platform_device *pdev)
 	goto out;
 
  out_mtd:
-	gpio_free_array(_mandatory_gpio, ARRAY_SIZE(_mandatory_gpio));
-out_gpio:
-	gpio_free(AMS_DELTA_GPIO_PIN_NAND_RB);
+	platform_set_drvdata(pdev, NULL);
 	iounmap(io_base);
+out_release_io:
+	release_mem_region(res->start, resource_size(res));
 out_free:
 	kfree(ams_delta_mtd);
  out:
@@ -268,16 +254,16 @@ out_free:
 /*
  * Clean up routine
  */
-static int ams_delta_cleanup(struct platform_device *pdev)
+static int __devexit ams_delta_cleanup(struct platform_device *pdev)
 {
 	void __iomem *io_base = platform_get_drvdata(pdev);
+	struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
 	/* Release resources, unregister device */
 	nand_release(ams_delta_mtd);
 
-	gpio_free_array(_mandatory_gpio, ARRAY_SIZE(_mandatory_gpio));
-	gpio_free(AMS_DELTA_GPIO_PIN_NAND_RB);
 	iounmap(io_base);
+	release_mem_region(res->start, resource_size(res));
 
 	/* Free the MTD device structure */
 	kfree(ams_delta_mtd);
@@ -287,14 +273,24 @@ static int ams_delta_cleanup(struct platform_device *pdev)
 
 static struct platform_driver ams_delta_nand_driver = {
 	.probe		= ams_delta_init,
-	.remove		= ams_delta_cleanup,
+	.remove		= __devexit_p(ams_delta_cleanup),
 	.driver		= {
 		.name	= "ams-delta-nand",
 		.owner	= THIS_MODULE,
 	},
 };
 
-module_platform_driver(ams_delta_nand_driver);
+static int __init ams_delta_nand_init(void)
+{
+	return platform_driver_register(&ams_delta_nand_driver);
+}
+module_init(ams_delta_nand_init);
+
+static void __exit ams_delta_nand_exit(void)
+{
+	platform_driver_unregister(&ams_delta_nand_driver);
+}
+module_exit(ams_delta_nand_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jonathan McDowell <noodles@earth.li>");

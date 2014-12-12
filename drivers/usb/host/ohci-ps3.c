@@ -30,7 +30,7 @@ static int ps3_ohci_hc_reset(struct usb_hcd *hcd)
 	return ohci_init(ohci);
 }
 
-static int ps3_ohci_hc_start(struct usb_hcd *hcd)
+static int __devinit ps3_ohci_hc_start(struct usb_hcd *hcd)
 {
 	int result;
 	struct ohci_hcd *ohci = hcd_to_ohci(hcd);
@@ -45,8 +45,7 @@ static int ps3_ohci_hc_start(struct usb_hcd *hcd)
 	result = ohci_run(ohci);
 
 	if (result < 0) {
-		dev_err(hcd->self.controller, "can't start %s\n",
-			hcd->self.bus_name);
+		err("can't start %s", hcd->self.bus_name);
 		ohci_stop(hcd);
 	}
 
@@ -76,7 +75,7 @@ static const struct hc_driver ps3_ohci_hc_driver = {
 #endif
 };
 
-static int ps3_ohci_probe(struct ps3_system_bus_device *dev)
+static int __devinit ps3_ohci_probe(struct ps3_system_bus_device *dev)
 {
 	int result;
 	struct usb_hcd *hcd;
@@ -165,7 +164,7 @@ static int ps3_ohci_probe(struct ps3_system_bus_device *dev)
 
 	ps3_system_bus_set_drvdata(dev, hcd);
 
-	result = usb_add_hcd(hcd, virq, 0);
+	result = usb_add_hcd(hcd, virq, IRQF_DISABLED);
 
 	if (result) {
 		dev_dbg(&dev->core, "%s:%d: usb_add_hcd failed (%d)\n",
@@ -173,7 +172,6 @@ static int ps3_ohci_probe(struct ps3_system_bus_device *dev)
 		goto fail_add_hcd;
 	}
 
-	device_wakeup_enable(hcd->self.controller);
 	return result;
 
 fail_add_hcd:

@@ -2,7 +2,7 @@
  *  smdk_wm8580.c
  *
  *  Copyright (c) 2009 Samsung Electronics Co. Ltd
- *  Author: Jaswinder Singh <jassisinghbrar@gmail.com>
+ *  Author: Jaswinder Singh <jassi.brar@samsung.com>
  *
  *  This program is free software; you can redistribute  it and/or modify it
  *  under  the terms of  the GNU General  Public License as published by the
@@ -10,7 +10,6 @@
  *  option) any later version.
  */
 
-#include <linux/module.h>
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
 
@@ -37,11 +36,13 @@ static int smdk_hw_params(struct snd_pcm_substream *substream,
 	unsigned int pll_out;
 	int bfs, rfs, ret;
 
-	switch (params_width(params)) {
-	case 8:
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_U8:
+	case SNDRV_PCM_FORMAT_S8:
 		bfs = 16;
 		break;
-	case 16:
+	case SNDRV_PCM_FORMAT_U16_LE:
+	case SNDRV_PCM_FORMAT_S16_LE:
 		bfs = 32;
 		break;
 	default:
@@ -118,24 +119,30 @@ static struct snd_soc_ops smdk_ops = {
 };
 
 /* SMDK Playback widgets */
-static const struct snd_soc_dapm_widget smdk_wm8580_dapm_widgets[] = {
+static const struct snd_soc_dapm_widget wm8580_dapm_widgets_pbk[] = {
 	SND_SOC_DAPM_HP("Front", NULL),
 	SND_SOC_DAPM_HP("Center+Sub", NULL),
 	SND_SOC_DAPM_HP("Rear", NULL),
+};
 
+/* SMDK Capture widgets */
+static const struct snd_soc_dapm_widget wm8580_dapm_widgets_cpt[] = {
 	SND_SOC_DAPM_MIC("MicIn", NULL),
 	SND_SOC_DAPM_LINE("LineIn", NULL),
 };
 
 /* SMDK-PAIFTX connections */
-static const struct snd_soc_dapm_route smdk_wm8580_audio_map[] = {
+static const struct snd_soc_dapm_route audio_map_tx[] = {
 	/* MicIn feeds AINL */
 	{"AINL", NULL, "MicIn"},
 
 	/* LineIn feeds AINL/R */
 	{"AINL", NULL, "LineIn"},
 	{"AINR", NULL, "LineIn"},
+};
 
+/* SMDK-PAIFRX connections */
+static const struct snd_soc_dapm_route audio_map_rx[] = {
 	/* Front Left/Right are fed VOUT1L/R */
 	{"Front", NULL, "VOUT1L"},
 	{"Front", NULL, "VOUT1R"},
@@ -154,10 +161,38 @@ static int smdk_wm8580_init_paiftx(struct snd_soc_pcm_runtime *rtd)
 	struct snd_soc_codec *codec = rtd->codec;
 	struct snd_soc_dapm_context *dapm = &codec->dapm;
 
+	/* Add smdk specific Capture widgets */
+	snd_soc_dapm_new_controls(dapm, wm8580_dapm_widgets_cpt,
+				  ARRAY_SIZE(wm8580_dapm_widgets_cpt));
+
+	/* Set up PAIFTX audio path */
+	snd_soc_dapm_add_routes(dapm, audio_map_tx, ARRAY_SIZE(audio_map_tx));
+
 	/* Enabling the microphone requires the fitting of a 0R
 	 * resistor to connect the line from the microphone jack.
 	 */
 	snd_soc_dapm_disable_pin(dapm, "MicIn");
+
+	/* signal a DAPM event */
+	snd_soc_dapm_sync(dapm);
+
+	return 0;
+}
+
+static int smdk_wm8580_init_paifrx(struct snd_soc_pcm_runtime *rtd)
+{
+	struct snd_soc_codec *codec = rtd->codec;
+	struct snd_soc_dapm_context *dapm = &codec->dapm;
+
+	/* Add smdk specific Playback widgets */
+	snd_soc_dapm_new_controls(dapm, wm8580_dapm_widgets_pbk,
+				  ARRAY_SIZE(wm8580_dapm_widgets_pbk));
+
+	/* Set up PAIFRX audio path */
+	snd_soc_dapm_add_routes(dapm, audio_map_rx, ARRAY_SIZE(audio_map_rx));
+
+	/* signal a DAPM event */
+	snd_soc_dapm_sync(dapm);
 
 	return 0;
 }
@@ -174,8 +209,9 @@ static struct snd_soc_dai_link smdk_dai[] = {
 		.stream_name = "Playback",
 		.cpu_dai_name = "samsung-i2s.0",
 		.codec_dai_name = "wm8580-hifi-playback",
-		.platform_name = "samsung-i2s.0",
-		.codec_name = "wm8580.0-001b",
+		.platform_name = "samsung-audio",
+		.codec_name = "wm8580-codec.0-001b",
+		.init = smdk_wm8580_init_paifrx,
 		.ops = &smdk_ops,
 	},
 	[PRI_CAPTURE] = { /* Primary Capture i/f */
@@ -183,32 +219,27 @@ static struct snd_soc_dai_link smdk_dai[] = {
 		.stream_name = "Capture",
 		.cpu_dai_name = "samsung-i2s.0",
 		.codec_dai_name = "wm8580-hifi-capture",
-		.platform_name = "samsung-i2s.0",
-		.codec_name = "wm8580.0-001b",
+		.platform_name = "samsung-audio",
+		.codec_name = "wm8580-codec.0-001b",
 		.init = smdk_wm8580_init_paiftx,
 		.ops = &smdk_ops,
 	},
 	[SEC_PLAYBACK] = { /* Sec_Fifo Playback i/f */
 		.name = "Sec_FIFO TX",
 		.stream_name = "Playback",
-		.cpu_dai_name = "samsung-i2s-sec",
+		.cpu_dai_name = "samsung-i2s.x",
 		.codec_dai_name = "wm8580-hifi-playback",
-		.platform_name = "samsung-i2s-sec",
-		.codec_name = "wm8580.0-001b",
+		.platform_name = "samsung-audio",
+		.codec_name = "wm8580-codec.0-001b",
+		.init = smdk_wm8580_init_paifrx,
 		.ops = &smdk_ops,
 	},
 };
 
 static struct snd_soc_card smdk = {
 	.name = "SMDK-I2S",
-	.owner = THIS_MODULE,
 	.dai_link = smdk_dai,
 	.num_links = 2,
-
-	.dapm_widgets = smdk_wm8580_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(smdk_wm8580_dapm_widgets),
-	.dapm_routes = smdk_wm8580_audio_map,
-	.num_dapm_routes = ARRAY_SIZE(smdk_wm8580_audio_map),
 };
 
 static struct platform_device *smdk_snd_device;
@@ -221,6 +252,9 @@ static int __init smdk_audio_init(void)
 	if (machine_is_smdkc100()
 			|| machine_is_smdkv210() || machine_is_smdkc110()) {
 		smdk.num_links = 3;
+		/* Secondary is at offset SAMSUNG_I2S_SECOFF from Primary */
+		str = (char *)smdk_dai[SEC_PLAYBACK].cpu_dai_name;
+		str[strlen(str) - 1] = '0' + SAMSUNG_I2S_SECOFF;
 	} else if (machine_is_smdk6410()) {
 		str = (char *)smdk_dai[PRI_PLAYBACK].cpu_dai_name;
 		str[strlen(str) - 1] = '2';
@@ -248,6 +282,6 @@ static void __exit smdk_audio_exit(void)
 }
 module_exit(smdk_audio_exit);
 
-MODULE_AUTHOR("Jaswinder Singh, jassisinghbrar@gmail.com");
+MODULE_AUTHOR("Jaswinder Singh, jassi.brar@samsung.com");
 MODULE_DESCRIPTION("ALSA SoC SMDK WM8580");
 MODULE_LICENSE("GPL");

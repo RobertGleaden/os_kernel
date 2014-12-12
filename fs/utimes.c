@@ -53,7 +53,6 @@ static int utimes_common(struct path *path, struct timespec *times)
 	int error;
 	struct iattr newattrs;
 	struct inode *inode = path->dentry->d_inode;
-	struct inode *delegated_inode = NULL;
 
 	error = mnt_want_write(path->mnt);
 	if (error)
@@ -102,15 +101,9 @@ static int utimes_common(struct path *path, struct timespec *times)
 				goto mnt_drop_write_and_out;
 		}
 	}
-retry_deleg:
 	mutex_lock(&inode->i_mutex);
-	error = notify_change(path->dentry, &newattrs, &delegated_inode);
+	error = notify_change(path->dentry, &newattrs);
 	mutex_unlock(&inode->i_mutex);
-	if (delegated_inode) {
-		error = break_deleg_wait(&delegated_inode);
-		if (!error)
-			goto retry_deleg;
-	}
 
 mnt_drop_write_and_out:
 	mnt_drop_write(path->mnt);
@@ -147,35 +140,31 @@ long do_utimes(int dfd, const char __user *filename, struct timespec *times,
 		goto out;
 
 	if (filename == NULL && dfd != AT_FDCWD) {
-		struct fd f;
+		struct file *file;
 
 		if (flags & AT_SYMLINK_NOFOLLOW)
 			goto out;
 
-		f = fdget(dfd);
+		file = fget(dfd);
 		error = -EBADF;
-		if (!f.file)
+		if (!file)
 			goto out;
 
-		error = utimes_common(&f.file->f_path, times);
-		fdput(f);
+		error = utimes_common(&file->f_path, times);
+		fput(file);
 	} else {
 		struct path path;
 		int lookup_flags = 0;
 
 		if (!(flags & AT_SYMLINK_NOFOLLOW))
 			lookup_flags |= LOOKUP_FOLLOW;
-retry:
+
 		error = user_path_at(dfd, filename, lookup_flags, &path);
 		if (error)
 			goto out;
 
 		error = utimes_common(&path, times);
 		path_put(&path);
-		if (retry_estale(error, lookup_flags)) {
-			lookup_flags |= LOOKUP_REVAL;
-			goto retry;
-		}
 	}
 
 out:

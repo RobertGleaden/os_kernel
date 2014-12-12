@@ -2,7 +2,6 @@
  * IDE ioctls handling.
  */
 
-#include <linux/export.h>
 #include <linux/hdreg.h>
 #include <linux/ide.h>
 #include <linux/slab.h>
@@ -141,8 +140,8 @@ static int ide_cmd_ioctl(ide_drive_t *drive, unsigned long arg)
 	if (args[0] == ATA_CMD_SMART) {
 		tf->nsect = args[3];
 		tf->lbal  = args[1];
-		tf->lbam  = ATA_SMART_LBAM_PASS;
-		tf->lbah  = ATA_SMART_LBAH_PASS;
+		tf->lbam  = 0x4f;
+		tf->lbah  = 0xc2;
 		cmd.valid.out.tf = IDE_VALID_OUT_TF;
 		cmd.valid.in.tf  = IDE_VALID_NSECT;
 	} else {

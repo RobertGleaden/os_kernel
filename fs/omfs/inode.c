@@ -28,7 +28,7 @@ struct buffer_head *omfs_bread(struct super_block *sb, sector_t block)
 	return sb_bread(sb, clus_to_blk(sbi, block));
 }
 
-struct inode *omfs_new_inode(struct inode *dir, umode_t mode)
+struct inode *omfs_new_inode(struct inode *dir, int mode)
 {
 	struct inode *inode;
 	u64 new_block;
@@ -183,8 +183,8 @@ int omfs_sync_inode(struct inode *inode)
  */
 static void omfs_evict_inode(struct inode *inode)
 {
-	truncate_inode_pages_final(&inode->i_data);
-	clear_inode(inode);
+	truncate_inode_pages(&inode->i_data, 0);
+	end_writeback(inode);
 
 	if (inode->i_nlink)
 		return;
@@ -391,16 +391,12 @@ static int parse_options(char *options, struct omfs_sb_info *sbi)
 		case Opt_uid:
 			if (match_int(&args[0], &option))
 				return 0;
-			sbi->s_uid = make_kuid(current_user_ns(), option);
-			if (!uid_valid(sbi->s_uid))
-				return 0;
+			sbi->s_uid = option;
 			break;
 		case Opt_gid:
 			if (match_int(&args[0], &option))
 				return 0;
-			sbi->s_gid = make_kgid(current_user_ns(), option);
-			if (!gid_valid(sbi->s_gid))
-				return 0;
+			sbi->s_gid = option;
 			break;
 		case Opt_umask:
 			if (match_octal(&args[0], &option))
@@ -543,9 +539,11 @@ static int omfs_fill_super(struct super_block *sb, void *data, int silent)
 		goto out_brelse_bh2;
 	}
 
-	sb->s_root = d_make_root(root);
-	if (!sb->s_root)
+	sb->s_root = d_alloc_root(root);
+	if (!sb->s_root) {
+		iput(root);
 		goto out_brelse_bh2;
+	}
 	printk(KERN_DEBUG "omfs: Mounted volume %s\n", omfs_rb->r_name);
 
 	ret = 0;
@@ -572,7 +570,6 @@ static struct file_system_type omfs_fs_type = {
 	.kill_sb = kill_block_super,
 	.fs_flags = FS_REQUIRES_DEV,
 };
-MODULE_ALIAS_FS("omfs");
 
 static int __init init_omfs_fs(void)
 {

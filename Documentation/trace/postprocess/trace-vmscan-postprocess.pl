@@ -47,6 +47,7 @@ use constant HIGH_KSWAPD_REWAKEUP		=> 21;
 use constant HIGH_NR_SCANNED			=> 22;
 use constant HIGH_NR_TAKEN			=> 23;
 use constant HIGH_NR_RECLAIMED			=> 24;
+use constant HIGH_NR_CONTIG_DIRTY		=> 25;
 
 my %perprocesspid;
 my %perprocess;
@@ -104,7 +105,7 @@ my $regex_direct_end_default = 'nr_reclaimed=([0-9]*)';
 my $regex_kswapd_wake_default = 'nid=([0-9]*) order=([0-9]*)';
 my $regex_kswapd_sleep_default = 'nid=([0-9]*)';
 my $regex_wakeup_kswapd_default = 'nid=([0-9]*) zid=([0-9]*) order=([0-9]*)';
-my $regex_lru_isolate_default = 'isolate_mode=([0-9]*) order=([0-9]*) nr_requested=([0-9]*) nr_scanned=([0-9]*) nr_taken=([0-9]*) file=([0-9]*)';
+my $regex_lru_isolate_default = 'isolate_mode=([0-9]*) order=([0-9]*) nr_requested=([0-9]*) nr_scanned=([0-9]*) nr_taken=([0-9]*) contig_taken=([0-9]*) contig_dirty=([0-9]*) contig_failed=([0-9]*)';
 my $regex_lru_shrink_inactive_default = 'nid=([0-9]*) zid=([0-9]*) nr_scanned=([0-9]*) nr_reclaimed=([0-9]*) priority=([0-9]*) flags=([A-Z_|]*)';
 my $regex_lru_shrink_active_default = 'lru=([A-Z_]*) nr_scanned=([0-9]*) nr_rotated=([0-9]*) priority=([0-9]*)';
 my $regex_writepage_default = 'page=([0-9a-f]*) pfn=([0-9]*) flags=([A-Z_|]*)';
@@ -122,7 +123,7 @@ my $regex_writepage;
 
 # Static regex used. Specified like this for readability and for use with /o
 #                      (process_pid)     (cpus      )   ( time  )   (tpoint    ) (details)
-my $regex_traceevent = '\s*([a-zA-Z0-9-]*)\s*(\[[0-9]*\])(\s*[dX.][Nnp.][Hhs.][0-9a-fA-F.]*|)\s*([0-9.]*):\s*([a-zA-Z_]*):\s*(.*)';
+my $regex_traceevent = '\s*([a-zA-Z0-9-]*)\s*(\[[0-9]*\])\s*([0-9.]*):\s*([a-zA-Z_]*):\s*(.*)';
 my $regex_statname = '[-0-9]*\s\((.*)\).*';
 my $regex_statppid = '[-0-9]*\s\(.*\)\s[A-Za-z]\s([0-9]*).*';
 
@@ -199,7 +200,7 @@ $regex_lru_isolate = generate_traceevent_regex(
 			$regex_lru_isolate_default,
 			"isolate_mode", "order",
 			"nr_requested", "nr_scanned", "nr_taken",
-			"file");
+			"contig_taken", "contig_dirty", "contig_failed");
 $regex_lru_shrink_inactive = generate_traceevent_regex(
 			"vmscan/mm_vmscan_lru_shrink_inactive",
 			$regex_lru_shrink_inactive_default,
@@ -269,8 +270,8 @@ EVENT_PROCESS:
 	while ($traceevent = <STDIN>) {
 		if ($traceevent =~ /$regex_traceevent/o) {
 			$process_pid = $1;
-			$timestamp = $4;
-			$tracepoint = $5;
+			$timestamp = $3;
+			$tracepoint = $4;
 
 			$process_pid =~ /(.*)-([0-9]*)$/;
 			my $process = $1;
@@ -298,7 +299,7 @@ EVENT_PROCESS:
 			$perprocesspid{$process_pid}->{MM_VMSCAN_DIRECT_RECLAIM_BEGIN}++;
 			$perprocesspid{$process_pid}->{STATE_DIRECT_BEGIN} = $timestamp;
 
-			$details = $6;
+			$details = $5;
 			if ($details !~ /$regex_direct_begin/o) {
 				print "WARNING: Failed to parse mm_vmscan_direct_reclaim_begin as expected\n";
 				print "         $details\n";
@@ -321,7 +322,7 @@ EVENT_PROCESS:
 				$perprocesspid{$process_pid}->{HIGH_DIRECT_RECLAIM_LATENCY}[$index] = "$order-$latency";
 			}
 		} elsif ($tracepoint eq "mm_vmscan_kswapd_wake") {
-			$details = $6;
+			$details = $5;
 			if ($details !~ /$regex_kswapd_wake/o) {
 				print "WARNING: Failed to parse mm_vmscan_kswapd_wake as expected\n";
 				print "         $details\n";
@@ -355,7 +356,7 @@ EVENT_PROCESS:
 		} elsif ($tracepoint eq "mm_vmscan_wakeup_kswapd") {
 			$perprocesspid{$process_pid}->{MM_VMSCAN_WAKEUP_KSWAPD}++;
 
-			$details = $6;
+			$details = $5;
 			if ($details !~ /$regex_wakeup_kswapd/o) {
 				print "WARNING: Failed to parse mm_vmscan_wakeup_kswapd as expected\n";
 				print "         $details\n";
@@ -365,7 +366,7 @@ EVENT_PROCESS:
 			my $order = $3;
 			$perprocesspid{$process_pid}->{MM_VMSCAN_WAKEUP_KSWAPD_PERORDER}[$order]++;
 		} elsif ($tracepoint eq "mm_vmscan_lru_isolate") {
-			$details = $6;
+			$details = $5;
 			if ($details !~ /$regex_lru_isolate/o) {
 				print "WARNING: Failed to parse mm_vmscan_lru_isolate as expected\n";
 				print "         $details\n";
@@ -374,17 +375,19 @@ EVENT_PROCESS:
 			}
 			my $isolate_mode = $1;
 			my $nr_scanned = $4;
+			my $nr_contig_dirty = $7;
 
 			# To closer match vmstat scanning statistics, only count isolate_both
 			# and isolate_inactive as scanning. isolate_active is rotation
-			# isolate_inactive == 1
-			# isolate_active   == 2
-			# isolate_both     == 3
-			if ($isolate_mode != 2) {
+			# isolate_inactive == 0
+			# isolate_active   == 1
+			# isolate_both     == 2
+			if ($isolate_mode != 1) {
 				$perprocesspid{$process_pid}->{HIGH_NR_SCANNED} += $nr_scanned;
 			}
+			$perprocesspid{$process_pid}->{HIGH_NR_CONTIG_DIRTY} += $nr_contig_dirty;
 		} elsif ($tracepoint eq "mm_vmscan_lru_shrink_inactive") {
-			$details = $6;
+			$details = $5;
 			if ($details !~ /$regex_lru_shrink_inactive/o) {
 				print "WARNING: Failed to parse mm_vmscan_lru_shrink_inactive as expected\n";
 				print "         $details\n";
@@ -394,7 +397,7 @@ EVENT_PROCESS:
 			my $nr_reclaimed = $4;
 			$perprocesspid{$process_pid}->{HIGH_NR_RECLAIMED} += $nr_reclaimed;
 		} elsif ($tracepoint eq "mm_vmscan_writepage") {
-			$details = $6;
+			$details = $5;
 			if ($details !~ /$regex_writepage/o) {
 				print "WARNING: Failed to parse mm_vmscan_writepage as expected\n";
 				print "         $details\n";
@@ -534,6 +537,13 @@ sub dump_stats {
 				if ($count != 0) {
 					print "wakeup-$order=$count ";
 				}
+			}
+		}
+		if ($stats{$process_pid}->{HIGH_NR_CONTIG_DIRTY}) {
+			print "      ";
+			my $count = $stats{$process_pid}->{HIGH_NR_CONTIG_DIRTY};
+			if ($count != 0) {
+				print "contig-dirty=$count ";
 			}
 		}
 

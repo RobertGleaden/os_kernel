@@ -14,12 +14,12 @@
 #ifndef _LINUX_NODE_H_
 #define _LINUX_NODE_H_
 
-#include <linux/device.h>
+#include <linux/sysdev.h>
 #include <linux/cpumask.h>
 #include <linux/workqueue.h>
 
 struct node {
-	struct device	dev;
+	struct sys_device	sysdev;
 
 #if defined(CONFIG_MEMORY_HOTPLUG_SPARSE) && defined(CONFIG_HUGETLBFS)
 	struct work_struct	node_work;
@@ -27,9 +27,10 @@ struct node {
 };
 
 struct memory_block;
-extern struct node *node_devices[];
+extern struct node node_devices[];
 typedef  void (*node_registration_func_t)(struct node *);
 
+extern int register_node(struct node *, int, struct node *);
 extern void unregister_node(struct node *node);
 #ifdef CONFIG_NUMA
 extern int register_one_node(int nid);
@@ -79,6 +80,6 @@ static inline void register_hugetlbfs_with_node(node_registration_func_t reg,
 }
 #endif
 
-#define to_node(device) container_of(device, struct node, dev)
+#define to_node(sys_device) container_of(sys_device, struct node, sysdev)
 
 #endif /* _LINUX_NODE_H_ */

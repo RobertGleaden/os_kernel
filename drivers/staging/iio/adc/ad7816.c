@@ -14,11 +14,9 @@
 #include <linux/sysfs.h>
 #include <linux/list.h>
 #include <linux/spi/spi.h>
-#include <linux/module.h>
 
-#include <linux/iio/iio.h>
-#include <linux/iio/sysfs.h>
-#include <linux/iio/events.h>
+#include "../iio.h"
+#include "../sysfs.h"
 
 /*
  * AD7816 config masks
@@ -40,7 +38,7 @@
 
 
 /*
- * struct ad7816_chip_info - chip specific information
+ * struct ad7816_chip_info - chip specifc information
  */
 
 struct ad7816_chip_info {
@@ -113,8 +111,8 @@ static ssize_t ad7816_show_mode(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+	struct iio_dev *dev_info = dev_get_drvdata(dev);
+	struct ad7816_chip_info *chip = iio_priv(dev_info);
 
 	if (chip->mode)
 		return sprintf(buf, "power-save\n");
@@ -127,8 +125,8 @@ static ssize_t ad7816_store_mode(struct device *dev,
 		const char *buf,
 		size_t len)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+	struct iio_dev *dev_info = dev_get_drvdata(dev);
+	struct ad7816_chip_info *chip = iio_priv(dev_info);
 
 	if (strcmp(buf, "full")) {
 		gpio_set_value(chip->rdwr_pin, 1);
@@ -159,8 +157,8 @@ static ssize_t ad7816_show_channel(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+	struct iio_dev *dev_info = dev_get_drvdata(dev);
+	struct ad7816_chip_info *chip = iio_priv(dev_info);
 
 	return sprintf(buf, "%d\n", chip->channel_id);
 }
@@ -170,24 +168,24 @@ static ssize_t ad7816_store_channel(struct device *dev,
 		const char *buf,
 		size_t len)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+	struct iio_dev *dev_info = dev_get_drvdata(dev);
+	struct ad7816_chip_info *chip = iio_priv(dev_info);
 	unsigned long data;
 	int ret;
 
-	ret = kstrtoul(buf, 10, &data);
+	ret = strict_strtoul(buf, 10, &data);
 	if (ret)
-		return ret;
+		return -EINVAL;
 
 	if (data > AD7816_CS_MAX && data != AD7816_CS_MASK) {
 		dev_err(&chip->spi_dev->dev, "Invalid channel id %lu for %s.\n",
-			data, indio_dev->name);
+			data, dev_info->name);
 		return -EINVAL;
-	} else if (strcmp(indio_dev->name, "ad7818") == 0 && data > 1) {
+	} else if (strcmp(dev_info->name, "ad7818") == 0 && data > 1) {
 		dev_err(&chip->spi_dev->dev,
 			"Invalid channel id %lu for ad7818.\n", data);
 		return -EINVAL;
-	} else if (strcmp(indio_dev->name, "ad7816") == 0 && data > 0) {
+	} else if (strcmp(dev_info->name, "ad7816") == 0 && data > 0) {
 		dev_err(&chip->spi_dev->dev,
 			"Invalid channel id %lu for ad7816.\n", data);
 		return -EINVAL;
@@ -208,8 +206,8 @@ static ssize_t ad7816_show_value(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+	struct iio_dev *dev_info = dev_get_drvdata(dev);
+	struct ad7816_chip_info *chip = iio_priv(dev_info);
 	u16 data;
 	s8 value;
 	int ret;
@@ -248,14 +246,16 @@ static const struct attribute_group ad7816_attribute_group = {
  * temperature bound events
  */
 
-#define IIO_EVENT_CODE_AD7816_OTI IIO_UNMOD_EVENT_CODE(IIO_TEMP,	\
+#define IIO_EVENT_CODE_AD7816_OTI IIO_UNMOD_EVENT_CODE(IIO_EV_CLASS_TEMP, \
 						       0,		\
 						       IIO_EV_TYPE_THRESH, \
 						       IIO_EV_DIR_FALLING)
 
 static irqreturn_t ad7816_event_handler(int irq, void *private)
 {
-	iio_push_event(private, IIO_EVENT_CODE_AD7816_OTI, iio_get_time_ns());
+	iio_push_event(private, 0,
+		       IIO_EVENT_CODE_AD7816_OTI,
+		       iio_get_time_ns());
 	return IRQ_HANDLED;
 }
 
@@ -263,8 +263,8 @@ static ssize_t ad7816_show_oti(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+	struct iio_dev *dev_info = dev_get_drvdata(dev);
+	struct ad7816_chip_info *chip = iio_priv(dev_info);
 	int value;
 
 	if (chip->channel_id > AD7816_CS_MAX) {
@@ -284,15 +284,13 @@ static inline ssize_t ad7816_set_oti(struct device *dev,
 		const char *buf,
 		size_t len)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
-	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+	struct iio_dev *dev_info = dev_get_drvdata(dev);
+	struct ad7816_chip_info *chip = iio_priv(dev_info);
 	long value;
 	u8 data;
 	int ret;
 
-	ret = kstrtol(buf, 10, &value);
-	if (ret)
-		return ret;
+	ret = strict_strtol(buf, 10, &value);
 
 	if (chip->channel_id > AD7816_CS_MAX) {
 		dev_err(dev, "Invalid oti channel id %d.\n", chip->channel_id);
@@ -330,11 +328,11 @@ static struct attribute *ad7816_event_attributes[] = {
 
 static struct attribute_group ad7816_event_attribute_group = {
 	.attrs = ad7816_event_attributes,
-	.name = "events",
 };
 
 static const struct iio_info ad7816_info = {
 	.attrs = &ad7816_attribute_group,
+	.num_interrupt_lines = 1,
 	.event_attrs = &ad7816_event_attribute_group,
 	.driver_module = THIS_MODULE,
 };
@@ -343,7 +341,7 @@ static const struct iio_info ad7816_info = {
  * device probe and remove
  */
 
-static int ad7816_probe(struct spi_device *spi_dev)
+static int __devinit ad7816_probe(struct spi_device *spi_dev)
 {
 	struct ad7816_chip_info *chip;
 	struct iio_dev *indio_dev;
@@ -356,9 +354,11 @@ static int ad7816_probe(struct spi_device *spi_dev)
 		return -EINVAL;
 	}
 
-	indio_dev = devm_iio_device_alloc(&spi_dev->dev, sizeof(*chip));
-	if (!indio_dev)
-		return -ENOMEM;
+	indio_dev = iio_allocate_device(sizeof(*chip));
+	if (indio_dev == NULL) {
+		ret = -ENOMEM;
+		goto error_ret;
+	}
 	chip = iio_priv(indio_dev);
 	/* this is only used for device removal purposes */
 	dev_set_drvdata(&spi_dev->dev, indio_dev);
@@ -370,28 +370,25 @@ static int ad7816_probe(struct spi_device *spi_dev)
 	chip->convert_pin = pins[1];
 	chip->busy_pin = pins[2];
 
-	ret = devm_gpio_request(&spi_dev->dev, chip->rdwr_pin,
-					spi_get_device_id(spi_dev)->name);
+	ret = gpio_request(chip->rdwr_pin, spi_get_device_id(spi_dev)->name);
 	if (ret) {
 		dev_err(&spi_dev->dev, "Fail to request rdwr gpio PIN %d.\n",
 			chip->rdwr_pin);
-		return ret;
+		goto error_free_device;
 	}
 	gpio_direction_input(chip->rdwr_pin);
-	ret = devm_gpio_request(&spi_dev->dev, chip->convert_pin,
-					spi_get_device_id(spi_dev)->name);
+	ret = gpio_request(chip->convert_pin, spi_get_device_id(spi_dev)->name);
 	if (ret) {
 		dev_err(&spi_dev->dev, "Fail to request convert gpio PIN %d.\n",
 			chip->convert_pin);
-		return ret;
+		goto error_free_gpio_rdwr;
 	}
 	gpio_direction_input(chip->convert_pin);
-	ret = devm_gpio_request(&spi_dev->dev, chip->busy_pin,
-					spi_get_device_id(spi_dev)->name);
+	ret = gpio_request(chip->busy_pin, spi_get_device_id(spi_dev)->name);
 	if (ret) {
 		dev_err(&spi_dev->dev, "Fail to request busy gpio PIN %d.\n",
 			chip->busy_pin);
-		return ret;
+		goto error_free_gpio_convert;
 	}
 	gpio_direction_input(chip->busy_pin);
 
@@ -400,24 +397,54 @@ static int ad7816_probe(struct spi_device *spi_dev)
 	indio_dev->info = &ad7816_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 
+	ret = iio_device_register(indio_dev);
+	if (ret)
+		goto error_free_gpio;
+
 	if (spi_dev->irq) {
 		/* Only low trigger is supported in ad7816/7/8 */
-		ret = devm_request_threaded_irq(&spi_dev->dev, spi_dev->irq,
-						NULL,
-						&ad7816_event_handler,
-						IRQF_TRIGGER_LOW | IRQF_ONESHOT,
-						indio_dev->name,
-						indio_dev);
+		ret = request_threaded_irq(spi_dev->irq,
+					   NULL,
+					   &ad7816_event_handler,
+					   IRQF_TRIGGER_LOW,
+					   indio_dev->name,
+					   indio_dev);
 		if (ret)
-			return ret;
+			goto error_unreg_dev;
 	}
-
-	ret = devm_iio_device_register(&spi_dev->dev, indio_dev);
-	if (ret)
-		return ret;
 
 	dev_info(&spi_dev->dev, "%s temperature sensor and ADC registered.\n",
 			 indio_dev->name);
+
+	return 0;
+
+error_unreg_dev:
+	iio_device_unregister(indio_dev);
+error_free_gpio:
+	gpio_free(chip->busy_pin);
+error_free_gpio_convert:
+	gpio_free(chip->convert_pin);
+error_free_gpio_rdwr:
+	gpio_free(chip->rdwr_pin);
+error_free_device:
+	iio_free_device(indio_dev);
+error_ret:
+	return ret;
+}
+
+static int __devexit ad7816_remove(struct spi_device *spi_dev)
+{
+	struct iio_dev *indio_dev = dev_get_drvdata(&spi_dev->dev);
+	struct ad7816_chip_info *chip = iio_priv(indio_dev);
+
+	dev_set_drvdata(&spi_dev->dev, NULL);
+	if (spi_dev->irq)
+		free_irq(spi_dev->irq, indio_dev);
+	gpio_free(chip->busy_pin);
+	gpio_free(chip->convert_pin);
+	gpio_free(chip->rdwr_pin);
+	iio_device_unregister(indio_dev);
+	iio_free_device(indio_dev);
 
 	return 0;
 }
@@ -434,14 +461,28 @@ MODULE_DEVICE_TABLE(spi, ad7816_id);
 static struct spi_driver ad7816_driver = {
 	.driver = {
 		.name = "ad7816",
+		.bus = &spi_bus_type,
 		.owner = THIS_MODULE,
 	},
 	.probe = ad7816_probe,
+	.remove = __devexit_p(ad7816_remove),
 	.id_table = ad7816_id,
 };
-module_spi_driver(ad7816_driver);
+
+static __init int ad7816_init(void)
+{
+	return spi_register_driver(&ad7816_driver);
+}
+
+static __exit void ad7816_exit(void)
+{
+	spi_unregister_driver(&ad7816_driver);
+}
 
 MODULE_AUTHOR("Sonic Zhang <sonic.zhang@analog.com>");
 MODULE_DESCRIPTION("Analog Devices AD7816/7/8 digital"
 			" temperature sensor driver");
 MODULE_LICENSE("GPL v2");
+
+module_init(ad7816_init);
+module_exit(ad7816_exit);

@@ -29,7 +29,6 @@
 #include <linux/firmware.h>
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
-#include <linux/module.h>
 #include <sound/core.h>
 #include <sound/snd_wavefront.h>
 #include <sound/initval.h>
@@ -538,7 +537,7 @@ munge_int32 (unsigned int src,
 	                            /* Note: we leave the upper bits in place */ 
 
 		dst++;
-	}
+ 	};
 	return dst;
 };
 
@@ -1196,7 +1195,7 @@ wavefront_send_multisample (snd_wavefront_t *dev, wavefront_patch_info *header)
 	int num_samples;
 	unsigned char *msample_hdr;
 
-	msample_hdr = kmalloc(WF_MSAMPLE_BYTES, GFP_KERNEL);
+	msample_hdr = kmalloc(sizeof(WF_MSAMPLE_BYTES), GFP_KERNEL);
 	if (! msample_hdr)
 		return -ENOMEM;
 
@@ -1739,7 +1738,7 @@ snd_wavefront_internal_interrupt (snd_wavefront_card_t *card)
 7 Unused
 */
 
-static int
+static int __devinit
 snd_wavefront_interrupt_bits (int irq)
 
 {
@@ -1767,7 +1766,7 @@ snd_wavefront_interrupt_bits (int irq)
 	return bits;
 }
 
-static void
+static void __devinit
 wavefront_should_cause_interrupt (snd_wavefront_t *dev, 
 				  int val, int port, unsigned long timeout)
 
@@ -1786,7 +1785,7 @@ wavefront_should_cause_interrupt (snd_wavefront_t *dev,
 	}
 }
 
-static int
+static int __devinit
 wavefront_reset_to_cleanliness (snd_wavefront_t *dev)
 
 {
@@ -1937,7 +1936,7 @@ wavefront_reset_to_cleanliness (snd_wavefront_t *dev)
 	return (1);
 }
 
-static int
+static int __devinit
 wavefront_download_firmware (snd_wavefront_t *dev, char *path)
 
 {
@@ -2010,7 +2009,7 @@ wavefront_download_firmware (snd_wavefront_t *dev, char *path)
 }
 
 
-static int
+static int __devinit
 wavefront_do_reset (snd_wavefront_t *dev)
 
 {
@@ -2099,7 +2098,7 @@ wavefront_do_reset (snd_wavefront_t *dev)
 	return 1;
 }
 
-int
+int __devinit
 snd_wavefront_start (snd_wavefront_t *dev)
 
 {
@@ -2141,7 +2140,7 @@ snd_wavefront_start (snd_wavefront_t *dev)
 	return (0);
 }
 
-int
+int __devinit
 snd_wavefront_detect (snd_wavefront_card_t *card)
 
 {

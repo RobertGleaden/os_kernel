@@ -40,7 +40,7 @@
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
 /* Enable this card */
-static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for Sun CS4231 soundcard.");
@@ -429,8 +429,7 @@ static void snd_cs4231_advance_dma(struct cs4231_dma_control *dma_cont,
 		unsigned int period_size = snd_pcm_lib_period_bytes(substream);
 		unsigned int offset = period_size * (*periods_sent);
 
-		if (WARN_ON(period_size >= (1 << 24)))
-			return;
+		BUG_ON(period_size >= (1 << 24));
 
 		if (dma_cont->request(dma_cont,
 				      runtime->dma_addr + offset, period_size))
@@ -703,7 +702,7 @@ static int snd_cs4231_timer_stop(struct snd_timer *timer)
 	return 0;
 }
 
-static void snd_cs4231_init(struct snd_cs4231 *chip)
+static void __devinit snd_cs4231_init(struct snd_cs4231 *chip)
 {
 	unsigned long flags;
 
@@ -907,24 +906,18 @@ static int snd_cs4231_playback_prepare(struct snd_pcm_substream *substream)
 	struct snd_cs4231 *chip = snd_pcm_substream_chip(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	unsigned long flags;
-	int ret = 0;
 
 	spin_lock_irqsave(&chip->lock, flags);
 
 	chip->image[CS4231_IFACE_CTRL] &= ~(CS4231_PLAYBACK_ENABLE |
 					    CS4231_PLAYBACK_PIO);
 
-	if (WARN_ON(runtime->period_size > 0xffff + 1)) {
-		ret = -EINVAL;
-		goto out;
-	}
+	BUG_ON(runtime->period_size > 0xffff + 1);
 
 	chip->p_periods_sent = 0;
-
-out:
 	spin_unlock_irqrestore(&chip->lock, flags);
 
-	return ret;
+	return 0;
 }
 
 static int snd_cs4231_capture_hw_params(struct snd_pcm_substream *substream,
@@ -1026,7 +1019,7 @@ static snd_pcm_uframes_t snd_cs4231_capture_pointer(
 	return bytes_to_frames(substream->runtime, ptr);
 }
 
-static int snd_cs4231_probe(struct snd_cs4231 *chip)
+static int __devinit snd_cs4231_probe(struct snd_cs4231 *chip)
 {
 	unsigned long flags;
 	int i;
@@ -1225,7 +1218,7 @@ static struct snd_pcm_ops snd_cs4231_capture_ops = {
 	.pointer	=	snd_cs4231_capture_pointer,
 };
 
-static int snd_cs4231_pcm(struct snd_card *card)
+static int __devinit snd_cs4231_pcm(struct snd_card *card)
 {
 	struct snd_cs4231 *chip = card->private_data;
 	struct snd_pcm *pcm;
@@ -1254,7 +1247,7 @@ static int snd_cs4231_pcm(struct snd_card *card)
 	return 0;
 }
 
-static int snd_cs4231_timer(struct snd_card *card)
+static int __devinit snd_cs4231_timer(struct snd_card *card)
 {
 	struct snd_cs4231 *chip = card->private_data;
 	struct snd_timer *timer;
@@ -1505,7 +1498,7 @@ static int snd_cs4231_put_double(struct snd_kcontrol *kcontrol,
   .private_value = (left_reg) | ((right_reg) << 8) | ((shift_left) << 16) | \
 		   ((shift_right) << 19) | ((mask) << 24) | ((invert) << 22) }
 
-static struct snd_kcontrol_new snd_cs4231_controls[] = {
+static struct snd_kcontrol_new snd_cs4231_controls[] __devinitdata = {
 CS4231_DOUBLE("PCM Playback Switch", 0, CS4231_LEFT_OUTPUT,
 		CS4231_RIGHT_OUTPUT, 7, 7, 1, 1),
 CS4231_DOUBLE("PCM Playback Volume", 0, CS4231_LEFT_OUTPUT,
@@ -1544,7 +1537,7 @@ CS4231_SINGLE("Line Out Switch", 0, CS4231_PIN_CTRL, 6, 1, 1),
 CS4231_SINGLE("Headphone Out Switch", 0, CS4231_PIN_CTRL, 7, 1, 1)
 };
 
-static int snd_cs4231_mixer(struct snd_card *card)
+static int __devinit snd_cs4231_mixer(struct snd_card *card)
 {
 	struct snd_cs4231 *chip = card->private_data;
 	int err, idx;
@@ -1565,8 +1558,7 @@ static int snd_cs4231_mixer(struct snd_card *card)
 
 static int dev;
 
-static int cs4231_attach_begin(struct platform_device *op,
-			       struct snd_card **rcard)
+static int __devinit cs4231_attach_begin(struct snd_card **rcard)
 {
 	struct snd_card *card;
 	struct snd_cs4231 *chip;
@@ -1582,8 +1574,8 @@ static int cs4231_attach_begin(struct platform_device *op,
 		return -ENOENT;
 	}
 
-	err = snd_card_new(&op->dev, index[dev], id[dev], THIS_MODULE,
-			   sizeof(struct snd_cs4231), &card);
+	err = snd_card_create(index[dev], id[dev], THIS_MODULE,
+			      sizeof(struct snd_cs4231), &card);
 	if (err < 0)
 		return err;
 
@@ -1597,7 +1589,7 @@ static int cs4231_attach_begin(struct platform_device *op,
 	return 0;
 }
 
-static int cs4231_attach_finish(struct snd_card *card)
+static int __devinit cs4231_attach_finish(struct snd_card *card)
 {
 	struct snd_cs4231 *chip = card->private_data;
 	int err;
@@ -1801,9 +1793,9 @@ static struct snd_device_ops snd_cs4231_sbus_dev_ops = {
 	.dev_free	=	snd_cs4231_sbus_dev_free,
 };
 
-static int snd_cs4231_sbus_create(struct snd_card *card,
-				  struct platform_device *op,
-				  int dev)
+static int __devinit snd_cs4231_sbus_create(struct snd_card *card,
+					    struct platform_device *op,
+					    int dev)
 {
 	struct snd_cs4231 *chip = card->private_data;
 	int err;
@@ -1864,13 +1856,13 @@ static int snd_cs4231_sbus_create(struct snd_card *card,
 	return 0;
 }
 
-static int cs4231_sbus_probe(struct platform_device *op)
+static int __devinit cs4231_sbus_probe(struct platform_device *op)
 {
 	struct resource *rp = &op->resource[0];
 	struct snd_card *card;
 	int err;
 
-	err = cs4231_attach_begin(op, &card);
+	err = cs4231_attach_begin(&card);
 	if (err)
 		return err;
 
@@ -1967,9 +1959,9 @@ static struct snd_device_ops snd_cs4231_ebus_dev_ops = {
 	.dev_free	=	snd_cs4231_ebus_dev_free,
 };
 
-static int snd_cs4231_ebus_create(struct snd_card *card,
-				  struct platform_device *op,
-				  int dev)
+static int __devinit snd_cs4231_ebus_create(struct snd_card *card,
+					    struct platform_device *op,
+					    int dev)
 {
 	struct snd_cs4231 *chip = card->private_data;
 	int err;
@@ -2056,12 +2048,12 @@ static int snd_cs4231_ebus_create(struct snd_card *card,
 	return 0;
 }
 
-static int cs4231_ebus_probe(struct platform_device *op)
+static int __devinit cs4231_ebus_probe(struct platform_device *op)
 {
 	struct snd_card *card;
 	int err;
 
-	err = cs4231_attach_begin(op, &card);
+	err = cs4231_attach_begin(&card);
 	if (err)
 		return err;
 
@@ -2080,7 +2072,7 @@ static int cs4231_ebus_probe(struct platform_device *op)
 }
 #endif
 
-static int cs4231_probe(struct platform_device *op)
+static int __devinit cs4231_probe(struct platform_device *op)
 {
 #ifdef EBUS_SUPPORT
 	if (!strcmp(op->dev.of_node->parent->name, "ebus"))
@@ -2094,7 +2086,7 @@ static int cs4231_probe(struct platform_device *op)
 	return -ENODEV;
 }
 
-static int cs4231_remove(struct platform_device *op)
+static int __devexit cs4231_remove(struct platform_device *op)
 {
 	struct snd_cs4231 *chip = dev_get_drvdata(&op->dev);
 
@@ -2123,7 +2115,18 @@ static struct platform_driver cs4231_driver = {
 		.of_match_table = cs4231_match,
 	},
 	.probe		= cs4231_probe,
-	.remove		= cs4231_remove,
+	.remove		= __devexit_p(cs4231_remove),
 };
 
-module_platform_driver(cs4231_driver);
+static int __init cs4231_init(void)
+{
+	return platform_driver_register(&cs4231_driver);
+}
+
+static void __exit cs4231_exit(void)
+{
+	platform_driver_unregister(&cs4231_driver);
+}
+
+module_init(cs4231_init);
+module_exit(cs4231_exit);

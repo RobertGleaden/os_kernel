@@ -14,6 +14,7 @@
  */
 
 #include <linux/gpio.h>
+#include <linux/init.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -25,8 +26,7 @@
 #include <linux/slab.h>
 #include <linux/types.h>
 
-#define pr_devinit(fmt, args...) \
-	({ static const char __fmt[] = fmt; printk(__fmt, ## args); })
+#define pr_devinit(fmt, args...) ({ static const __devinitconst char __fmt[] = fmt; printk(__fmt, ## args); })
 
 #define DRIVER_NAME "gpio-addr-flash"
 #define PFX DRIVER_NAME ": "
@@ -142,8 +142,7 @@ static void gf_write(struct map_info *map, map_word d1, unsigned long ofs)
  *
  * See gf_copy_from() caveat.
  */
-static void gf_copy_to(struct map_info *map, unsigned long to,
-		       const void *from, ssize_t len)
+static void gf_copy_to(struct map_info *map, unsigned long to, const void *from, ssize_t len)
 {
 	struct async_state *state = gf_map_info_to_state(map);
 
@@ -156,8 +155,7 @@ static void gf_copy_to(struct map_info *map, unsigned long to,
 	memcpy_toio(map->virt + (to % state->win_size), from, len);
 }
 
-static const char * const part_probe_types[] = {
-	"cmdlinepart", "RedBoot", NULL };
+static const char *part_probe_types[] = { "cmdlinepart", "RedBoot", NULL };
 
 /**
  * gpio_flash_probe() - setup a mapping for a GPIO assisted flash
@@ -187,15 +185,16 @@ static const char * const part_probe_types[] = {
  *	...
  * };
  */
-static int gpio_flash_probe(struct platform_device *pdev)
+static int __devinit gpio_flash_probe(struct platform_device *pdev)
 {
+	int nr_parts;
 	size_t i, arr_size;
 	struct physmap_flash_data *pdata;
 	struct resource *memory;
 	struct resource *gpios;
 	struct async_state *state;
 
-	pdata = dev_get_platdata(&pdev->dev);
+	pdata = pdev->dev.platform_data;
 	memory = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	gpios = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 
@@ -253,14 +252,25 @@ static int gpio_flash_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
+	nr_parts = parse_mtd_partitions(state->mtd, part_probe_types,
+					&pdata->parts, 0);
+	if (nr_parts > 0) {
+		pr_devinit(KERN_NOTICE PFX "Using commandline partition definition\n");
+		kfree(pdata->parts);
+	} else if (pdata->nr_parts) {
+		pr_devinit(KERN_NOTICE PFX "Using board partition definition\n");
+		nr_parts = pdata->nr_parts;
+	} else {
+		pr_devinit(KERN_NOTICE PFX "no partition info available, registering whole flash at once\n");
+		nr_parts = 0;
+	}
 
-	mtd_device_parse_register(state->mtd, part_probe_types, NULL,
-				  pdata->parts, pdata->nr_parts);
+	mtd_device_register(state->mtd, pdata->parts, nr_parts);
 
 	return 0;
 }
 
-static int gpio_flash_remove(struct platform_device *pdev)
+static int __devexit gpio_flash_remove(struct platform_device *pdev)
 {
 	struct async_state *state = platform_get_drvdata(pdev);
 	size_t i = 0;
@@ -275,13 +285,23 @@ static int gpio_flash_remove(struct platform_device *pdev)
 
 static struct platform_driver gpio_flash_driver = {
 	.probe		= gpio_flash_probe,
-	.remove		= gpio_flash_remove,
+	.remove		= __devexit_p(gpio_flash_remove),
 	.driver		= {
 		.name	= DRIVER_NAME,
 	},
 };
 
-module_platform_driver(gpio_flash_driver);
+static int __init gpio_flash_init(void)
+{
+	return platform_driver_register(&gpio_flash_driver);
+}
+module_init(gpio_flash_init);
+
+static void __exit gpio_flash_exit(void)
+{
+	platform_driver_unregister(&gpio_flash_driver);
+}
+module_exit(gpio_flash_exit);
 
 MODULE_AUTHOR("Mike Frysinger <vapier@gentoo.org>");
 MODULE_DESCRIPTION("MTD map driver for flashes addressed physically and with gpios");

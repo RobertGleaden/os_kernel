@@ -26,7 +26,10 @@
  *
  * Functions:
  *      device_receive_frame - Rcv 802.11 frame function
+ *      s_bAPModeRxCtl- AP Rcv frame filer Ctl.
+ *      s_bAPModeRxData- AP Rcv data frame handle
  *      s_bHandleRxEncryption- Rcv decrypted data via on-fly
+ *      s_bHostWepRxEncryption- Rcv encrypted data via host
  *      s_byGetRateIdx- get rate index
  *      s_vGetDASA- get data offset
  *      s_vProcessRxMACHeader- Rcv 802.11 and translate to 802.3
@@ -35,7 +38,6 @@
  *
  */
 
-#include "dpc.h"
 #include "device.h"
 #include "rxtx.h"
 #include "tether.h"
@@ -45,35 +47,100 @@
 #include "baseband.h"
 #include "michael.h"
 #include "tkip.h"
+#include "tcrc.h"
 #include "wctl.h"
+#include "hostap.h"
 #include "rf.h"
 #include "iowpa.h"
+#include "aes_ccmp.h"
 #include "datarate.h"
 #include "usbpipe.h"
 
+/*---------------------  Static Definitions -------------------------*/
+
+/*---------------------  Static Classes  ----------------------------*/
+
+/*---------------------  Static Variables  --------------------------*/
 //static int          msglevel                =MSG_LEVEL_DEBUG;
 static int          msglevel                =MSG_LEVEL_INFO;
 
-static const u8 acbyRxRate[MAX_RATE] =
+const BYTE acbyRxRate[MAX_RATE] =
 {2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108};
 
-static u8 s_byGetRateIdx(u8 byRate);
+
+/*---------------------  Static Functions  --------------------------*/
+
+/*---------------------  Static Definitions -------------------------*/
+
+/*---------------------  Static Functions  --------------------------*/
+
+static BYTE s_byGetRateIdx(BYTE byRate);
 
 static
 void
 s_vGetDASA(
-      u8 * pbyRxBufferAddr,
+      PBYTE pbyRxBufferAddr,
      unsigned int *pcbHeaderSize,
-     struct ethhdr *psEthHeader
+     PSEthernetHeader psEthHeader
     );
 
-static void s_vProcessRxMACHeader(struct vnt_private *pDevice,
-	u8 *pbyRxBufferAddr, u32 cbPacketSize, int bIsWEP, int bExtIV,
-	u32 *pcbHeadSize);
+static
+void
+s_vProcessRxMACHeader (
+      PSDevice pDevice,
+      PBYTE pbyRxBufferAddr,
+      unsigned int cbPacketSize,
+      BOOL bIsWEP,
+      BOOL bExtIV,
+     unsigned int *pcbHeadSize
+    );
 
-static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
-	u32 FrameSize, u8 *pbyRsr, u8 *pbyNewRsr, PSKeyItem *pKeyOut,
-	s32 *pbExtIV, u16 *pwRxTSC15_0, u32 *pdwRxTSC47_16);
+static BOOL s_bAPModeRxCtl(
+     PSDevice pDevice,
+     PBYTE    pbyFrame,
+     signed int      iSANodeIndex
+    );
+
+
+
+static BOOL s_bAPModeRxData (
+     PSDevice pDevice,
+     struct sk_buff *skb,
+     unsigned int     FrameSize,
+     unsigned int     cbHeaderOffset,
+     signed int      iSANodeIndex,
+     signed int      iDANodeIndex
+    );
+
+
+static BOOL s_bHandleRxEncryption(
+     PSDevice     pDevice,
+     PBYTE        pbyFrame,
+     unsigned int         FrameSize,
+     PBYTE        pbyRsr,
+     PBYTE       pbyNewRsr,
+     PSKeyItem   * pKeyOut,
+    int *       pbExtIV,
+     PWORD       pwRxTSC15_0,
+     PDWORD      pdwRxTSC47_16
+    );
+
+static BOOL s_bHostWepRxEncryption(
+
+     PSDevice     pDevice,
+     PBYTE        pbyFrame,
+     unsigned int         FrameSize,
+     PBYTE        pbyRsr,
+     BOOL         bOnFly,
+     PSKeyItem    pKey,
+     PBYTE       pbyNewRsr,
+    int *       pbExtIV,
+     PWORD       pwRxTSC15_0,
+     PDWORD      pdwRxTSC47_16
+
+    );
+
+/*---------------------  Export Variables  --------------------------*/
 
 /*+
  *
@@ -92,20 +159,27 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
  * Return Value: None
  *
 -*/
-
-static void s_vProcessRxMACHeader(struct vnt_private *pDevice,
-	u8 *pbyRxBufferAddr, u32 cbPacketSize, int bIsWEP, int bExtIV,
-	u32 *pcbHeadSize)
+static
+void
+s_vProcessRxMACHeader (
+      PSDevice pDevice,
+      PBYTE pbyRxBufferAddr,
+      unsigned int cbPacketSize,
+      BOOL bIsWEP,
+      BOOL bExtIV,
+     unsigned int *pcbHeadSize
+    )
 {
-	u8 *pbyRxBuffer;
-	u32 cbHeaderSize = 0;
-	u16 *pwType;
-	struct ieee80211_hdr *pMACHeader;
-	int ii;
+    PBYTE           pbyRxBuffer;
+    unsigned int            cbHeaderSize = 0;
+    PWORD           pwType;
+    PS802_11Header  pMACHeader;
+    int             ii;
 
-    pMACHeader = (struct ieee80211_hdr *) (pbyRxBufferAddr + cbHeaderSize);
 
-    s_vGetDASA((u8 *)pMACHeader, &cbHeaderSize, &pDevice->sRxEthHeader);
+    pMACHeader = (PS802_11Header) (pbyRxBufferAddr + cbHeaderSize);
+
+    s_vGetDASA((PBYTE)pMACHeader, &cbHeaderSize, &pDevice->sRxEthHeader);
 
     if (bIsWEP) {
         if (bExtIV) {
@@ -120,16 +194,16 @@ static void s_vProcessRxMACHeader(struct vnt_private *pDevice,
         cbHeaderSize += WLAN_HDR_ADDR3_LEN;
     };
 
-    pbyRxBuffer = (u8 *) (pbyRxBufferAddr + cbHeaderSize);
-    if (ether_addr_equal(pbyRxBuffer, pDevice->abySNAP_Bridgetunnel)) {
+    pbyRxBuffer = (PBYTE) (pbyRxBufferAddr + cbHeaderSize);
+    if (!compare_ether_addr(pbyRxBuffer, &pDevice->abySNAP_Bridgetunnel[0])) {
         cbHeaderSize += 6;
-    } else if (ether_addr_equal(pbyRxBuffer, pDevice->abySNAP_RFC1042)) {
+    } else if (!compare_ether_addr(pbyRxBuffer, &pDevice->abySNAP_RFC1042[0])) {
         cbHeaderSize += 6;
-        pwType = (u16 *) (pbyRxBufferAddr + cbHeaderSize);
-	if ((*pwType == cpu_to_be16(ETH_P_IPX)) ||
+        pwType = (PWORD) (pbyRxBufferAddr + cbHeaderSize);
+	if ((*pwType == cpu_to_le16(ETH_P_IPX)) ||
 	    (*pwType == cpu_to_le16(0xF380))) {
 		cbHeaderSize -= 8;
-            pwType = (u16 *) (pbyRxBufferAddr + cbHeaderSize);
+            pwType = (PWORD) (pbyRxBufferAddr + cbHeaderSize);
             if (bIsWEP) {
                 if (bExtIV) {
                     *pwType = htons(cbPacketSize - WLAN_HDR_ADDR3_LEN - 8);    // 8 is IV&ExtIV
@@ -144,7 +218,7 @@ static void s_vProcessRxMACHeader(struct vnt_private *pDevice,
     }
     else {
         cbHeaderSize -= 2;
-        pwType = (u16 *) (pbyRxBufferAddr + cbHeaderSize);
+        pwType = (PWORD) (pbyRxBufferAddr + cbHeaderSize);
         if (bIsWEP) {
             if (bExtIV) {
                 *pwType = htons(cbPacketSize - WLAN_HDR_ADDR3_LEN - 8);    // 8 is IV&ExtIV
@@ -158,18 +232,21 @@ static void s_vProcessRxMACHeader(struct vnt_private *pDevice,
     }
 
     cbHeaderSize -= (ETH_ALEN * 2);
-    pbyRxBuffer = (u8 *) (pbyRxBufferAddr + cbHeaderSize);
+    pbyRxBuffer = (PBYTE) (pbyRxBufferAddr + cbHeaderSize);
     for (ii = 0; ii < ETH_ALEN; ii++)
-        *pbyRxBuffer++ = pDevice->sRxEthHeader.h_dest[ii];
+        *pbyRxBuffer++ = pDevice->sRxEthHeader.abyDstAddr[ii];
     for (ii = 0; ii < ETH_ALEN; ii++)
-        *pbyRxBuffer++ = pDevice->sRxEthHeader.h_source[ii];
+        *pbyRxBuffer++ = pDevice->sRxEthHeader.abySrcAddr[ii];
 
     *pcbHeadSize = cbHeaderSize;
 }
 
-static u8 s_byGetRateIdx(u8 byRate)
+
+
+
+static BYTE s_byGetRateIdx(BYTE byRate)
 {
-    u8    byRateIdx;
+    BYTE    byRateIdx;
 
     for (byRateIdx = 0; byRateIdx <MAX_RATE ; byRateIdx++) {
         if (acbyRxRate[byRateIdx%MAX_RATE] == byRate)
@@ -178,130 +255,149 @@ static u8 s_byGetRateIdx(u8 byRate)
     return 0;
 }
 
+
 static
 void
 s_vGetDASA (
-      u8 * pbyRxBufferAddr,
+      PBYTE pbyRxBufferAddr,
      unsigned int *pcbHeaderSize,
-     struct ethhdr *psEthHeader
+     PSEthernetHeader psEthHeader
     )
 {
 	unsigned int            cbHeaderSize = 0;
-	struct ieee80211_hdr *pMACHeader;
+	PS802_11Header  pMACHeader;
 	int             ii;
 
-	pMACHeader = (struct ieee80211_hdr *) (pbyRxBufferAddr + cbHeaderSize);
+	pMACHeader = (PS802_11Header) (pbyRxBufferAddr + cbHeaderSize);
 
-	if ((pMACHeader->frame_control & FC_TODS) == 0) {
-		if (pMACHeader->frame_control & FC_FROMDS) {
+	if ((pMACHeader->wFrameCtl & FC_TODS) == 0) {
+		if (pMACHeader->wFrameCtl & FC_FROMDS) {
 			for (ii = 0; ii < ETH_ALEN; ii++) {
-				psEthHeader->h_dest[ii] =
-					pMACHeader->addr1[ii];
-				psEthHeader->h_source[ii] =
-					pMACHeader->addr3[ii];
+				psEthHeader->abyDstAddr[ii] =
+					pMACHeader->abyAddr1[ii];
+				psEthHeader->abySrcAddr[ii] =
+					pMACHeader->abyAddr3[ii];
 			}
 		} else {
 			/* IBSS mode */
 			for (ii = 0; ii < ETH_ALEN; ii++) {
-				psEthHeader->h_dest[ii] =
-					pMACHeader->addr1[ii];
-				psEthHeader->h_source[ii] =
-					pMACHeader->addr2[ii];
+				psEthHeader->abyDstAddr[ii] =
+					pMACHeader->abyAddr1[ii];
+				psEthHeader->abySrcAddr[ii] =
+					pMACHeader->abyAddr2[ii];
 			}
 		}
 	} else {
 		/* Is AP mode.. */
-		if (pMACHeader->frame_control & FC_FROMDS) {
+		if (pMACHeader->wFrameCtl & FC_FROMDS) {
 			for (ii = 0; ii < ETH_ALEN; ii++) {
-				psEthHeader->h_dest[ii] =
-					pMACHeader->addr3[ii];
-				psEthHeader->h_source[ii] =
-					pMACHeader->addr4[ii];
+				psEthHeader->abyDstAddr[ii] =
+					pMACHeader->abyAddr3[ii];
+				psEthHeader->abySrcAddr[ii] =
+					pMACHeader->abyAddr4[ii];
 				cbHeaderSize += 6;
 			}
 		} else {
 			for (ii = 0; ii < ETH_ALEN; ii++) {
-				psEthHeader->h_dest[ii] =
-					pMACHeader->addr3[ii];
-				psEthHeader->h_source[ii] =
-					pMACHeader->addr2[ii];
+				psEthHeader->abyDstAddr[ii] =
+					pMACHeader->abyAddr3[ii];
+				psEthHeader->abySrcAddr[ii] =
+					pMACHeader->abyAddr2[ii];
 			}
 		}
 	};
     *pcbHeaderSize = cbHeaderSize;
 }
 
-int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
-	unsigned long BytesToIndicate)
+
+
+
+BOOL
+RXbBulkInProcessData (
+     PSDevice         pDevice,
+     PRCB             pRCB,
+     unsigned long            BytesToIndicate
+    )
 {
-	struct net_device_stats *pStats = &pDevice->stats;
-	struct sk_buff *skb;
-	struct vnt_manager *pMgmt = &pDevice->vnt_mgmt;
-	struct vnt_rx_mgmt *pRxPacket = &pMgmt->sRxPacket;
-	struct ieee80211_hdr *p802_11Header;
-	u8 *pbyRsr, *pbyNewRsr, *pbyRSSI, *pbyFrame;
-	u64 *pqwTSFTime;
-	u32 bDeFragRx = false;
-	u32 cbHeaderOffset, cbIVOffset;
-	u32 FrameSize;
-	u16 wEtherType = 0;
-	s32 iSANodeIndex = -1;
-	int ii;
-	u8 *pbyRxSts, *pbyRxRate, *pbySQ, *pby3SQ;
-	u32 cbHeaderSize;
-	PSKeyItem pKey = NULL;
-	u16 wRxTSC15_0 = 0;
-	u32 dwRxTSC47_16 = 0;
-	/* signed long ldBm = 0; */
-	int bIsWEP = false; int bExtIV = false;
-	u32 dwWbkStatus;
-	struct vnt_rcb *pRCBIndicate = pRCB;
-	u8 *pbyDAddress;
-	u16 *pwPLCP_Length;
-	u8 abyVaildRate[MAX_RATE]
-		= {2, 4, 11, 22, 12, 18, 24, 36, 48, 72, 96, 108};
-	u16 wPLCPwithPadding;
-	struct ieee80211_hdr *pMACHeader;
-	int bRxeapol_key = false;
+
+    struct net_device_stats* pStats=&pDevice->stats;
+    struct sk_buff* skb;
+    PSMgmtObject    pMgmt = &(pDevice->sMgmtObj);
+    PSRxMgmtPacket  pRxPacket = &(pMgmt->sRxPacket);
+    PS802_11Header  p802_11Header;
+    PBYTE           pbyRsr;
+    PBYTE           pbyNewRsr;
+    PBYTE           pbyRSSI;
+    PQWORD          pqwTSFTime;
+    PBYTE           pbyFrame;
+    BOOL            bDeFragRx = FALSE;
+    unsigned int            cbHeaderOffset;
+    unsigned int            FrameSize;
+    WORD            wEtherType = 0;
+    signed int             iSANodeIndex = -1;
+    signed int             iDANodeIndex = -1;
+    unsigned int            ii;
+    unsigned int            cbIVOffset;
+    PBYTE           pbyRxSts;
+    PBYTE           pbyRxRate;
+    PBYTE           pbySQ;
+    PBYTE           pby3SQ;
+    unsigned int            cbHeaderSize;
+    PSKeyItem       pKey = NULL;
+    WORD            wRxTSC15_0 = 0;
+    DWORD           dwRxTSC47_16 = 0;
+    SKeyItem        STempKey;
+    // 802.11h RPI
+    /* signed long ldBm = 0; */
+    BOOL            bIsWEP = FALSE;
+    BOOL            bExtIV = FALSE;
+    DWORD           dwWbkStatus;
+    PRCB            pRCBIndicate = pRCB;
+    PBYTE           pbyDAddress;
+    PWORD           pwPLCP_Length;
+    BYTE            abyVaildRate[MAX_RATE] = {2,4,11,22,12,18,24,36,48,72,96,108};
+    WORD            wPLCPwithPadding;
+    PS802_11Header  pMACHeader;
+    BOOL            bRxeapol_key = FALSE;
+
+
 
     DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---------- RXbBulkInProcessData---\n");
 
     skb = pRCB->skb;
 
-	/* [31:16]RcvByteCount ( not include 4-byte Status ) */
-	dwWbkStatus = *((u32 *)(skb->data));
-	FrameSize = dwWbkStatus >> 16;
-	FrameSize += 4;
+    //[31:16]RcvByteCount ( not include 4-byte Status )
+    dwWbkStatus =  *( (PDWORD)(skb->data) );
+    FrameSize = (unsigned int)(dwWbkStatus >> 16);
+    FrameSize += 4;
 
-	if (BytesToIndicate != FrameSize) {
-		DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"------- WRONG Length 1\n");
-		pStats->rx_frame_errors++;
-		return false;
-	}
+    if (BytesToIndicate != FrameSize) {
+        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---------- WRONG Length 1 \n");
+        return FALSE;
+    }
 
     if ((BytesToIndicate > 2372) || (BytesToIndicate <= 40)) {
         // Frame Size error drop this packet.
 	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "---------- WRONG Length 2\n");
-	pStats->rx_frame_errors++;
-        return false;
+        return FALSE;
     }
 
-    pbyDAddress = (u8 *)(skb->data);
+    pbyDAddress = (PBYTE)(skb->data);
     pbyRxSts = pbyDAddress+4;
     pbyRxRate = pbyDAddress+5;
 
     //real Frame Size = USBFrameSize -4WbkStatus - 4RxStatus - 8TSF - 4RSR - 4SQ3 - ?Padding
     //if SQ3 the range is 24~27, if no SQ3 the range is 20~23
     //real Frame size in PLCPLength field.
-    pwPLCP_Length = (u16 *) (pbyDAddress + 6);
+    pwPLCP_Length = (PWORD) (pbyDAddress + 6);
     //Fix hardware bug => PLCP_Length error
     if ( ((BytesToIndicate - (*pwPLCP_Length)) > 27) ||
          ((BytesToIndicate - (*pwPLCP_Length)) < 24) ||
          (BytesToIndicate < (*pwPLCP_Length)) ) {
 
         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Wrong PLCP Length %x\n", (int) *pwPLCP_Length);
-	pStats->rx_frame_errors++;
-        return false;
+        ASSERT(0);
+        return FALSE;
     }
     for ( ii=RATE_1M;ii<MAX_RATE;ii++) {
         if ( *pbyRxRate == abyVaildRate[ii] ) {
@@ -310,12 +406,12 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
     }
     if ( ii==MAX_RATE ) {
         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Wrong RxRate %x\n",(int) *pbyRxRate);
-        return false;
+        return FALSE;
     }
 
     wPLCPwithPadding = ( (*pwPLCP_Length / 4) + ( (*pwPLCP_Length % 4) ? 1:0 ) ) *4;
 
-	pqwTSFTime = (u64 *)(pbyDAddress + 8 + wPLCPwithPadding);
+    pqwTSFTime = (PQWORD) (pbyDAddress + 8 + wPLCPwithPadding);
   if(pDevice->byBBType == BB_TYPE_11G)  {
       pby3SQ = pbyDAddress + 8 + wPLCPwithPadding + 12;
       pbySQ = pby3SQ;
@@ -331,56 +427,107 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
     FrameSize = *pwPLCP_Length;
 
     pbyFrame = pbyDAddress + 8;
+    // update receive statistic counter
 
-    pMACHeader = (struct ieee80211_hdr *) pbyFrame;
+    STAvUpdateRDStatCounter(&pDevice->scStatistic,
+                            *pbyRsr,
+                            *pbyNewRsr,
+                            *pbyRxSts,
+                            *pbyRxRate,
+                            pbyFrame,
+                            FrameSize
+                            );
+
+
+    pMACHeader = (PS802_11Header) pbyFrame;
 
 //mike add: to judge if current AP is activated?
     if ((pMgmt->eCurrMode == WMAC_MODE_STANDBY) ||
         (pMgmt->eCurrMode == WMAC_MODE_ESS_STA)) {
        if (pMgmt->sNodeDBTable[0].bActive) {
-	 if (ether_addr_equal(pMgmt->abyCurrBSSID, pMACHeader->addr2)) {
+	 if (!compare_ether_addr(pMgmt->abyCurrBSSID, pMACHeader->abyAddr2)) {
 	    if (pMgmt->sNodeDBTable[0].uInActiveCount != 0)
                   pMgmt->sNodeDBTable[0].uInActiveCount = 0;
            }
        }
     }
 
-    if (!is_multicast_ether_addr(pMACHeader->addr1)) {
-        if (WCTLbIsDuplicate(&(pDevice->sDupRxCache), (struct ieee80211_hdr *) pbyFrame)) {
-            return false;
+    if (!is_multicast_ether_addr(pMACHeader->abyAddr1) && !is_broadcast_ether_addr(pMACHeader->abyAddr1)) {
+        if ( WCTLbIsDuplicate(&(pDevice->sDupRxCache), (PS802_11Header) pbyFrame) ) {
+            pDevice->s802_11Counter.FrameDuplicateCount++;
+            return FALSE;
         }
 
-	if (!ether_addr_equal(pDevice->abyCurrentNetAddr, pMACHeader->addr1)) {
-		return false;
+	if (compare_ether_addr(pDevice->abyCurrentNetAddr,
+			       pMACHeader->abyAddr1)) {
+		return FALSE;
         }
     }
+
 
     // Use for TKIP MIC
     s_vGetDASA(pbyFrame, &cbHeaderSize, &pDevice->sRxEthHeader);
 
-    if (ether_addr_equal((u8 *)pDevice->sRxEthHeader.h_source,
-			 pDevice->abyCurrentNetAddr))
-        return false;
+    if (!compare_ether_addr((PBYTE)&(pDevice->sRxEthHeader.abySrcAddr[0]),
+			    pDevice->abyCurrentNetAddr))
+        return FALSE;
 
     if ((pMgmt->eCurrMode == WMAC_MODE_ESS_AP) || (pMgmt->eCurrMode == WMAC_MODE_IBSS_STA)) {
         if (IS_CTL_PSPOLL(pbyFrame) || !IS_TYPE_CONTROL(pbyFrame)) {
-            p802_11Header = (struct ieee80211_hdr *) (pbyFrame);
+            p802_11Header = (PS802_11Header) (pbyFrame);
             // get SA NodeIndex
-            if (BSSbIsSTAInNodeDB(pDevice, (u8 *)(p802_11Header->addr2), &iSANodeIndex)) {
+            if (BSSbIsSTAInNodeDB(pDevice, (PBYTE)(p802_11Header->abyAddr2), &iSANodeIndex)) {
                 pMgmt->sNodeDBTable[iSANodeIndex].ulLastRxJiffer = jiffies;
                 pMgmt->sNodeDBTable[iSANodeIndex].uInActiveCount = 0;
             }
         }
     }
 
+    if (pMgmt->eCurrMode == WMAC_MODE_ESS_AP) {
+        if (s_bAPModeRxCtl(pDevice, pbyFrame, iSANodeIndex) == TRUE) {
+            return FALSE;
+        }
+    }
+
+
     if (IS_FC_WEP(pbyFrame)) {
-        bool     bRxDecryOK = false;
+        BOOL     bRxDecryOK = FALSE;
 
         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"rx WEP pkt\n");
-        bIsWEP = true;
+        bIsWEP = TRUE;
+        if ((pDevice->bEnableHostWEP) && (iSANodeIndex >= 0)) {
+            pKey = &STempKey;
+            pKey->byCipherSuite = pMgmt->sNodeDBTable[iSANodeIndex].byCipherSuite;
+            pKey->dwKeyIndex = pMgmt->sNodeDBTable[iSANodeIndex].dwKeyIndex;
+            pKey->uKeyLength = pMgmt->sNodeDBTable[iSANodeIndex].uWepKeyLength;
+            pKey->dwTSC47_16 = pMgmt->sNodeDBTable[iSANodeIndex].dwTSC47_16;
+            pKey->wTSC15_0 = pMgmt->sNodeDBTable[iSANodeIndex].wTSC15_0;
+            memcpy(pKey->abyKey,
+                &pMgmt->sNodeDBTable[iSANodeIndex].abyWepKey[0],
+                pKey->uKeyLength
+                );
 
-	bRxDecryOK = s_bHandleRxEncryption(pDevice, pbyFrame, FrameSize,
-		pbyRsr, pbyNewRsr, &pKey, &bExtIV, &wRxTSC15_0, &dwRxTSC47_16);
+            bRxDecryOK = s_bHostWepRxEncryption(pDevice,
+                                                pbyFrame,
+                                                FrameSize,
+                                                pbyRsr,
+                                                pMgmt->sNodeDBTable[iSANodeIndex].bOnFly,
+                                                pKey,
+                                                pbyNewRsr,
+                                                &bExtIV,
+                                                &wRxTSC15_0,
+                                                &dwRxTSC47_16);
+        } else {
+            bRxDecryOK = s_bHandleRxEncryption(pDevice,
+                                                pbyFrame,
+                                                FrameSize,
+                                                pbyRsr,
+                                                pbyNewRsr,
+                                                &pKey,
+                                                &bExtIV,
+                                                &wRxTSC15_0,
+                                                &dwRxTSC47_16);
+        }
 
         if (bRxDecryOK) {
             if ((*pbyNewRsr & NEWRSR_DECRYPTOK) == 0) {
@@ -390,18 +537,27 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                     (pMgmt->eAuthenMode == WMAC_AUTH_WPANONE) ||
                     (pMgmt->eAuthenMode == WMAC_AUTH_WPA2) ||
                     (pMgmt->eAuthenMode == WMAC_AUTH_WPA2PSK)) {
+
+                    if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_TKIP)) {
+                        pDevice->s802_11Counter.TKIPICVErrors++;
+                    } else if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_CCMP)) {
+                        pDevice->s802_11Counter.CCMPDecryptErrors++;
+                    } else if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_WEP)) {
+//                      pDevice->s802_11Counter.WEPICVErrorCount.QuadPart++;
+                    }
                 }
-                return false;
+                return FALSE;
             }
         } else {
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"WEP Func Fail\n");
-            return false;
+            return FALSE;
         }
         if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_CCMP))
             FrameSize -= 8;         // Message Integrity Code
         else
             FrameSize -= 4;         // 4 is ICV
     }
+
 
     //
     // RX OK
@@ -413,7 +569,8 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
         (IS_FRAGMENT_PKT((pbyFrame)))
         ) {
         // defragment
-        bDeFragRx = WCTLbHandleFragment(pDevice, (struct ieee80211_hdr *) (pbyFrame), FrameSize, bIsWEP, bExtIV);
+        bDeFragRx = WCTLbHandleFragment(pDevice, (PS802_11Header) (pbyFrame), FrameSize, bIsWEP, bExtIV);
+        pDevice->s802_11Counter.ReceivedFragmentCount++;
         if (bDeFragRx) {
             // defrag complete
             // TODO skb, pbyFrame
@@ -422,26 +579,27 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
             pbyFrame = skb->data + 8;
         }
         else {
-            return false;
+            return FALSE;
         }
     }
 
     //
     // Management & Control frame Handle
     //
-    if ((IS_TYPE_DATA((pbyFrame))) == false) {
+    if ((IS_TYPE_DATA((pbyFrame))) == FALSE) {
         // Handle Control & Manage Frame
 
         if (IS_TYPE_MGMT((pbyFrame))) {
-            u8 * pbyData1;
-            u8 * pbyData2;
+            PBYTE pbyData1;
+            PBYTE pbyData2;
 
             pRxPacket = &(pRCB->sMngPacket);
             pRxPacket->p80211Header = (PUWLAN_80211HDR)(pbyFrame);
             pRxPacket->cbMPDULen = FrameSize;
             pRxPacket->uRSSI = *pbyRSSI;
             pRxPacket->bySQ = *pbySQ;
-		pRxPacket->qwLocalTSF = cpu_to_le64(*pqwTSFTime);
+            HIDWORD(pRxPacket->qwLocalTSF) = cpu_to_le32(HIDWORD(*pqwTSFTime));
+            LODWORD(pRxPacket->qwLocalTSF) = cpu_to_le32(LODWORD(*pqwTSFTime));
             if (bIsWEP) {
                 // strip IV
                 pbyData1 = WLAN_HDR_A3_DATA_PTR(pbyFrame);
@@ -459,29 +617,45 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                 //Discard beacon packet which channel is 0
                 if ( (WLAN_GET_FC_FSTYPE((pRxPacket->p80211Header->sA3.wFrameCtl)) == WLAN_FSTYPE_BEACON) ||
                      (WLAN_GET_FC_FSTYPE((pRxPacket->p80211Header->sA3.wFrameCtl)) == WLAN_FSTYPE_PROBERESP) ) {
-			return false;
+                    return TRUE;
                 }
             }
             pRxPacket->byRxChannel = (*pbyRxSts) >> 2;
+
+            // hostap Deamon handle 802.11 management
+            if (pDevice->bEnableHostapd) {
+	            skb->dev = pDevice->apdev;
+	            //skb->data += 4;
+	            //skb->tail += 4;
+	            skb->data += 8;
+	            skb->tail += 8;
+                skb_put(skb, FrameSize);
+		skb_reset_mac_header(skb);
+	            skb->pkt_type = PACKET_OTHERHOST;
+    	        skb->protocol = htons(ETH_P_802_2);
+	            memset(skb->cb, 0, sizeof(skb->cb));
+	            netif_rx(skb);
+                return TRUE;
+	        }
 
             //
             // Insert the RCB in the Recv Mng list
             //
             EnqueueRCB(pDevice->FirstRecvMngList, pDevice->LastRecvMngList, pRCBIndicate);
             pDevice->NumRecvMngList++;
-            if ( bDeFragRx == false) {
+            if ( bDeFragRx == FALSE) {
                 pRCB->Ref++;
             }
-            if (pDevice->bIsRxMngWorkItemQueued == false) {
-                pDevice->bIsRxMngWorkItemQueued = true;
-		schedule_work(&pDevice->rx_mng_work_item);
+            if (pDevice->bIsRxMngWorkItemQueued == FALSE) {
+                pDevice->bIsRxMngWorkItemQueued = TRUE;
+                tasklet_schedule(&pDevice->RxMngWorkItem);
             }
 
         }
         else {
             // Control Frame
         };
-        return false;
+        return FALSE;
     }
     else {
         if (pMgmt->eCurrMode == WMAC_MODE_ESS_AP) {
@@ -493,12 +667,12 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                         pDevice->dev->name);
                     }
                 }
-                return false;
+                return FALSE;
             }
         }
         else {
             // discard DATA packet while not associate || BSSID error
-            if ((pDevice->bLinkPass == false) ||
+            if ((pDevice->bLinkPass == FALSE) ||
                 !(*pbyRsr & RSR_BSSIDOK)) {
                 if (bDeFragRx) {
                     if (!device_alloc_frag_buf(pDevice, &pDevice->sRxDFCB[pDevice->uCurrentDFCBIdx])) {
@@ -506,14 +680,14 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                         pDevice->dev->name);
                     }
                 }
-                return false;
+                return FALSE;
             }
    //mike add:station mode check eapol-key challenge--->
    	  {
-   	    u8  Protocol_Version;    //802.1x Authentication
-	    u8  Packet_Type;           //802.1x Authentication
-	    u8  Descriptor_type;
-             u16 Key_info;
+   	    BYTE  Protocol_Version;    //802.1x Authentication
+	    BYTE  Packet_Type;           //802.1x Authentication
+	    BYTE  Descriptor_type;
+             WORD Key_info;
               if (bIsWEP)
                   cbIVOffset = 8;
               else
@@ -525,7 +699,7 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
 	     if (wEtherType == ETH_P_PAE) {         //Protocol Type in LLC-Header
                   if(((Protocol_Version==1) ||(Protocol_Version==2)) &&
 		     (Packet_Type==3)) {  //802.1x OR eapol-key challenge frame receive
-                        bRxeapol_key = true;
+                        bRxeapol_key = TRUE;
 		      Descriptor_type = skb->data[cbIVOffset + 8 + 24 + 6 + 1 +1+1+1+2];
 		      Key_info = (skb->data[cbIVOffset + 8 + 24 + 6 + 1 +1+1+1+2+1]<<8) |skb->data[cbIVOffset + 8 + 24 + 6 + 1 +1+1+1+2+2] ;
 		      if(Descriptor_type==2) {    //RSN
@@ -541,7 +715,9 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
         }
     }
 
+
 // Data frame Handle
+
 
     if (pDevice->bEnablePSMode) {
         if (IS_FC_MOREDATA((pbyFrame))) {
@@ -550,10 +726,17 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
             }
         }
         else {
-            if (pMgmt->bInTIMWake == true) {
-                pMgmt->bInTIMWake = false;
+            if (pMgmt->bInTIMWake == TRUE) {
+                pMgmt->bInTIMWake = FALSE;
             }
         }
+    }
+
+    // Now it only supports 802.11g Infrastructure Mode, and support rate must up to 54 Mbps
+    if (pDevice->bDiversityEnable && (FrameSize>50) &&
+       (pDevice->eOPMode == OP_MODE_INFRASTRUCTURE) &&
+       (pDevice->bLinkPass == TRUE)) {
+        BBvAntennaDiversity(pDevice, s_byGetRateIdx(*pbyRxRate), 0);
     }
 
     // ++++++++ For BaseBand Algorithm +++++++++++++++
@@ -565,7 +748,7 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
     if ((*pbyRSSI != 0) &&
         (pMgmt->pCurrBSS!=NULL)) {
         RFvRSSITodBm(pDevice, *pbyRSSI, &ldBm);
-        // Monitor if RSSI is too strong.
+        // Moniter if RSSI is too strong.
         pMgmt->pCurrBSS->byRSSIStatCnt++;
         pMgmt->pCurrBSS->byRSSIStatCnt %= RSSI_STAT_COUNT;
         pMgmt->pCurrBSS->ldBmAverage[pMgmt->pCurrBSS->byRSSIStatCnt] = ldBm;
@@ -578,6 +761,47 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
     }
 */
 
+
+    // -----------------------------------------------
+
+    if ((pMgmt->eCurrMode == WMAC_MODE_ESS_AP) && (pDevice->bEnable8021x == TRUE)){
+        BYTE    abyMacHdr[24];
+
+        // Only 802.1x packet incoming allowed
+        if (bIsWEP)
+            cbIVOffset = 8;
+        else
+            cbIVOffset = 0;
+        wEtherType = (skb->data[cbIVOffset + 8 + 24 + 6] << 8) |
+                    skb->data[cbIVOffset + 8 + 24 + 6 + 1];
+
+	    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"wEtherType = %04x \n", wEtherType);
+        if (wEtherType == ETH_P_PAE) {
+            skb->dev = pDevice->apdev;
+
+            if (bIsWEP == TRUE) {
+                // strip IV header(8)
+                memcpy(&abyMacHdr[0], (skb->data + 8), 24);
+                memcpy((skb->data + 8 + cbIVOffset), &abyMacHdr[0], 24);
+            }
+
+            skb->data +=  (cbIVOffset + 8);
+            skb->tail +=  (cbIVOffset + 8);
+            skb_put(skb, FrameSize);
+	    skb_reset_mac_header(skb);
+            skb->pkt_type = PACKET_OTHERHOST;
+            skb->protocol = htons(ETH_P_802_2);
+            memset(skb->cb, 0, sizeof(skb->cb));
+            netif_rx(skb);
+            return TRUE;
+
+        }
+        // check if 802.1x authorized
+        if (!(pMgmt->sNodeDBTable[iSANodeIndex].dwFlags & WLAN_STA_AUTHORIZED))
+            return FALSE;
+    }
+
+
     if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_TKIP)) {
         if (bIsWEP) {
             FrameSize -= 8;  //MIC
@@ -588,55 +812,61 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
     // Soft MIC
     if ((pKey != NULL) && (pKey->byCipherSuite == KEY_CTL_TKIP)) {
         if (bIsWEP) {
-            u32 *          pdwMIC_L;
-            u32 *          pdwMIC_R;
-            u32           dwMIC_Priority;
-            u32           dwMICKey0 = 0, dwMICKey1 = 0;
-            u32           dwLocalMIC_L = 0;
-            u32           dwLocalMIC_R = 0;
+            PDWORD          pdwMIC_L;
+            PDWORD          pdwMIC_R;
+            DWORD           dwMIC_Priority;
+            DWORD           dwMICKey0 = 0, dwMICKey1 = 0;
+            DWORD           dwLocalMIC_L = 0;
+            DWORD           dwLocalMIC_R = 0;
+            viawget_wpa_header *wpahdr;
+
 
             if (pMgmt->eCurrMode == WMAC_MODE_ESS_AP) {
-                dwMICKey0 = cpu_to_le32(*(u32 *)(&pKey->abyKey[24]));
-                dwMICKey1 = cpu_to_le32(*(u32 *)(&pKey->abyKey[28]));
+                dwMICKey0 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[24]));
+                dwMICKey1 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[28]));
             }
             else {
                 if (pMgmt->eAuthenMode == WMAC_AUTH_WPANONE) {
-                    dwMICKey0 = cpu_to_le32(*(u32 *)(&pKey->abyKey[16]));
-                    dwMICKey1 = cpu_to_le32(*(u32 *)(&pKey->abyKey[20]));
+                    dwMICKey0 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[16]));
+                    dwMICKey1 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[20]));
                 } else if ((pKey->dwKeyIndex & BIT28) == 0) {
-                    dwMICKey0 = cpu_to_le32(*(u32 *)(&pKey->abyKey[16]));
-                    dwMICKey1 = cpu_to_le32(*(u32 *)(&pKey->abyKey[20]));
+                    dwMICKey0 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[16]));
+                    dwMICKey1 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[20]));
                 } else {
-                    dwMICKey0 = cpu_to_le32(*(u32 *)(&pKey->abyKey[24]));
-                    dwMICKey1 = cpu_to_le32(*(u32 *)(&pKey->abyKey[28]));
+                    dwMICKey0 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[24]));
+                    dwMICKey1 = cpu_to_le32(*(PDWORD)(&pKey->abyKey[28]));
                 }
             }
 
             MIC_vInit(dwMICKey0, dwMICKey1);
-            MIC_vAppend((u8 *)&(pDevice->sRxEthHeader.h_dest[0]), 12);
+            MIC_vAppend((PBYTE)&(pDevice->sRxEthHeader.abyDstAddr[0]), 12);
             dwMIC_Priority = 0;
-            MIC_vAppend((u8 *)&dwMIC_Priority, 4);
+            MIC_vAppend((PBYTE)&dwMIC_Priority, 4);
             // 4 is Rcv buffer header, 24 is MAC Header, and 8 is IV and Ext IV.
-            MIC_vAppend((u8 *)(skb->data + 8 + WLAN_HDR_ADDR3_LEN + 8),
+            MIC_vAppend((PBYTE)(skb->data + 8 + WLAN_HDR_ADDR3_LEN + 8),
                         FrameSize - WLAN_HDR_ADDR3_LEN - 8);
             MIC_vGetMIC(&dwLocalMIC_L, &dwLocalMIC_R);
             MIC_vUnInit();
 
-            pdwMIC_L = (u32 *)(skb->data + 8 + FrameSize);
-            pdwMIC_R = (u32 *)(skb->data + 8 + FrameSize + 4);
+            pdwMIC_L = (PDWORD)(skb->data + 8 + FrameSize);
+            pdwMIC_R = (PDWORD)(skb->data + 8 + FrameSize + 4);
+
 
             if ((cpu_to_le32(*pdwMIC_L) != dwLocalMIC_L) || (cpu_to_le32(*pdwMIC_R) != dwLocalMIC_R) ||
-                (pDevice->bRxMICFail == true)) {
+                (pDevice->bRxMICFail == TRUE)) {
                 DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"MIC comparison is fail!\n");
-                pDevice->bRxMICFail = false;
+                pDevice->bRxMICFail = FALSE;
+                //pDevice->s802_11Counter.TKIPLocalMICFailures.QuadPart++;
+                pDevice->s802_11Counter.TKIPLocalMICFailures++;
                 if (bDeFragRx) {
                     if (!device_alloc_frag_buf(pDevice, &pDevice->sRxDFCB[pDevice->uCurrentDFCBIdx])) {
                         DBG_PRT(MSG_LEVEL_ERR,KERN_ERR "%s: can not alloc more frag bufs\n",
                             pDevice->dev->name);
                     }
                 }
+       #ifdef WPA_SUPPLICANT_DRIVER_WEXT_SUPPORT
 				//send event to wpa_supplicant
-				//if(pDevice->bWPASuppWextEnabled == true)
+				//if(pDevice->bWPASuppWextEnabled == TRUE)
 				{
 					union iwreq_data wrqu;
 					struct iw_michaelmicfailure ev;
@@ -652,15 +882,40 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
 					}
 
 					ev.src_addr.sa_family = ARPHRD_ETHER;
-					memcpy(ev.src_addr.sa_data, pMACHeader->addr2, ETH_ALEN);
+					memcpy(ev.src_addr.sa_data, pMACHeader->abyAddr2, ETH_ALEN);
 					memset(&wrqu, 0, sizeof(wrqu));
 					wrqu.data.length = sizeof(ev);
 			PRINT_K("wireless_send_event--->IWEVMICHAELMICFAILURE\n");
 					wireless_send_event(pDevice->dev, IWEVMICHAELMICFAILURE, &wrqu, (char *)&ev);
 
 				}
+         #endif
 
-                return false;
+
+                if ((pDevice->bWPADEVUp) && (pDevice->skb != NULL)) {
+                     wpahdr = (viawget_wpa_header *)pDevice->skb->data;
+                     if ((pMgmt->eCurrMode == WMAC_MODE_ESS_STA) &&
+                         (pMgmt->eCurrState == WMAC_STATE_ASSOC) &&
+                         (*pbyRsr & (RSR_ADDRBROAD | RSR_ADDRMULTI)) == 0) {
+                         //s802_11_Status.Flags = NDIS_802_11_AUTH_REQUEST_PAIRWISE_ERROR;
+                         wpahdr->type = VIAWGET_PTK_MIC_MSG;
+                     } else {
+                         //s802_11_Status.Flags = NDIS_802_11_AUTH_REQUEST_GROUP_ERROR;
+                         wpahdr->type = VIAWGET_GTK_MIC_MSG;
+                     }
+                     wpahdr->resp_ie_len = 0;
+                     wpahdr->req_ie_len = 0;
+                     skb_put(pDevice->skb, sizeof(viawget_wpa_header));
+                     pDevice->skb->dev = pDevice->wpadev;
+		     skb_reset_mac_header(pDevice->skb);
+                     pDevice->skb->pkt_type = PACKET_HOST;
+                     pDevice->skb->protocol = htons(ETH_P_802_2);
+                     memset(pDevice->skb->cb, 0, sizeof(pDevice->skb->cb));
+                     netif_rx(pDevice->skb);
+                     pDevice->skb = dev_alloc_skb((int)pDevice->rx_buf_sz);
+                 }
+
+                return FALSE;
 
             }
         }
@@ -671,26 +926,32 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
     if ((pKey != NULL) && ((pKey->byCipherSuite == KEY_CTL_TKIP) ||
                            (pKey->byCipherSuite == KEY_CTL_CCMP))) {
         if (bIsWEP) {
-            u16        wLocalTSC15_0 = 0;
-            u32       dwLocalTSC47_16 = 0;
+            WORD        wLocalTSC15_0 = 0;
+            DWORD       dwLocalTSC47_16 = 0;
 	    unsigned long long       RSC = 0;
             // endian issues
 	    RSC = *((unsigned long long *) &(pKey->KeyRSC));
-            wLocalTSC15_0 = (u16) RSC;
-            dwLocalTSC47_16 = (u32) (RSC>>16);
+            wLocalTSC15_0 = (WORD) RSC;
+            dwLocalTSC47_16 = (DWORD) (RSC>>16);
 
             RSC = dwRxTSC47_16;
             RSC <<= 16;
             RSC += wRxTSC15_0;
-		memcpy(&(pKey->KeyRSC), &RSC,  sizeof(u64));
+            memcpy(&(pKey->KeyRSC), &RSC,  sizeof(QWORD));
 
-		if (pDevice->vnt_mgmt.eCurrMode == WMAC_MODE_ESS_STA &&
-			pDevice->vnt_mgmt.eCurrState == WMAC_STATE_ASSOC) {
-			/* check RSC */
+            if ( (pDevice->sMgmtObj.eCurrMode == WMAC_MODE_ESS_STA) &&
+                 (pDevice->sMgmtObj.eCurrState == WMAC_STATE_ASSOC)) {
+                // check RSC
                 if ( (wRxTSC15_0 < wLocalTSC15_0) &&
                      (dwRxTSC47_16 <= dwLocalTSC47_16) &&
                      !((dwRxTSC47_16 == 0) && (dwLocalTSC47_16 == 0xFFFFFFFF))) {
                     DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"TSC is illegal~~!\n ");
+                    if (pKey->byCipherSuite == KEY_CTL_TKIP)
+                        //pDevice->s802_11Counter.TKIPReplays.QuadPart++;
+                        pDevice->s802_11Counter.TKIPReplays++;
+                    else
+                        //pDevice->s802_11Counter.CCMPReplays.QuadPart++;
+                        pDevice->s802_11Counter.CCMPReplays++;
 
                     if (bDeFragRx) {
                         if (!device_alloc_frag_buf(pDevice, &pDevice->sRxDFCB[pDevice->uCurrentDFCBIdx])) {
@@ -698,19 +959,40 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
                                 pDevice->dev->name);
                         }
                     }
-                    return false;
+                    return FALSE;
                 }
             }
         }
     } // ----- End of Reply Counter Check --------------------------
 
-    s_vProcessRxMACHeader(pDevice, (u8 *)(skb->data+8), FrameSize, bIsWEP, bExtIV, &cbHeaderOffset);
+
+    s_vProcessRxMACHeader(pDevice, (PBYTE)(skb->data+8), FrameSize, bIsWEP, bExtIV, &cbHeaderOffset);
     FrameSize -= cbHeaderOffset;
     cbHeaderOffset += 8;        // 8 is Rcv buffer header
 
     // Null data, framesize = 12
     if (FrameSize < 12)
-        return false;
+        return FALSE;
+
+    if (pMgmt->eCurrMode == WMAC_MODE_ESS_AP) {
+        if (s_bAPModeRxData(pDevice,
+                            skb,
+                            FrameSize,
+                            cbHeaderOffset,
+                            iSANodeIndex,
+                            iDANodeIndex
+                            ) == FALSE) {
+
+            if (bDeFragRx) {
+                if (!device_alloc_frag_buf(pDevice, &pDevice->sRxDFCB[pDevice->uCurrentDFCBIdx])) {
+                    DBG_PRT(MSG_LEVEL_ERR,KERN_ERR "%s: can not alloc more frag bufs\n",
+                    pDevice->dev->name);
+                }
+            }
+            return FALSE;
+        }
+
+    }
 
 	skb->data += cbHeaderOffset;
 	skb->tail += cbHeaderOffset;
@@ -725,29 +1007,167 @@ int RXbBulkInProcessData(struct vnt_private *pDevice, struct vnt_rcb *pRCB,
             DBG_PRT(MSG_LEVEL_ERR,KERN_ERR "%s: can not alloc more frag bufs\n",
                 pDevice->dev->name);
         }
-        return false;
+        return FALSE;
     }
 
-    return true;
+    return TRUE;
 }
 
-static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
-	u32 FrameSize, u8 *pbyRsr, u8 *pbyNewRsr, PSKeyItem *pKeyOut,
-	s32 *pbExtIV, u16 *pwRxTSC15_0, u32 *pdwRxTSC47_16)
+
+static BOOL s_bAPModeRxCtl (
+     PSDevice pDevice,
+     PBYTE    pbyFrame,
+     signed int      iSANodeIndex
+    )
 {
-	struct vnt_manager *pMgmt = &pDevice->vnt_mgmt;
-	u32 PayloadLen = FrameSize;
-	u8 *pbyIV;
-	u8 byKeyIdx;
-	PSKeyItem pKey = NULL;
-	u8 byDecMode = KEY_CTL_WEP;
+    PS802_11Header      p802_11Header;
+    CMD_STATUS          Status;
+    PSMgmtObject        pMgmt = &(pDevice->sMgmtObj);
+
+
+    if (IS_CTL_PSPOLL(pbyFrame) || !IS_TYPE_CONTROL(pbyFrame)) {
+
+        p802_11Header = (PS802_11Header) (pbyFrame);
+        if (!IS_TYPE_MGMT(pbyFrame)) {
+
+            // Data & PS-Poll packet
+            // check frame class
+            if (iSANodeIndex > 0) {
+                // frame class 3 fliter & checking
+                if (pMgmt->sNodeDBTable[iSANodeIndex].eNodeState < NODE_AUTH) {
+                    // send deauth notification
+                    // reason = (6) class 2 received from nonauth sta
+                    vMgrDeAuthenBeginSta(pDevice,
+                                         pMgmt,
+                                         (PBYTE)(p802_11Header->abyAddr2),
+                                         (WLAN_MGMT_REASON_CLASS2_NONAUTH),
+                                         &Status
+                                         );
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "dpc: send vMgrDeAuthenBeginSta 1\n");
+                    return TRUE;
+                }
+                if (pMgmt->sNodeDBTable[iSANodeIndex].eNodeState < NODE_ASSOC) {
+                    // send deassoc notification
+                    // reason = (7) class 3 received from nonassoc sta
+                    vMgrDisassocBeginSta(pDevice,
+                                         pMgmt,
+                                         (PBYTE)(p802_11Header->abyAddr2),
+                                         (WLAN_MGMT_REASON_CLASS3_NONASSOC),
+                                         &Status
+                                         );
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "dpc: send vMgrDisassocBeginSta 2\n");
+                    return TRUE;
+                }
+
+                if (pMgmt->sNodeDBTable[iSANodeIndex].bPSEnable) {
+                    // delcare received ps-poll event
+                    if (IS_CTL_PSPOLL(pbyFrame)) {
+                        pMgmt->sNodeDBTable[iSANodeIndex].bRxPSPoll = TRUE;
+			bScheduleCommand((void *) pDevice,
+					 WLAN_CMD_RX_PSPOLL,
+					 NULL);
+                        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "dpc: WLAN_CMD_RX_PSPOLL 1\n");
+                    }
+                    else {
+                        // check Data PS state
+                        // if PW bit off, send out all PS bufferring packets.
+                        if (!IS_FC_POWERMGT(pbyFrame)) {
+                            pMgmt->sNodeDBTable[iSANodeIndex].bPSEnable = FALSE;
+                            pMgmt->sNodeDBTable[iSANodeIndex].bRxPSPoll = TRUE;
+				bScheduleCommand((void *) pDevice,
+						 WLAN_CMD_RX_PSPOLL,
+						 NULL);
+                            DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "dpc: WLAN_CMD_RX_PSPOLL 2\n");
+                        }
+                    }
+                }
+                else {
+                   if (IS_FC_POWERMGT(pbyFrame)) {
+                       pMgmt->sNodeDBTable[iSANodeIndex].bPSEnable = TRUE;
+                       // Once if STA in PS state, enable multicast bufferring
+                       pMgmt->sNodeDBTable[0].bPSEnable = TRUE;
+                   }
+                   else {
+                      // clear all pending PS frame.
+                      if (pMgmt->sNodeDBTable[iSANodeIndex].wEnQueueCnt > 0) {
+                          pMgmt->sNodeDBTable[iSANodeIndex].bPSEnable = FALSE;
+                          pMgmt->sNodeDBTable[iSANodeIndex].bRxPSPoll = TRUE;
+			bScheduleCommand((void *) pDevice,
+					 WLAN_CMD_RX_PSPOLL,
+					 NULL);
+                         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "dpc: WLAN_CMD_RX_PSPOLL 3\n");
+
+                      }
+                   }
+                }
+            }
+            else {
+                  vMgrDeAuthenBeginSta(pDevice,
+                                       pMgmt,
+                                       (PBYTE)(p802_11Header->abyAddr2),
+                                       (WLAN_MGMT_REASON_CLASS2_NONAUTH),
+                                       &Status
+                                       );
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "dpc: send vMgrDeAuthenBeginSta 3\n");
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "BSSID:%02x-%02x-%02x=%02x-%02x-%02x \n",
+                                p802_11Header->abyAddr3[0],
+                                p802_11Header->abyAddr3[1],
+                                p802_11Header->abyAddr3[2],
+                                p802_11Header->abyAddr3[3],
+                                p802_11Header->abyAddr3[4],
+                                p802_11Header->abyAddr3[5]
+                               );
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "ADDR2:%02x-%02x-%02x=%02x-%02x-%02x \n",
+                                p802_11Header->abyAddr2[0],
+                                p802_11Header->abyAddr2[1],
+                                p802_11Header->abyAddr2[2],
+                                p802_11Header->abyAddr2[3],
+                                p802_11Header->abyAddr2[4],
+                                p802_11Header->abyAddr2[5]
+                               );
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "ADDR1:%02x-%02x-%02x=%02x-%02x-%02x \n",
+                                p802_11Header->abyAddr1[0],
+                                p802_11Header->abyAddr1[1],
+                                p802_11Header->abyAddr1[2],
+                                p802_11Header->abyAddr1[3],
+                                p802_11Header->abyAddr1[4],
+                                p802_11Header->abyAddr1[5]
+                               );
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "dpc: wFrameCtl= %x\n", p802_11Header->wFrameCtl );
+                    return TRUE;
+            }
+        }
+    }
+    return FALSE;
+
+}
+
+static BOOL s_bHandleRxEncryption (
+     PSDevice     pDevice,
+     PBYTE        pbyFrame,
+     unsigned int         FrameSize,
+     PBYTE        pbyRsr,
+     PBYTE       pbyNewRsr,
+     PSKeyItem   * pKeyOut,
+    int *       pbExtIV,
+     PWORD       pwRxTSC15_0,
+     PDWORD      pdwRxTSC47_16
+    )
+{
+    unsigned int            PayloadLen = FrameSize;
+    PBYTE           pbyIV;
+    BYTE            byKeyIdx;
+    PSKeyItem       pKey = NULL;
+    BYTE            byDecMode = KEY_CTL_WEP;
+    PSMgmtObject    pMgmt = &(pDevice->sMgmtObj);
+
 
     *pwRxTSC15_0 = 0;
     *pdwRxTSC47_16 = 0;
 
     pbyIV = pbyFrame + WLAN_HDR_ADDR3_LEN;
-    if ( WLAN_GET_FC_TODS(*(u16 *)pbyFrame) &&
-         WLAN_GET_FC_FROMDS(*(u16 *)pbyFrame) ) {
+    if ( WLAN_GET_FC_TODS(*(PWORD)pbyFrame) &&
+         WLAN_GET_FC_FROMDS(*(PWORD)pbyFrame) ) {
          pbyIV += 6;             // 6 is 802.11 address4
          PayloadLen -= 6;
     }
@@ -764,7 +1184,7 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
             (pMgmt->byCSSPK != KEY_CTL_NONE)) {
             // unicast pkt use pairwise key
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"unicast pkt\n");
-            if (KeybGetKey(&(pDevice->sKey), pDevice->abyBSSID, 0xFFFFFFFF, &pKey) == true) {
+            if (KeybGetKey(&(pDevice->sKey), pDevice->abyBSSID, 0xFFFFFFFF, &pKey) == TRUE) {
                 if (pMgmt->byCSSPK == KEY_CTL_TKIP)
                     byDecMode = KEY_CTL_TKIP;
                 else if (pMgmt->byCSSPK == KEY_CTL_CCMP)
@@ -796,16 +1216,26 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
 
     if (pKey == NULL) {
         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"pKey == NULL\n");
-        return false;
+        if (byDecMode == KEY_CTL_WEP) {
+//            pDevice->s802_11Counter.WEPUndecryptableCount.QuadPart++;
+        } else if (pDevice->bLinkPass == TRUE) {
+//            pDevice->s802_11Counter.DecryptFailureCount.QuadPart++;
+        }
+        return FALSE;
     }
     if (byDecMode != pKey->byCipherSuite) {
+        if (byDecMode == KEY_CTL_WEP) {
+//            pDevice->s802_11Counter.WEPUndecryptableCount.QuadPart++;
+        } else if (pDevice->bLinkPass == TRUE) {
+//            pDevice->s802_11Counter.DecryptFailureCount.QuadPart++;
+        }
         *pKeyOut = NULL;
-        return false;
+        return FALSE;
     }
     if (byDecMode == KEY_CTL_WEP) {
         // handle WEP
         if ((pDevice->byLocalID <= REV_ID_VT3253_A1) ||
-		(((PSKeyTable)(pKey->pvKeyTable))->bSoftWEP == true)) {
+            (((PSKeyTable)(pKey->pvKeyTable))->bSoftWEP == TRUE)) {
             // Software WEP
             // 1. 3253A
             // 2. WEP 256
@@ -825,12 +1255,12 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
         // TKIP/AES
 
         PayloadLen -= (WLAN_HDR_ADDR3_LEN + 8 + 4); // 24 is 802.11 header, 8 is IV&ExtIV, 4 is crc
-        *pdwRxTSC47_16 = cpu_to_le32(*(u32 *)(pbyIV + 4));
-	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ExtIV: %x\n", *pdwRxTSC47_16);
+        *pdwRxTSC47_16 = cpu_to_le32(*(PDWORD)(pbyIV + 4));
+        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ExtIV: %lx\n",*pdwRxTSC47_16);
         if (byDecMode == KEY_CTL_TKIP) {
             *pwRxTSC15_0 = cpu_to_le16(MAKEWORD(*(pbyIV+2), *pbyIV));
         } else {
-            *pwRxTSC15_0 = cpu_to_le16(*(u16 *)pbyIV);
+            *pwRxTSC15_0 = cpu_to_le16(*(PWORD)pbyIV);
         }
         DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"TSC0_15: %x\n", *pwRxTSC15_0);
 
@@ -838,8 +1268,8 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
             (pDevice->byLocalID <= REV_ID_VT3253_A1)) {
             // Software TKIP
             // 1. 3253 A
-            struct ieee80211_hdr *pMACHeader = (struct ieee80211_hdr *) (pbyFrame);
-            TKIPvMixKey(pKey->abyKey, pMACHeader->addr2, *pwRxTSC15_0, *pdwRxTSC47_16, pDevice->abyPRNG);
+            PS802_11Header  pMACHeader = (PS802_11Header) (pbyFrame);
+            TKIPvMixKey(pKey->abyKey, pMACHeader->abyAddr2, *pwRxTSC15_0, *pdwRxTSC47_16, pDevice->abyPRNG);
             rc4_init(&pDevice->SBox, pDevice->abyPRNG, TKIP_KEY_LEN);
             rc4_encrypt(&pDevice->SBox, pbyIV+8, pbyIV+8, PayloadLen);
             if (ETHbIsBufferCrc32Ok(pbyIV+8, PayloadLen)) {
@@ -853,119 +1283,334 @@ static int s_bHandleRxEncryption(struct vnt_private *pDevice, u8 *pbyFrame,
     }// end of TKIP/AES
 
     if ((*(pbyIV+3) & 0x20) != 0)
-        *pbExtIV = true;
-    return true;
+        *pbExtIV = TRUE;
+    return TRUE;
 }
 
-void RXvWorkItem(struct work_struct *work)
+
+static BOOL s_bHostWepRxEncryption (
+     PSDevice     pDevice,
+     PBYTE        pbyFrame,
+     unsigned int         FrameSize,
+     PBYTE        pbyRsr,
+     BOOL         bOnFly,
+     PSKeyItem    pKey,
+     PBYTE       pbyNewRsr,
+    int *       pbExtIV,
+     PWORD       pwRxTSC15_0,
+     PDWORD      pdwRxTSC47_16
+    )
 {
-	struct vnt_private *priv =
-		container_of(work, struct vnt_private, read_work_item);
-	int status;
-	struct vnt_rcb *rcb = NULL;
-	unsigned long flags;
+    PSMgmtObject    pMgmt = &(pDevice->sMgmtObj);
+    unsigned int            PayloadLen = FrameSize;
+    PBYTE           pbyIV;
+    BYTE            byKeyIdx;
+    BYTE            byDecMode = KEY_CTL_WEP;
+    PS802_11Header  pMACHeader;
 
-	if (priv->Flags & fMP_DISCONNECTED)
-		return;
 
-	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->Rx Polling Thread\n");
 
-	spin_lock_irqsave(&priv->lock, flags);
+    *pwRxTSC15_0 = 0;
+    *pdwRxTSC47_16 = 0;
 
-	while ((priv->Flags & fMP_POST_READS) && MP_IS_READY(priv) &&
-			(priv->NumRecvFreeList != 0)) {
-		rcb = priv->FirstRecvFreeList;
+    pbyIV = pbyFrame + WLAN_HDR_ADDR3_LEN;
+    if ( WLAN_GET_FC_TODS(*(PWORD)pbyFrame) &&
+         WLAN_GET_FC_FROMDS(*(PWORD)pbyFrame) ) {
+         pbyIV += 6;             // 6 is 802.11 address4
+         PayloadLen -= 6;
+    }
+    byKeyIdx = (*(pbyIV+3) & 0xc0);
+    byKeyIdx >>= 6;
+    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"\nKeyIdx: %d\n", byKeyIdx);
 
-		priv->NumRecvFreeList--;
 
-		DequeueRCB(priv->FirstRecvFreeList, priv->LastRecvFreeList);
+    if (pMgmt->byCSSGK == KEY_CTL_TKIP)
+        byDecMode = KEY_CTL_TKIP;
+    else if (pMgmt->byCSSGK == KEY_CTL_CCMP)
+        byDecMode = KEY_CTL_CCMP;
 
-		status = PIPEnsBulkInUsbRead(priv, rcb);
-	}
+    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"AES:%d %d %d\n", pMgmt->byCSSPK, pMgmt->byCSSGK, byDecMode);
 
-	priv->bIsRxWorkItemQueued = false;
+    if (byDecMode != pKey->byCipherSuite) {
+        if (byDecMode == KEY_CTL_WEP) {
+//            pDevice->s802_11Counter.WEPUndecryptableCount.QuadPart++;
+        } else if (pDevice->bLinkPass == TRUE) {
+//            pDevice->s802_11Counter.DecryptFailureCount.QuadPart++;
+        }
+        return FALSE;
+    }
 
-	spin_unlock_irqrestore(&priv->lock, flags);
+    if (byDecMode == KEY_CTL_WEP) {
+        // handle WEP
+        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"byDecMode == KEY_CTL_WEP \n");
+        if ((pDevice->byLocalID <= REV_ID_VT3253_A1) ||
+            (((PSKeyTable)(pKey->pvKeyTable))->bSoftWEP == TRUE) ||
+            (bOnFly == FALSE)) {
+            // Software WEP
+            // 1. 3253A
+            // 2. WEP 256
+            // 3. NotOnFly
+
+            PayloadLen -= (WLAN_HDR_ADDR3_LEN + 4 + 4); // 24 is 802.11 header,4 is IV, 4 is crc
+            memcpy(pDevice->abyPRNG, pbyIV, 3);
+            memcpy(pDevice->abyPRNG + 3, pKey->abyKey, pKey->uKeyLength);
+            rc4_init(&pDevice->SBox, pDevice->abyPRNG, pKey->uKeyLength + 3);
+            rc4_encrypt(&pDevice->SBox, pbyIV+4, pbyIV+4, PayloadLen);
+
+            if (ETHbIsBufferCrc32Ok(pbyIV+4, PayloadLen)) {
+                *pbyNewRsr |= NEWRSR_DECRYPTOK;
+            }
+        }
+    } else if ((byDecMode == KEY_CTL_TKIP) ||
+               (byDecMode == KEY_CTL_CCMP)) {
+        // TKIP/AES
+
+        PayloadLen -= (WLAN_HDR_ADDR3_LEN + 8 + 4); // 24 is 802.11 header, 8 is IV&ExtIV, 4 is crc
+        *pdwRxTSC47_16 = cpu_to_le32(*(PDWORD)(pbyIV + 4));
+        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ExtIV: %lx\n",*pdwRxTSC47_16);
+
+        if (byDecMode == KEY_CTL_TKIP) {
+            *pwRxTSC15_0 = cpu_to_le16(MAKEWORD(*(pbyIV+2), *pbyIV));
+        } else {
+            *pwRxTSC15_0 = cpu_to_le16(*(PWORD)pbyIV);
+        }
+        DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"TSC0_15: %x\n", *pwRxTSC15_0);
+
+        if (byDecMode == KEY_CTL_TKIP) {
+
+            if ((pDevice->byLocalID <= REV_ID_VT3253_A1) || (bOnFly == FALSE)) {
+                // Software TKIP
+                // 1. 3253 A
+                // 2. NotOnFly
+                DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"soft KEY_CTL_TKIP \n");
+                pMACHeader = (PS802_11Header) (pbyFrame);
+                TKIPvMixKey(pKey->abyKey, pMACHeader->abyAddr2, *pwRxTSC15_0, *pdwRxTSC47_16, pDevice->abyPRNG);
+                rc4_init(&pDevice->SBox, pDevice->abyPRNG, TKIP_KEY_LEN);
+                rc4_encrypt(&pDevice->SBox, pbyIV+8, pbyIV+8, PayloadLen);
+                if (ETHbIsBufferCrc32Ok(pbyIV+8, PayloadLen)) {
+                    *pbyNewRsr |= NEWRSR_DECRYPTOK;
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ICV OK!\n");
+                } else {
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"ICV FAIL!!!\n");
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"PayloadLen = %d\n", PayloadLen);
+                }
+            }
+        }
+
+        if (byDecMode == KEY_CTL_CCMP) {
+            if (bOnFly == FALSE) {
+                // Software CCMP
+                // NotOnFly
+                DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"soft KEY_CTL_CCMP\n");
+                if (AESbGenCCMP(pKey->abyKey, pbyFrame, FrameSize)) {
+                    *pbyNewRsr |= NEWRSR_DECRYPTOK;
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"CCMP MIC compare OK!\n");
+                } else {
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"CCMP MIC fail!\n");
+                }
+            }
+        }
+
+    }// end of TKIP/AES
+
+    if ((*(pbyIV+3) & 0x20) != 0)
+        *pbExtIV = TRUE;
+    return TRUE;
 }
 
-void RXvFreeRCB(struct vnt_rcb *rcb, int re_alloc_skb)
+
+
+static BOOL s_bAPModeRxData (
+     PSDevice pDevice,
+     struct sk_buff *skb,
+     unsigned int     FrameSize,
+     unsigned int     cbHeaderOffset,
+     signed int      iSANodeIndex,
+     signed int      iDANodeIndex
+    )
+
 {
-	struct vnt_private *priv = rcb->pDevice;
+    PSMgmtObject        pMgmt = &(pDevice->sMgmtObj);
+    BOOL                bRelayAndForward = FALSE;
+    BOOL                bRelayOnly = FALSE;
+    BYTE                byMask[8] = {1, 2, 4, 8, 0x10, 0x20, 0x40, 0x80};
+    WORD                wAID;
 
-	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->RXvFreeRCB\n");
 
-	if (re_alloc_skb == false) {
-		kfree_skb(rcb->skb);
-		re_alloc_skb = true;
-	}
+    struct sk_buff* skbcpy = NULL;
 
-	if (re_alloc_skb == true) {
-		rcb->skb = netdev_alloc_skb(priv->dev, priv->rx_buf_sz);
-		/* TODO error handling */
-		if (!rcb->skb) {
-			DBG_PRT(MSG_LEVEL_ERR, KERN_ERR
-				" Failed to re-alloc rx skb\n");
-		}
-	}
+    if (FrameSize > CB_MAX_BUF_SIZE)
+        return FALSE;
+    // check DA
+    if (is_multicast_ether_addr((PBYTE)(skb->data+cbHeaderOffset))) {
+       if (pMgmt->sNodeDBTable[0].bPSEnable) {
 
-	/* Insert the RCB back in the Recv free list */
-	EnqueueRCB(priv->FirstRecvFreeList, priv->LastRecvFreeList, rcb);
-	priv->NumRecvFreeList++;
+           skbcpy = dev_alloc_skb((int)pDevice->rx_buf_sz);
 
-	if ((priv->Flags & fMP_POST_READS) && MP_IS_READY(priv) &&
-			(priv->bIsRxWorkItemQueued == false)) {
-		priv->bIsRxWorkItemQueued = true;
-		schedule_work(&priv->read_work_item);
-	}
+        // if any node in PS mode, buffer packet until DTIM.
+           if (skbcpy == NULL) {
+               DBG_PRT(MSG_LEVEL_NOTICE, KERN_INFO "relay multicast no skb available \n");
+           }
+           else {
+               skbcpy->dev = pDevice->dev;
+               skbcpy->len = FrameSize;
+               memcpy(skbcpy->data, skb->data+cbHeaderOffset, FrameSize);
+               skb_queue_tail(&(pMgmt->sNodeDBTable[0].sTxPSQueue), skbcpy);
+               pMgmt->sNodeDBTable[0].wEnQueueCnt++;
+               // set tx map
+               pMgmt->abyPSTxMap[0] |= byMask[0];
+           }
+       }
+       else {
+           bRelayAndForward = TRUE;
+       }
+    }
+    else {
+        // check if relay
+        if (BSSbIsSTAInNodeDB(pDevice, (PBYTE)(skb->data+cbHeaderOffset), &iDANodeIndex)) {
+            if (pMgmt->sNodeDBTable[iDANodeIndex].eNodeState >= NODE_ASSOC) {
+                if (pMgmt->sNodeDBTable[iDANodeIndex].bPSEnable) {
+                    // queue this skb until next PS tx, and then release.
 
-	DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"<----RXFreeRCB %d %d\n",
-			priv->NumRecvFreeList, priv->NumRecvMngList);
+	                skb->data += cbHeaderOffset;
+	                skb->tail += cbHeaderOffset;
+                    skb_put(skb, FrameSize);
+                    skb_queue_tail(&pMgmt->sNodeDBTable[iDANodeIndex].sTxPSQueue, skb);
+
+                    pMgmt->sNodeDBTable[iDANodeIndex].wEnQueueCnt++;
+                    wAID = pMgmt->sNodeDBTable[iDANodeIndex].wAID;
+                    pMgmt->abyPSTxMap[wAID >> 3] |=  byMask[wAID & 7];
+                    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO "relay: index= %d, pMgmt->abyPSTxMap[%d]= %d\n",
+                               iDANodeIndex, (wAID >> 3), pMgmt->abyPSTxMap[wAID >> 3]);
+                    return TRUE;
+                }
+                else {
+                    bRelayOnly = TRUE;
+                }
+            }
+        }
+    }
+
+    if (bRelayOnly || bRelayAndForward) {
+        // relay this packet right now
+        if (bRelayAndForward)
+            iDANodeIndex = 0;
+
+        if ((pDevice->uAssocCount > 1) && (iDANodeIndex >= 0)) {
+		bRelayPacketSend(pDevice, (PBYTE) (skb->data + cbHeaderOffset),
+				 FrameSize, (unsigned int) iDANodeIndex);
+        }
+
+        if (bRelayOnly)
+            return FALSE;
+    }
+    // none associate, don't forward
+    if (pDevice->uAssocCount == 0)
+        return FALSE;
+
+    return TRUE;
 }
 
-void RXvMngWorkItem(struct work_struct *work)
-{
-	struct vnt_private *pDevice =
-		container_of(work, struct vnt_private, rx_mng_work_item);
-	struct vnt_rcb *pRCB = NULL;
-	struct vnt_rx_mgmt *pRxPacket;
-	int bReAllocSkb = false;
-	unsigned long flags;
 
-	if (pDevice->Flags & fMP_DISCONNECTED)
-		return;
+
+
+void RXvWorkItem(void *Context)
+{
+    PSDevice pDevice = (PSDevice) Context;
+    int ntStatus;
+    PRCB            pRCB=NULL;
+
+    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->Rx Polling Thread\n");
+    spin_lock_irq(&pDevice->lock);
+
+    while ((pDevice->Flags & fMP_POST_READS) &&
+            MP_IS_READY(pDevice) &&
+            (pDevice->NumRecvFreeList != 0) ) {
+        pRCB = pDevice->FirstRecvFreeList;
+        pDevice->NumRecvFreeList--;
+        ASSERT(pRCB);// cannot be NULL
+        DequeueRCB(pDevice->FirstRecvFreeList, pDevice->LastRecvFreeList);
+        ntStatus = PIPEnsBulkInUsbRead(pDevice, pRCB);
+    }
+    pDevice->bIsRxWorkItemQueued = FALSE;
+    spin_unlock_irq(&pDevice->lock);
+
+}
+
+
+void
+RXvFreeRCB(
+     PRCB pRCB,
+     BOOL bReAllocSkb
+    )
+{
+    PSDevice pDevice = (PSDevice)pRCB->pDevice;
+
+
+    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->RXvFreeRCB\n");
+
+    ASSERT(!pRCB->Ref);     // should be 0
+    ASSERT(pRCB->pDevice);  // shouldn't be NULL
+
+    if (bReAllocSkb == TRUE) {
+        pRCB->skb = dev_alloc_skb((int)pDevice->rx_buf_sz);
+        // todo error handling
+        if (pRCB->skb == NULL) {
+            DBG_PRT(MSG_LEVEL_ERR,KERN_ERR" Failed to re-alloc rx skb\n");
+        }else {
+            pRCB->skb->dev = pDevice->dev;
+        }
+    }
+    //
+    // Insert the RCB back in the Recv free list
+    //
+    EnqueueRCB(pDevice->FirstRecvFreeList, pDevice->LastRecvFreeList, pRCB);
+    pDevice->NumRecvFreeList++;
+
+
+    if ((pDevice->Flags & fMP_POST_READS) && MP_IS_READY(pDevice) &&
+        (pDevice->bIsRxWorkItemQueued == FALSE) ) {
+
+        pDevice->bIsRxWorkItemQueued = TRUE;
+        tasklet_schedule(&pDevice->ReadWorkItem);
+    }
+    DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"<----RXFreeRCB %d %d\n",pDevice->NumRecvFreeList, pDevice->NumRecvMngList);
+}
+
+
+void RXvMngWorkItem(void *Context)
+{
+    PSDevice pDevice = (PSDevice) Context;
+    PRCB            pRCB=NULL;
+    PSRxMgmtPacket  pRxPacket;
+    BOOL            bReAllocSkb = FALSE;
 
     DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"---->Rx Mng Thread\n");
 
+    spin_lock_irq(&pDevice->lock);
     while (pDevice->NumRecvMngList!=0)
     {
-	spin_lock_irqsave(&pDevice->lock, flags);
-
         pRCB = pDevice->FirstRecvMngList;
         pDevice->NumRecvMngList--;
         DequeueRCB(pDevice->FirstRecvMngList, pDevice->LastRecvMngList);
-
-	spin_unlock_irqrestore(&pDevice->lock, flags);
-
         if(!pRCB){
             break;
         }
+        ASSERT(pRCB);// cannot be NULL
         pRxPacket = &(pRCB->sMngPacket);
-	vMgrRxManagePacket(pDevice, &pDevice->vnt_mgmt, pRxPacket);
+	vMgrRxManagePacket((void *) pDevice, &(pDevice->sMgmtObj), pRxPacket);
         pRCB->Ref--;
-	if (pRCB->Ref == 0) {
-		DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"RxvFreeMng %d %d\n",
-			pDevice->NumRecvFreeList, pDevice->NumRecvMngList);
-
-		spin_lock_irqsave(&pDevice->lock, flags);
-
-		RXvFreeRCB(pRCB, bReAllocSkb);
-
-		spin_unlock_irqrestore(&pDevice->lock, flags);
-	} else {
+        if(pRCB->Ref == 0) {
+            DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"RxvFreeMng %d %d\n",pDevice->NumRecvFreeList, pDevice->NumRecvMngList);
+            RXvFreeRCB(pRCB, bReAllocSkb);
+        } else {
             DBG_PRT(MSG_LEVEL_DEBUG, KERN_INFO"Rx Mng Only we have the right to free RCB\n");
         }
     }
 
-	pDevice->bIsRxMngWorkItemQueued = false;
+	pDevice->bIsRxMngWorkItemQueued = FALSE;
+	spin_unlock_irq(&pDevice->lock);
+
 }
+
 

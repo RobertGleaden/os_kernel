@@ -34,6 +34,7 @@
 #include <linux/ipc.h>
 #include <linux/utsname.h>
 #include <linux/file.h>
+#include <linux/init.h>
 #include <linux/personality.h>
 
 #include <asm/uaccess.h>
@@ -106,11 +107,11 @@ long ppc64_personality(unsigned long personality)
 	long ret;
 
 	if (personality(current->personality) == PER_LINUX32
-	    && personality(personality) == PER_LINUX)
-		personality = (personality & ~PER_MASK) | PER_LINUX32;
+	    && personality == PER_LINUX)
+		personality = PER_LINUX32;
 	ret = sys_personality(personality);
-	if (personality(ret) == PER_LINUX32)
-		ret = (ret & ~PER_MASK) | PER_LINUX;
+	if (ret == PER_LINUX32)
+		ret = PER_LINUX;
 	return ret;
 }
 #endif

@@ -108,11 +108,11 @@ int ncp_symlink(struct inode *dir, struct dentry *dentry, const char *symname) {
 	char *rawlink;
 	int length, err, i, outlen;
 	int kludge;
-	umode_t mode;
+	int mode;
 	__le32 attr;
 	unsigned int hdr;
 
-	ncp_dbg(1, "dir=%p, dentry=%p, symname=%s\n", dir, dentry, symname);
+	DPRINTK("ncp_symlink(dir=%p,dentry=%p,symname=%s)\n",dir,dentry,symname);
 
 	if (ncp_is_nfs_extras(NCP_SERVER(dir), NCP_FINFO(dir)->volNumber))
 		kludge = 0;

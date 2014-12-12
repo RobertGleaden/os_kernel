@@ -6,7 +6,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <errno.h>
-#include <os.h>
+#include "os.h"
+#include "user.h"
 
 struct dog_data {
 	int stdin;

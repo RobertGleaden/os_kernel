@@ -23,12 +23,8 @@ void __iomem *pci_iomap(struct pci_dev *dev, int bar, unsigned long maxlen)
 	if (!len || !start)
 		return NULL;
 
-	if ((flags & IORESOURCE_IO) || (flags & IORESOURCE_MEM)) {
-		if (flags & IORESOURCE_CACHEABLE && !(flags & IORESOURCE_IO))
-			return ioremap(start, len);
-		else
-			return ioremap_nocache(start, len);
-	}
+	if ((flags & IORESOURCE_IO) || (flags & IORESOURCE_MEM))
+		return (void __iomem *) start;
 
 	return NULL;
 }

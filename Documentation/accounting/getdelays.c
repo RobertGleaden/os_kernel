@@ -51,6 +51,7 @@ int dbg;
 int print_delays;
 int print_io_accounting;
 int print_task_context_switch_counts;
+__u64 stime, utime;
 
 #define PRINTF(fmt, arg...) {			\
 	    if (dbg) {				\
@@ -97,9 +98,10 @@ static int create_nl_socket(int protocol)
 	if (rcvbufsz)
 		if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF,
 				&rcvbufsz, sizeof(rcvbufsz)) < 0) {
-			fprintf(stderr, "Unable to set socket rcv buf size to %d\n",
+			fprintf(stderr, "Unable to set socket rcv buf size "
+					"to %d\n",
 				rcvbufsz);
-			goto error;
+			return -1;
 		}
 
 	memset(&local, 0, sizeof(local));
@@ -272,7 +274,7 @@ int main(int argc, char *argv[])
 	char *logfile = NULL;
 	int loop = 0;
 	int containerset = 0;
-	char *containerpath = NULL;
+	char containerpath[1024];
 	int cfd = 0;
 	int forking = 0;
 	sigset_t sigset;
@@ -299,7 +301,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'C':
 			containerset = 1;
-			containerpath = optarg;
+			strncpy(containerpath, optarg, strlen(optarg) + 1);
 			break;
 		case 'w':
 			logfile = strdup(optarg);
@@ -314,7 +316,6 @@ int main(int argc, char *argv[])
 			break;
 		case 'm':
 			strncpy(cpumask, optarg, sizeof(cpumask));
-			cpumask[sizeof(cpumask) - 1] = '\0';
 			maskset = 1;
 			printf("cpumask %s maskset %d\n", cpumask, maskset);
 			break;

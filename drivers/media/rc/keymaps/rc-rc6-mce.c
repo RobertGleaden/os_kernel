@@ -13,7 +13,6 @@
  */
 
 #include <media/rc-map.h>
-#include <linux/module.h>
 
 static struct rc_map_table rc6_mce[] = {
 
@@ -97,7 +96,7 @@ static struct rc_map_list rc6_mce_map = {
 	.map = {
 		.scan    = rc6_mce,
 		.size    = ARRAY_SIZE(rc6_mce),
-		.rc_type = RC_TYPE_RC6_MCE,
+		.rc_type = RC_TYPE_RC6,
 		.name    = RC_MAP_RC6_MCE,
 	}
 };

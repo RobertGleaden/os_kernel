@@ -1,8 +1,5 @@
 /*
- * config.c
- *
- * Helper functions for parsing config items.
- * Originally copied from GIT source.
+ * GIT - The information manager from hell
  *
  * Copyright (C) Linus Torvalds, 2005
  * Copyright (C) Johannes Schindelin, 2005
@@ -11,7 +8,6 @@
 #include "util.h"
 #include "cache.h"
 #include "exec_cmd.h"
-#include "util/hist.h"  /* perf_hist_config */
 
 #define MAXNAME (256)
 
@@ -121,7 +117,7 @@ static char *parse_value(void)
 
 static inline int iskeychar(int c)
 {
-	return isalnum(c) || c == '-' || c == '_';
+	return isalnum(c) || c == '-';
 }
 
 static int get_value(config_fn_t fn, void *data, char *name, unsigned int len)
@@ -343,23 +339,18 @@ const char *perf_config_dirname(const char *name, const char *value)
 	return value;
 }
 
-static int perf_default_core_config(const char *var __maybe_unused,
-				    const char *value __maybe_unused)
+static int perf_default_core_config(const char *var __used, const char *value __used)
 {
-	/* Add other config variables here. */
+	/* Add other config variables here and to Documentation/config.txt. */
 	return 0;
 }
 
-int perf_default_config(const char *var, const char *value,
-			void *dummy __maybe_unused)
+int perf_default_config(const char *var, const char *value, void *dummy __used)
 {
 	if (!prefixcmp(var, "core."))
 		return perf_default_core_config(var, value);
 
-	if (!prefixcmp(var, "hist."))
-		return perf_hist_config(var, value);
-
-	/* Add other config variables here. */
+	/* Add other config variables here and to Documentation/config.txt. */
 	return 0;
 }
 

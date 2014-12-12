@@ -19,6 +19,8 @@
 
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/version.h>
+#include <generated/utsrelease.h>
 #include <linux/utsname.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -39,7 +41,10 @@
 #include <scsi/libfc.h>
 
 #include <target/target_core_base.h>
-#include <target/target_core_fabric.h>
+#include <target/target_core_transport.h>
+#include <target/target_core_fabric_ops.h>
+#include <target/target_core_device.h>
+#include <target/target_core_tpg.h>
 #include <target/target_core_configfs.h>
 #include <target/configfs_macros.h>
 
@@ -51,14 +56,13 @@ static void ft_sess_delete_all(struct ft_tport *);
  * Lookup or allocate target local port.
  * Caller holds ft_lport_lock.
  */
-static struct ft_tport *ft_tport_get(struct fc_lport *lport)
+static struct ft_tport *ft_tport_create(struct fc_lport *lport)
 {
 	struct ft_tpg *tpg;
 	struct ft_tport *tport;
 	int i;
 
-	tport = rcu_dereference_protected(lport->prov[FC_TYPE_FCP],
-					  lockdep_is_held(&ft_lport_lock));
+	tport = rcu_dereference(lport->prov[FC_TYPE_FCP]);
 	if (tport && tport->tpg)
 		return tport;
 
@@ -68,7 +72,6 @@ static struct ft_tport *ft_tport_get(struct fc_lport *lport)
 
 	if (tport) {
 		tport->tpg = tpg;
-		tpg->tport = tport;
 		return tport;
 	}
 
@@ -84,6 +87,16 @@ static struct ft_tport *ft_tport_get(struct fc_lport *lport)
 
 	rcu_assign_pointer(lport->prov[FC_TYPE_FCP], tport);
 	return tport;
+}
+
+/*
+ * Free tport via RCU.
+ */
+static void ft_tport_rcu_free(struct rcu_head *rcu)
+{
+	struct ft_tport *tport = container_of(rcu, struct ft_tport, rcu);
+
+	kfree(tport);
 }
 
 /*
@@ -105,7 +118,7 @@ static void ft_tport_delete(struct ft_tport *tport)
 		tpg->tport = NULL;
 		tport->tpg = NULL;
 	}
-	kfree_rcu(tport, rcu);
+	call_rcu(&tport->rcu, ft_tport_rcu_free);
 }
 
 /*
@@ -115,7 +128,7 @@ static void ft_tport_delete(struct ft_tport *tport)
 void ft_lport_add(struct fc_lport *lport, void *arg)
 {
 	mutex_lock(&ft_lport_lock);
-	ft_tport_get(lport);
+	ft_tport_create(lport);
 	mutex_unlock(&ft_lport_lock);
 }
 
@@ -170,6 +183,7 @@ static struct ft_sess *ft_sess_get(struct fc_lport *lport, u32 port_id)
 {
 	struct ft_tport *tport;
 	struct hlist_head *head;
+	struct hlist_node *pos;
 	struct ft_sess *sess;
 
 	rcu_read_lock();
@@ -178,7 +192,7 @@ static struct ft_sess *ft_sess_get(struct fc_lport *lport, u32 port_id)
 		goto out;
 
 	head = &tport->hash[ft_sess_hash(port_id)];
-	hlist_for_each_entry_rcu(sess, head, hash) {
+	hlist_for_each_entry_rcu(sess, pos, head, hash) {
 		if (sess->port_id == port_id) {
 			kref_get(&sess->kref);
 			rcu_read_unlock();
@@ -201,9 +215,10 @@ static struct ft_sess *ft_sess_create(struct ft_tport *tport, u32 port_id,
 {
 	struct ft_sess *sess;
 	struct hlist_head *head;
+	struct hlist_node *pos;
 
 	head = &tport->hash[ft_sess_hash(port_id)];
-	hlist_for_each_entry_rcu(sess, head, hash)
+	hlist_for_each_entry_rcu(sess, pos, head, hash)
 		if (sess->port_id == port_id)
 			return sess;
 
@@ -211,9 +226,7 @@ static struct ft_sess *ft_sess_create(struct ft_tport *tport, u32 port_id,
 	if (!sess)
 		return NULL;
 
-	sess->se_sess = transport_init_session_tags(TCM_FC_DEFAULT_TAGS,
-						    sizeof(struct ft_cmd),
-						    TARGET_PROT_NORMAL);
+	sess->se_sess = transport_init_session();
 	if (IS_ERR(sess->se_sess)) {
 		kfree(sess);
 		return NULL;
@@ -254,10 +267,11 @@ static void ft_sess_unhash(struct ft_sess *sess)
 static struct ft_sess *ft_sess_delete(struct ft_tport *tport, u32 port_id)
 {
 	struct hlist_head *head;
+	struct hlist_node *pos;
 	struct ft_sess *sess;
 
 	head = &tport->hash[ft_sess_hash(port_id)];
-	hlist_for_each_entry_rcu(sess, head, hash) {
+	hlist_for_each_entry_rcu(sess, pos, head, hash) {
 		if (sess->port_id == port_id) {
 			ft_sess_unhash(sess);
 			return sess;
@@ -273,11 +287,12 @@ static struct ft_sess *ft_sess_delete(struct ft_tport *tport, u32 port_id)
 static void ft_sess_delete_all(struct ft_tport *tport)
 {
 	struct hlist_head *head;
+	struct hlist_node *pos;
 	struct ft_sess *sess;
 
 	for (head = tport->hash;
 	     head < &tport->hash[FT_SESS_HASH_SIZE]; head++) {
-		hlist_for_each_entry_rcu(sess, head, hash) {
+		hlist_for_each_entry_rcu(sess, pos, head, hash) {
 			ft_sess_unhash(sess);
 			transport_deregister_session_configfs(sess->se_sess);
 			ft_sess_put(sess);	/* release from table */
@@ -308,9 +323,11 @@ int ft_sess_shutdown(struct se_session *se_sess)
 void ft_sess_close(struct se_session *se_sess)
 {
 	struct ft_sess *sess = se_sess->fabric_sess_ptr;
+	struct fc_lport *lport;
 	u32 port_id;
 
 	mutex_lock(&ft_lport_lock);
+	lport = sess->tport->lport;
 	port_id = sess->port_id;
 	if (port_id == -1) {
 		mutex_unlock(&ft_lport_lock);
@@ -323,6 +340,20 @@ void ft_sess_close(struct se_session *se_sess)
 	ft_sess_put(sess);
 	/* XXX Send LOGO or PRLO */
 	synchronize_rcu();		/* let transport deregister happen */
+}
+
+void ft_sess_stop(struct se_session *se_sess, int sess_sleep, int conn_sleep)
+{
+	struct ft_sess *sess = se_sess->fabric_sess_ptr;
+
+	pr_debug("port_id %x\n", sess->port_id);
+}
+
+int ft_sess_logged_in(struct se_session *se_sess)
+{
+	struct ft_sess *sess = se_sess->fabric_sess_ptr;
+
+	return sess->port_id != -1;
 }
 
 u32 ft_sess_get_index(struct se_session *se_sess)
@@ -340,6 +371,11 @@ u32 ft_sess_get_port_name(struct se_session *se_sess,
 	return ft_format_wwn(buf, len, sess->port_name);
 }
 
+void ft_sess_set_erl0(struct se_session *se_sess)
+{
+	/* XXX TBD called when out of memory */
+}
+
 /*
  * libfc ops involving sessions.
  */
@@ -352,13 +388,13 @@ static int ft_prli_locked(struct fc_rport_priv *rdata, u32 spp_len,
 	struct ft_node_acl *acl;
 	u32 fcp_parm;
 
-	tport = ft_tport_get(rdata->local_port);
+	tport = ft_tport_create(rdata->local_port);
 	if (!tport)
-		goto not_target;	/* not a target for this local port */
+		return 0;	/* not a target for this local port */
 
 	acl = ft_acl_get(tport->tpg, rdata);
 	if (!acl)
-		goto not_target;	/* no target for this remote */
+		return 0;
 
 	if (!rspp)
 		goto fill;
@@ -395,18 +431,12 @@ static int ft_prli_locked(struct fc_rport_priv *rdata, u32 spp_len,
 
 	/*
 	 * OR in our service parameters with other provider (initiator), if any.
+	 * TBD XXX - indicate RETRY capability?
 	 */
 fill:
 	fcp_parm = ntohl(spp->spp_params);
-	fcp_parm &= ~FCP_SPPF_RETRY;
 	spp->spp_params = htonl(fcp_parm | FCP_SPPF_TARG_FCN);
 	return FC_SPP_RESP_ACK;
-
-not_target:
-	fcp_parm = ntohl(spp->spp_params);
-	fcp_parm &= ~FCP_SPPF_TARG_FCN;
-	spp->spp_params = htonl(fcp_parm);
-	return 0;
 }
 
 /**
@@ -431,12 +461,19 @@ static int ft_prli(struct fc_rport_priv *rdata, u32 spp_len,
 	return ret;
 }
 
+static void ft_sess_rcu_free(struct rcu_head *rcu)
+{
+	struct ft_sess *sess = container_of(rcu, struct ft_sess, rcu);
+
+	transport_deregister_session(sess->se_sess);
+	kfree(sess);
+}
+
 static void ft_sess_free(struct kref *kref)
 {
 	struct ft_sess *sess = container_of(kref, struct ft_sess, kref);
 
-	transport_deregister_session(sess->se_sess);
-	kfree_rcu(sess, rcu);
+	call_rcu(&sess->rcu, ft_sess_rcu_free);
 }
 
 void ft_sess_put(struct ft_sess *sess)
@@ -453,9 +490,7 @@ static void ft_prlo(struct fc_rport_priv *rdata)
 	struct ft_tport *tport;
 
 	mutex_lock(&ft_lport_lock);
-	tport = rcu_dereference_protected(rdata->local_port->prov[FC_TYPE_FCP],
-					  lockdep_is_held(&ft_lport_lock));
-
+	tport = rcu_dereference(rdata->local_port->prov[FC_TYPE_FCP]);
 	if (!tport) {
 		mutex_unlock(&ft_lport_lock);
 		return;

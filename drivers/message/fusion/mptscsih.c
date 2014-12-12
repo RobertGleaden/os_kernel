@@ -792,7 +792,6 @@ mptscsih_io_done(MPT_ADAPTER *ioc, MPT_FRAME_HDR *mf, MPT_FRAME_HDR *mr)
 			 * than an unsolicited DID_ABORT.
 			 */
 			sc->result = DID_RESET << 16;
-			break;
 
 		case MPI_IOCSTATUS_SCSI_EXT_TERMINATED:		/* 0x004C */
 			if (ioc->bus_type == FC)
@@ -831,8 +830,7 @@ mptscsih_io_done(MPT_ADAPTER *ioc, MPT_FRAME_HDR *mf, MPT_FRAME_HDR *mr)
 					if ((pScsiReq->CDB[0] == READ_6  && ((pScsiReq->CDB[1] & 0x02) == 0)) ||
 					    pScsiReq->CDB[0] == READ_10 ||
 					    pScsiReq->CDB[0] == READ_12 ||
-						(pScsiReq->CDB[0] == READ_16 &&
-						((pScsiReq->CDB[1] & 0x02) == 0)) ||
+					    pScsiReq->CDB[0] == READ_16 ||
 					    pScsiReq->CDB[0] == VERIFY  ||
 					    pScsiReq->CDB[0] == VERIFY_16) {
 						if (scsi_bufflen(sc) !=
@@ -1026,7 +1024,7 @@ out:
  *
  *	Must be called while new I/Os are being queued.
  */
-void
+static void
 mptscsih_flush_running_cmds(MPT_SCSI_HOST *hd)
 {
 	MPT_ADAPTER *ioc = hd->ioc;
@@ -1057,7 +1055,6 @@ mptscsih_flush_running_cmds(MPT_SCSI_HOST *hd)
 		sc->scsi_done(sc);
 	}
 }
-EXPORT_SYMBOL(mptscsih_flush_running_cmds);
 
 /*
  *	mptscsih_search_running_cmds - Delete any commands associated
@@ -1284,17 +1281,101 @@ mptscsih_info(struct Scsi_Host *SChost)
 	return h->info_kbuf;
 }
 
-int mptscsih_show_info(struct seq_file *m, struct Scsi_Host *host)
+struct info_str {
+	char *buffer;
+	int   length;
+	int   offset;
+	int   pos;
+};
+
+static void
+mptscsih_copy_mem_info(struct info_str *info, char *data, int len)
+{
+	if (info->pos + len > info->length)
+		len = info->length - info->pos;
+
+	if (info->pos + len < info->offset) {
+		info->pos += len;
+		return;
+	}
+
+	if (info->pos < info->offset) {
+	        data += (info->offset - info->pos);
+	        len  -= (info->offset - info->pos);
+	}
+
+	if (len > 0) {
+                memcpy(info->buffer + info->pos, data, len);
+                info->pos += len;
+	}
+}
+
+static int
+mptscsih_copy_info(struct info_str *info, char *fmt, ...)
+{
+	va_list args;
+	char buf[81];
+	int len;
+
+	va_start(args, fmt);
+	len = vsprintf(buf, fmt, args);
+	va_end(args);
+
+	mptscsih_copy_mem_info(info, buf, len);
+	return len;
+}
+
+static int
+mptscsih_host_info(MPT_ADAPTER *ioc, char *pbuf, off_t offset, int len)
+{
+	struct info_str info;
+
+	info.buffer	= pbuf;
+	info.length	= len;
+	info.offset	= offset;
+	info.pos	= 0;
+
+	mptscsih_copy_info(&info, "%s: %s, ", ioc->name, ioc->prod_name);
+	mptscsih_copy_info(&info, "%s%08xh, ", MPT_FW_REV_MAGIC_ID_STRING, ioc->facts.FWVersion.Word);
+	mptscsih_copy_info(&info, "Ports=%d, ", ioc->facts.NumberOfPorts);
+	mptscsih_copy_info(&info, "MaxQ=%d\n", ioc->req_depth);
+
+	return ((info.pos > info.offset) ? info.pos - info.offset : 0);
+}
+
+/*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
+/**
+ *	mptscsih_proc_info - Return information about MPT adapter
+ * 	@host:   scsi host struct
+ * 	@buffer: if write, user data; if read, buffer for user
+ *	@start: returns the buffer address
+ * 	@offset: if write, 0; if read, the current offset into the buffer from
+ * 		 the previous read.
+ * 	@length: if write, return length;
+ *	@func:   write = 1; read = 0
+ *
+ *	(linux scsi_host_template.info routine)
+ */
+int
+mptscsih_proc_info(struct Scsi_Host *host, char *buffer, char **start, off_t offset,
+			int length, int func)
 {
 	MPT_SCSI_HOST	*hd = shost_priv(host);
 	MPT_ADAPTER	*ioc = hd->ioc;
+	int size = 0;
 
-	seq_printf(m, "%s: %s, ", ioc->name, ioc->prod_name);
-	seq_printf(m, "%s%08xh, ", MPT_FW_REV_MAGIC_ID_STRING, ioc->facts.FWVersion.Word);
-	seq_printf(m, "Ports=%d, ", ioc->facts.NumberOfPorts);
-	seq_printf(m, "MaxQ=%d\n", ioc->req_depth);
+	if (func) {
+		/*
+		 * write is not supported
+		 */
+	} else {
+		if (start)
+			*start = buffer;
 
-	return 0;
+		size = mptscsih_host_info(ioc, buffer, offset, length);
+	}
+
+	return size;
 }
 
 /*=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=*/
@@ -1304,6 +1385,7 @@ int mptscsih_show_info(struct seq_file *m, struct Scsi_Host *host)
 /**
  *	mptscsih_qcmd - Primary Fusion MPT SCSI initiator IO start routine.
  *	@SCpnt: Pointer to scsi_cmnd structure
+ *	@done: Pointer SCSI mid-layer IO completion function
  *
  *	(linux scsi_host_template.queuecommand routine)
  *	This is the primary SCSI IO start routine.  Create a MPI SCSIIORequest
@@ -1312,7 +1394,7 @@ int mptscsih_show_info(struct seq_file *m, struct Scsi_Host *host)
  *	Returns 0. (rtn value discarded by linux scsi mid-layer)
  */
 int
-mptscsih_qcmd(struct scsi_cmnd *SCpnt)
+mptscsih_qcmd(struct scsi_cmnd *SCpnt, void (*done)(struct scsi_cmnd *))
 {
 	MPT_SCSI_HOST		*hd;
 	MPT_FRAME_HDR		*mf;
@@ -1328,9 +1410,10 @@ mptscsih_qcmd(struct scsi_cmnd *SCpnt)
 
 	hd = shost_priv(SCpnt->device->host);
 	ioc = hd->ioc;
+	SCpnt->scsi_done = done;
 
-	dmfprintk(ioc, printk(MYIOC_s_DEBUG_FMT "qcmd: SCpnt=%p\n",
-		ioc->name, SCpnt));
+	dmfprintk(ioc, printk(MYIOC_s_DEBUG_FMT "qcmd: SCpnt=%p, done()=%p\n",
+		ioc->name, SCpnt, done));
 
 	if (ioc->taskmgmt_quiesce_io)
 		return SCSI_MLQUEUE_HOST_BUSY;
@@ -1546,13 +1629,7 @@ mptscsih_IssueTaskMgmt(MPT_SCSI_HOST *hd, u8 type, u8 channel, u8 id, int lun,
 		return 0;
 	}
 
-	/* DOORBELL ACTIVE check is not required if
-	*  MPI_IOCFACTS_CAPABILITY_HIGH_PRI_Q is supported.
-	*/
-
-	if (!((ioc->facts.IOCCapabilities & MPI_IOCFACTS_CAPABILITY_HIGH_PRI_Q)
-		 && (ioc->facts.MsgVersion >= MPI_VERSION_01_05)) &&
-		(ioc_raw_state & MPI_DOORBELL_ACTIVE)) {
+	if (ioc_raw_state & MPI_DOORBELL_ACTIVE) {
 		printk(MYIOC_s_WARN_FMT
 			"TaskMgmt type=%x: ioc_state: "
 			"DOORBELL_ACTIVE (0x%x)!\n",
@@ -1651,9 +1728,7 @@ mptscsih_IssueTaskMgmt(MPT_SCSI_HOST *hd, u8 type, u8 channel, u8 id, int lun,
 		printk(MYIOC_s_WARN_FMT
 		       "Issuing Reset from %s!! doorbell=0x%08x\n",
 		       ioc->name, __func__, mpt_GetIocState(ioc, 0));
-		retval = (ioc->bus_type == SAS) ?
-			mpt_HardResetHandler(ioc, CAN_SLEEP) :
-			mpt_Soft_Hard_ResetHandler(ioc, CAN_SLEEP);
+		retval = mpt_Soft_Hard_ResetHandler(ioc, CAN_SLEEP);
 		mpt_free_msg_frame(ioc, mf);
 	}
 
@@ -3262,7 +3337,7 @@ EXPORT_SYMBOL(mptscsih_shutdown);
 EXPORT_SYMBOL(mptscsih_suspend);
 EXPORT_SYMBOL(mptscsih_resume);
 #endif
-EXPORT_SYMBOL(mptscsih_show_info);
+EXPORT_SYMBOL(mptscsih_proc_info);
 EXPORT_SYMBOL(mptscsih_info);
 EXPORT_SYMBOL(mptscsih_qcmd);
 EXPORT_SYMBOL(mptscsih_slave_destroy);

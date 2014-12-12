@@ -10,10 +10,6 @@
 #ifndef __ASM_PROC_DOMAIN_H
 #define __ASM_PROC_DOMAIN_H
 
-#ifndef __ASSEMBLY__
-#include <asm/barrier.h>
-#endif
-
 /*
  * Domain numbers
  *
@@ -60,13 +56,13 @@
 #ifndef __ASSEMBLY__
 
 #ifdef CONFIG_CPU_USE_DOMAINS
-static inline void set_domain(unsigned val)
-{
-	asm volatile(
-	"mcr	p15, 0, %0, c3, c0	@ set domain"
-	  : : "r" (val));
-	isb();
-}
+#define set_domain(x)					\
+	do {						\
+	__asm__ __volatile__(				\
+	"mcr	p15, 0, %0, c3, c0	@ set domain"	\
+	  : : "r" (x));					\
+	isb();						\
+	} while (0)
 
 #define modify_domain(dom,type)					\
 	do {							\
@@ -78,8 +74,8 @@ static inline void set_domain(unsigned val)
 	} while (0)
 
 #else
-static inline void set_domain(unsigned val) { }
-static inline void modify_domain(unsigned dom, unsigned type)	{ }
+#define set_domain(x)		do { } while (0)
+#define modify_domain(dom,type)	do { } while (0)
 #endif
 
 /*
@@ -87,9 +83,9 @@ static inline void modify_domain(unsigned dom, unsigned type)	{ }
  * instructions (inline assembly)
  */
 #ifdef CONFIG_CPU_USE_DOMAINS
-#define TUSER(instr)	#instr "t"
+#define T(instr)	#instr "t"
 #else
-#define TUSER(instr)	#instr
+#define T(instr)	#instr
 #endif
 
 #else /* __ASSEMBLY__ */
@@ -99,9 +95,9 @@ static inline void modify_domain(unsigned dom, unsigned type)	{ }
  * instructions
  */
 #ifdef CONFIG_CPU_USE_DOMAINS
-#define TUSER(instr)	instr ## t
+#define T(instr)	instr ## t
 #else
-#define TUSER(instr)	instr
+#define T(instr)	instr
 #endif
 
 #endif /* __ASSEMBLY__ */

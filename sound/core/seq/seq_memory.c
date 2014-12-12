@@ -21,7 +21,6 @@
  */
 
 #include <linux/init.h>
-#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <sound/core.h>
@@ -236,7 +235,7 @@ static int snd_seq_cell_alloc(struct snd_seq_pool *pool,
 	init_waitqueue_entry(&wait, current);
 	spin_lock_irqsave(&pool->lock, flags);
 	if (pool->ptr == NULL) {	/* not initialized */
-		pr_debug("ALSA: seq: pool is not initialized\n");
+		snd_printd("seq: pool is not initialized\n");
 		err = -EINVAL;
 		goto __error;
 	}
@@ -388,7 +387,7 @@ int snd_seq_pool_init(struct snd_seq_pool *pool)
 
 	pool->ptr = vmalloc(sizeof(struct snd_seq_event_cell) * pool->size);
 	if (pool->ptr == NULL) {
-		pr_debug("ALSA: seq: malloc for sequencer events failed\n");
+		snd_printd("seq: malloc for sequencer events failed\n");
 		return -ENOMEM;
 	}
 
@@ -431,7 +430,7 @@ int snd_seq_pool_done(struct snd_seq_pool *pool)
 
 	while (atomic_read(&pool->counter) > 0) {
 		if (max_count == 0) {
-			pr_warn("ALSA: snd_seq_pool_done timeout: %d cells remain\n", atomic_read(&pool->counter));
+			snd_printk(KERN_WARNING "snd_seq_pool_done timeout: %d cells remain\n", atomic_read(&pool->counter));
 			break;
 		}
 		schedule_timeout_uninterruptible(1);
@@ -464,7 +463,7 @@ struct snd_seq_pool *snd_seq_pool_new(int poolsize)
 	/* create pool block */
 	pool = kzalloc(sizeof(*pool), GFP_KERNEL);
 	if (pool == NULL) {
-		pr_debug("ALSA: seq: malloc failed for pool\n");
+		snd_printd("seq: malloc failed for pool\n");
 		return NULL;
 	}
 	spin_lock_init(&pool->lock);

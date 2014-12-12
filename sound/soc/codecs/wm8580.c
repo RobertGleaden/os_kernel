@@ -1,7 +1,7 @@
 /*
  * wm8580.c  --  WM8580 ALSA Soc Audio driver
  *
- * Copyright 2008-12 Wolfson Microelectronics PLC.
+ * Copyright 2008, 2009 Wolfson Microelectronics PLC.
  *
  *  This program is free software; you can redistribute  it and/or modify it
  *  under  the terms of  the GNU General  Public License as published by the
@@ -23,10 +23,9 @@
 #include <linux/delay.h>
 #include <linux/pm.h>
 #include <linux/i2c.h>
-#include <linux/regmap.h>
+#include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
-#include <linux/of_device.h>
 
 #include <sound/core.h>
 #include <sound/pcm.h>
@@ -158,71 +157,22 @@
  * We can't read the WM8580 register space when we
  * are using 2 wire for device control, so we cache them instead.
  */
-static const struct reg_default wm8580_reg_defaults[] = {
-	{  0, 0x0121 },
-	{  1, 0x017e },
-	{  2, 0x007d },
-	{  3, 0x0014 },
-	{  4, 0x0121 },
-	{  5, 0x017e },
-	{  6, 0x007d },
-	{  7, 0x0194 },
-	{  8, 0x0010 },
-	{  9, 0x0002 },
-	{ 10, 0x0002 },
-	{ 11, 0x00c2 },
-	{ 12, 0x0182 },
-	{ 13, 0x0082 },
-	{ 14, 0x000a },
-	{ 15, 0x0024 },
-	{ 16, 0x0009 },
-	{ 17, 0x0000 },
-	{ 18, 0x00ff },
-	{ 19, 0x0000 },
-	{ 20, 0x00ff },
-	{ 21, 0x00ff },
-	{ 22, 0x00ff },
-	{ 23, 0x00ff },
-	{ 24, 0x00ff },
-	{ 25, 0x00ff },
-	{ 26, 0x00ff },
-	{ 27, 0x00ff },
-	{ 28, 0x01f0 },
-	{ 29, 0x0040 },
-	{ 30, 0x0000 },
-	{ 31, 0x0000 },
-	{ 32, 0x0000 },
-	{ 33, 0x0000 },
-	{ 34, 0x0031 },
-	{ 35, 0x000b },
-	{ 36, 0x0039 },
-	{ 37, 0x0000 },
-	{ 38, 0x0010 },
-	{ 39, 0x0032 },
-	{ 40, 0x0054 },
-	{ 41, 0x0076 },
-	{ 42, 0x0098 },
-	{ 43, 0x0000 },
-	{ 44, 0x0000 },
-	{ 45, 0x0000 },
-	{ 46, 0x0000 },
-	{ 47, 0x0000 },
-	{ 48, 0x0000 },
-	{ 49, 0x0000 },
-	{ 50, 0x005e },
-	{ 51, 0x003e },
-	{ 52, 0x0000 },
+static const u16 wm8580_reg[] = {
+	0x0121, 0x017e, 0x007d, 0x0014, /*R3*/
+	0x0121, 0x017e, 0x007d, 0x0194, /*R7*/
+	0x0010, 0x0002, 0x0002, 0x00c2, /*R11*/
+	0x0182, 0x0082, 0x000a, 0x0024, /*R15*/
+	0x0009, 0x0000, 0x00ff, 0x0000, /*R19*/
+	0x00ff, 0x00ff, 0x00ff, 0x00ff, /*R23*/
+	0x00ff, 0x00ff, 0x00ff, 0x00ff, /*R27*/
+	0x01f0, 0x0040, 0x0000, 0x0000, /*R31(0x1F)*/
+	0x0000, 0x0000, 0x0031, 0x000b, /*R35*/
+	0x0039, 0x0000, 0x0010, 0x0032, /*R39*/
+	0x0054, 0x0076, 0x0098, 0x0000, /*R43(0x2B)*/
+	0x0000, 0x0000, 0x0000, 0x0000, /*R47*/
+	0x0000, 0x0000, 0x005e, 0x003e, /*R51(0x33)*/
+	0x0000, 0x0000 /*R53*/
 };
-
-static bool wm8580_volatile(struct device *dev, unsigned int reg)
-{
-	switch (reg) {
-	case WM8580_RESET:
-		return true;
-	default:
-		return false;
-	}
-}
 
 struct pll_state {
 	unsigned int in;
@@ -238,7 +188,7 @@ static const char *wm8580_supply_names[WM8580_NUM_SUPPLIES] = {
 
 /* codec private data */
 struct wm8580_priv {
-	struct regmap *regmap;
+	enum snd_soc_control_type control_type;
 	struct regulator_bulk_data supplies[WM8580_NUM_SUPPLIES];
 	struct pll_state a;
 	struct pll_state b;
@@ -252,19 +202,17 @@ static int wm8580_out_vu(struct snd_kcontrol *kcontrol,
 {
 	struct soc_mixer_control *mc =
 		(struct soc_mixer_control *)kcontrol->private_value;
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct wm8580_priv *wm8580 = snd_soc_codec_get_drvdata(codec);
+	struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol);
+	u16 *reg_cache = codec->reg_cache;
 	unsigned int reg = mc->reg;
 	unsigned int reg2 = mc->rreg;
 	int ret;
 
-	/* Clear the register cache VU so we write without VU set */
-	regcache_cache_only(wm8580->regmap, true);
-	regmap_update_bits(wm8580->regmap, reg, 0x100, 0x000);
-	regmap_update_bits(wm8580->regmap, reg2, 0x100, 0x000);
-	regcache_cache_only(wm8580->regmap, false);
+	/* Clear the register cache so we write without VU set */
+	reg_cache[reg] = 0;
+	reg_cache[reg2] = 0;
 
-	ret = snd_soc_put_volsw(kcontrol, ucontrol);
+	ret = snd_soc_put_volsw_2r(kcontrol, ucontrol);
 	if (ret < 0)
 		return ret;
 
@@ -275,19 +223,31 @@ static int wm8580_out_vu(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+#define SOC_WM8580_OUT_DOUBLE_R_TLV(xname, reg_left, reg_right, xshift, xmax, \
+				    xinvert, tlv_array)			\
+{	.iface = SNDRV_CTL_ELEM_IFACE_MIXER, .name = (xname), \
+	.access = SNDRV_CTL_ELEM_ACCESS_TLV_READ |\
+		SNDRV_CTL_ELEM_ACCESS_READWRITE,  \
+	.tlv.p = (tlv_array), \
+	.info = snd_soc_info_volsw_2r, \
+	.get = snd_soc_get_volsw_2r, .put = wm8580_out_vu, \
+	.private_value = (unsigned long)&(struct soc_mixer_control) \
+		{.reg = reg_left, .rreg = reg_right, .shift = xshift, \
+		.max = xmax, .invert = xinvert} }
+
 static const struct snd_kcontrol_new wm8580_snd_controls[] = {
-SOC_DOUBLE_R_EXT_TLV("DAC1 Playback Volume",
-		     WM8580_DIGITAL_ATTENUATION_DACL1,
-		     WM8580_DIGITAL_ATTENUATION_DACR1,
-		     0, 0xff, 0, snd_soc_get_volsw, wm8580_out_vu, dac_tlv),
-SOC_DOUBLE_R_EXT_TLV("DAC2 Playback Volume",
-		     WM8580_DIGITAL_ATTENUATION_DACL2,
-		     WM8580_DIGITAL_ATTENUATION_DACR2,
-		     0, 0xff, 0, snd_soc_get_volsw, wm8580_out_vu, dac_tlv),
-SOC_DOUBLE_R_EXT_TLV("DAC3 Playback Volume",
-		     WM8580_DIGITAL_ATTENUATION_DACL3,
-		     WM8580_DIGITAL_ATTENUATION_DACR3,
-		     0, 0xff, 0, snd_soc_get_volsw, wm8580_out_vu, dac_tlv),
+SOC_WM8580_OUT_DOUBLE_R_TLV("DAC1 Playback Volume",
+			    WM8580_DIGITAL_ATTENUATION_DACL1,
+			    WM8580_DIGITAL_ATTENUATION_DACR1,
+			    0, 0xff, 0, dac_tlv),
+SOC_WM8580_OUT_DOUBLE_R_TLV("DAC2 Playback Volume",
+			    WM8580_DIGITAL_ATTENUATION_DACL2,
+			    WM8580_DIGITAL_ATTENUATION_DACR2,
+			    0, 0xff, 0, dac_tlv),
+SOC_WM8580_OUT_DOUBLE_R_TLV("DAC3 Playback Volume",
+			    WM8580_DIGITAL_ATTENUATION_DACL3,
+			    WM8580_DIGITAL_ATTENUATION_DACR3,
+			    0, 0xff, 0, dac_tlv),
 
 SOC_SINGLE("DAC1 Deemphasis Switch", WM8580_DAC_CONTROL3, 0, 1, 0),
 SOC_SINGLE("DAC2 Deemphasis Switch", WM8580_DAC_CONTROL3, 1, 1, 0),
@@ -324,7 +284,7 @@ SND_SOC_DAPM_INPUT("AINL"),
 SND_SOC_DAPM_INPUT("AINR"),
 };
 
-static const struct snd_soc_dapm_route wm8580_dapm_routes[] = {
+static const struct snd_soc_dapm_route audio_map[] = {
 	{ "VOUT1L", NULL, "DAC1" },
 	{ "VOUT1R", NULL, "DAC1" },
 
@@ -337,6 +297,17 @@ static const struct snd_soc_dapm_route wm8580_dapm_routes[] = {
 	{ "ADC", NULL, "AINL" },
 	{ "ADC", NULL, "AINR" },
 };
+
+static int wm8580_add_widgets(struct snd_soc_codec *codec)
+{
+	struct snd_soc_dapm_context *dapm = &codec->dapm;
+
+	snd_soc_dapm_new_controls(dapm, wm8580_dapm_widgets,
+				  ARRAY_SIZE(wm8580_dapm_widgets));
+	snd_soc_dapm_add_routes(dapm, audio_map, ARRAY_SIZE(audio_map));
+
+	return 0;
+}
 
 /* PLL divisors */
 struct _pll_div {
@@ -470,7 +441,8 @@ static int wm8580_set_dai_pll(struct snd_soc_dai *codec_dai, int pll_id,
 	/* Always disable the PLL - it is not safe to leave it running
 	 * while reprogramming it.
 	 */
-	snd_soc_update_bits(codec, WM8580_PWRDN2, pwr_mask, pwr_mask);
+	reg = snd_soc_read(codec, WM8580_PWRDN2);
+	snd_soc_write(codec, WM8580_PWRDN2, reg | pwr_mask);
 
 	if (!freq_in || !freq_out)
 		return 0;
@@ -488,7 +460,8 @@ static int wm8580_set_dai_pll(struct snd_soc_dai *codec_dai, int pll_id,
 	snd_soc_write(codec, WM8580_PLLA4 + offset, reg);
 
 	/* All done, turn it on */
-	snd_soc_update_bits(codec, WM8580_PWRDN2, pwr_mask, 0);
+	reg = snd_soc_read(codec, WM8580_PWRDN2);
+	snd_soc_write(codec, WM8580_PWRDN2, reg & ~pwr_mask);
 
 	return 0;
 }
@@ -504,7 +477,8 @@ static int wm8580_paif_hw_params(struct snd_pcm_substream *substream,
 				 struct snd_pcm_hw_params *params,
 				 struct snd_soc_dai *dai)
 {
-	struct snd_soc_codec *codec = dai->codec;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct wm8580_priv *wm8580 = snd_soc_codec_get_drvdata(codec);
 	u16 paifa = 0;
 	u16 paifb = 0;
@@ -721,7 +695,7 @@ static int wm8580_set_sysclk(struct snd_soc_dai *dai, int clk_id,
 {
 	struct snd_soc_codec *codec = dai->codec;
 	struct wm8580_priv *wm8580 = snd_soc_codec_get_drvdata(codec);
-	int ret, sel, sel_mask, sel_shift;
+	int sel, sel_mask, sel_shift;
 
 	switch (dai->driver->id) {
 	case WM8580_DAI_PAIFRX:
@@ -735,7 +709,7 @@ static int wm8580_set_sysclk(struct snd_soc_dai *dai, int clk_id,
 		break;
 
 	default:
-		WARN(1, "Unknown DAI driver ID\n");
+		BUG_ON("Unknown DAI driver ID\n");
 		return -EINVAL;
 	}
 
@@ -762,11 +736,7 @@ static int wm8580_set_sysclk(struct snd_soc_dai *dai, int clk_id,
 	/* We really should validate PLL settings but not yet */
 	wm8580->sysclk[dai->driver->id] = freq;
 
-	ret = snd_soc_update_bits(codec, WM8580_CLKSEL, sel_mask, sel);
-	if (ret < 0)
-		return ret;
-
-	return 0;
+	return snd_soc_update_bits(codec, WM8580_CLKSEL, sel_mask, sel);
 }
 
 static int wm8580_digital_mute(struct snd_soc_dai *codec_dai, int mute)
@@ -789,6 +759,7 @@ static int wm8580_digital_mute(struct snd_soc_dai *codec_dai, int mute)
 static int wm8580_set_bias_level(struct snd_soc_codec *codec,
 	enum snd_soc_bias_level level)
 {
+	u16 reg;
 	switch (level) {
 	case SND_SOC_BIAS_ON:
 	case SND_SOC_BIAS_PREPARE:
@@ -797,19 +768,20 @@ static int wm8580_set_bias_level(struct snd_soc_codec *codec,
 	case SND_SOC_BIAS_STANDBY:
 		if (codec->dapm.bias_level == SND_SOC_BIAS_OFF) {
 			/* Power up and get individual control of the DACs */
-			snd_soc_update_bits(codec, WM8580_PWRDN1,
-					    WM8580_PWRDN1_PWDN |
-					    WM8580_PWRDN1_ALLDACPD, 0);
+			reg = snd_soc_read(codec, WM8580_PWRDN1);
+			reg &= ~(WM8580_PWRDN1_PWDN | WM8580_PWRDN1_ALLDACPD);
+			snd_soc_write(codec, WM8580_PWRDN1, reg);
 
 			/* Make VMID high impedance */
-			snd_soc_update_bits(codec, WM8580_ADC_CONTROL1,
-					    0x100, 0);
+			reg = snd_soc_read(codec,  WM8580_ADC_CONTROL1);
+			reg &= ~0x100;
+			snd_soc_write(codec, WM8580_ADC_CONTROL1, reg);
 		}
 		break;
 
 	case SND_SOC_BIAS_OFF:
-		snd_soc_update_bits(codec, WM8580_PWRDN1,
-				    WM8580_PWRDN1_PWDN, WM8580_PWRDN1_PWDN);
+		reg = snd_soc_read(codec, WM8580_PWRDN1);
+		snd_soc_write(codec, WM8580_PWRDN1, reg | WM8580_PWRDN1_PWDN);
 		break;
 	}
 	codec->dapm.bias_level = level;
@@ -819,7 +791,7 @@ static int wm8580_set_bias_level(struct snd_soc_codec *codec,
 #define WM8580_FORMATS (SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE |\
 			SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S32_LE)
 
-static const struct snd_soc_dai_ops wm8580_dai_ops_playback = {
+static struct snd_soc_dai_ops wm8580_dai_ops_playback = {
 	.set_sysclk	= wm8580_set_sysclk,
 	.hw_params	= wm8580_paif_hw_params,
 	.set_fmt	= wm8580_set_paif_dai_fmt,
@@ -828,7 +800,7 @@ static const struct snd_soc_dai_ops wm8580_dai_ops_playback = {
 	.digital_mute	= wm8580_digital_mute,
 };
 
-static const struct snd_soc_dai_ops wm8580_dai_ops_capture = {
+static struct snd_soc_dai_ops wm8580_dai_ops_capture = {
 	.set_sysclk	= wm8580_set_sysclk,
 	.hw_params	= wm8580_paif_hw_params,
 	.set_fmt	= wm8580_set_paif_dai_fmt,
@@ -866,7 +838,23 @@ static struct snd_soc_dai_driver wm8580_dai[] = {
 static int wm8580_probe(struct snd_soc_codec *codec)
 {
 	struct wm8580_priv *wm8580 = snd_soc_codec_get_drvdata(codec);
-	int ret = 0;
+	int ret = 0,i;
+
+	ret = snd_soc_codec_set_cache_io(codec, 7, 9, wm8580->control_type);
+	if (ret < 0) {
+		dev_err(codec->dev, "Failed to set cache I/O: %d\n", ret);
+		return ret;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(wm8580->supplies); i++)
+		wm8580->supplies[i].supply = wm8580_supply_names[i];
+
+	ret = regulator_bulk_get(codec->dev, ARRAY_SIZE(wm8580->supplies),
+				 wm8580->supplies);
+	if (ret != 0) {
+		dev_err(codec->dev, "Failed to request supplies: %d\n", ret);
+		return ret;
+	}
 
 	ret = regulator_bulk_enable(ARRAY_SIZE(wm8580->supplies),
 				    wm8580->supplies);
@@ -884,11 +872,16 @@ static int wm8580_probe(struct snd_soc_codec *codec)
 
 	wm8580_set_bias_level(codec, SND_SOC_BIAS_STANDBY);
 
+	snd_soc_add_controls(codec, wm8580_snd_controls,
+			     ARRAY_SIZE(wm8580_snd_controls));
+	wm8580_add_widgets(codec);
+
 	return 0;
 
 err_regulator_enable:
 	regulator_bulk_disable(ARRAY_SIZE(wm8580->supplies), wm8580->supplies);
 err_regulator_get:
+	regulator_bulk_free(ARRAY_SIZE(wm8580->supplies), wm8580->supplies);
 	return ret;
 }
 
@@ -900,6 +893,7 @@ static int wm8580_remove(struct snd_soc_codec *codec)
 	wm8580_set_bias_level(codec, SND_SOC_BIAS_OFF);
 
 	regulator_bulk_disable(ARRAY_SIZE(wm8580->supplies), wm8580->supplies);
+	regulator_bulk_free(ARRAY_SIZE(wm8580->supplies), wm8580->supplies);
 
 	return 0;
 }
@@ -908,69 +902,36 @@ static struct snd_soc_codec_driver soc_codec_dev_wm8580 = {
 	.probe =	wm8580_probe,
 	.remove =	wm8580_remove,
 	.set_bias_level = wm8580_set_bias_level,
-
-	.controls = wm8580_snd_controls,
-	.num_controls = ARRAY_SIZE(wm8580_snd_controls),
-	.dapm_widgets = wm8580_dapm_widgets,
-	.num_dapm_widgets = ARRAY_SIZE(wm8580_dapm_widgets),
-	.dapm_routes = wm8580_dapm_routes,
-	.num_dapm_routes = ARRAY_SIZE(wm8580_dapm_routes),
+	.reg_cache_size = ARRAY_SIZE(wm8580_reg),
+	.reg_word_size = sizeof(u16),
+	.reg_cache_default = wm8580_reg,
 };
 
-static const struct of_device_id wm8580_of_match[] = {
-	{ .compatible = "wlf,wm8580" },
-	{ },
-};
-
-static const struct regmap_config wm8580_regmap = {
-	.reg_bits = 7,
-	.val_bits = 9,
-	.max_register = WM8580_MAX_REGISTER,
-
-	.reg_defaults = wm8580_reg_defaults,
-	.num_reg_defaults = ARRAY_SIZE(wm8580_reg_defaults),
-	.cache_type = REGCACHE_RBTREE,
-
-	.volatile_reg = wm8580_volatile,
-};
-
-#if IS_ENABLED(CONFIG_I2C)
+#if defined(CONFIG_I2C) || defined(CONFIG_I2C_MODULE)
 static int wm8580_i2c_probe(struct i2c_client *i2c,
 			    const struct i2c_device_id *id)
 {
 	struct wm8580_priv *wm8580;
-	int ret, i;
+	int ret;
 
-	wm8580 = devm_kzalloc(&i2c->dev, sizeof(struct wm8580_priv),
-			      GFP_KERNEL);
+	wm8580 = kzalloc(sizeof(struct wm8580_priv), GFP_KERNEL);
 	if (wm8580 == NULL)
 		return -ENOMEM;
 
-	wm8580->regmap = devm_regmap_init_i2c(i2c, &wm8580_regmap);
-	if (IS_ERR(wm8580->regmap))
-		return PTR_ERR(wm8580->regmap);
-
-	for (i = 0; i < ARRAY_SIZE(wm8580->supplies); i++)
-		wm8580->supplies[i].supply = wm8580_supply_names[i];
-
-	ret = devm_regulator_bulk_get(&i2c->dev, ARRAY_SIZE(wm8580->supplies),
-				      wm8580->supplies);
-	if (ret != 0) {
-		dev_err(&i2c->dev, "Failed to request supplies: %d\n", ret);
-		return ret;
-	}
-
 	i2c_set_clientdata(i2c, wm8580);
+	wm8580->control_type = SND_SOC_I2C;
 
 	ret =  snd_soc_register_codec(&i2c->dev,
 			&soc_codec_dev_wm8580, wm8580_dai, ARRAY_SIZE(wm8580_dai));
-
+	if (ret < 0)
+		kfree(wm8580);
 	return ret;
 }
 
 static int wm8580_i2c_remove(struct i2c_client *client)
 {
 	snd_soc_unregister_codec(&client->dev);
+	kfree(i2c_get_clientdata(client));
 	return 0;
 }
 
@@ -982,9 +943,8 @@ MODULE_DEVICE_TABLE(i2c, wm8580_i2c_id);
 
 static struct i2c_driver wm8580_i2c_driver = {
 	.driver = {
-		.name = "wm8580",
+		.name = "wm8580-codec",
 		.owner = THIS_MODULE,
-		.of_match_table = wm8580_of_match,
 	},
 	.probe =    wm8580_i2c_probe,
 	.remove =   wm8580_i2c_remove,
@@ -996,7 +956,7 @@ static int __init wm8580_modinit(void)
 {
 	int ret = 0;
 
-#if IS_ENABLED(CONFIG_I2C)
+#if defined(CONFIG_I2C) || defined(CONFIG_I2C_MODULE)
 	ret = i2c_add_driver(&wm8580_i2c_driver);
 	if (ret != 0) {
 		pr_err("Failed to register WM8580 I2C driver: %d\n", ret);
@@ -1009,7 +969,7 @@ module_init(wm8580_modinit);
 
 static void __exit wm8580_exit(void)
 {
-#if IS_ENABLED(CONFIG_I2C)
+#if defined(CONFIG_I2C) || defined(CONFIG_I2C_MODULE)
 	i2c_del_driver(&wm8580_i2c_driver);
 #endif
 }

@@ -11,6 +11,7 @@
 #include <linux/sched.h>
 #include <linux/wait.h>
 #include <linux/delay.h>
+#include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
@@ -232,9 +233,13 @@ int bbc_i2c_write_buf(struct bbc_i2c_client *client,
 	int ret = 0;
 
 	while (len > 0) {
-		ret = bbc_i2c_writeb(client, *buf, off);
-		if (ret < 0)
+		int err = bbc_i2c_writeb(client, *buf, off);
+
+		if (err < 0) {
+			ret = err;
 			break;
+		}
+
 		len--;
 		buf++;
 		off++;
@@ -248,9 +253,11 @@ int bbc_i2c_read_buf(struct bbc_i2c_client *client,
 	int ret = 0;
 
 	while (len > 0) {
-		ret = bbc_i2c_readb(client, buf, off);
-		if (ret < 0)
+		int err = bbc_i2c_readb(client, buf, off);
+		if (err < 0) {
+			ret = err;
 			break;
+		}
 		len--;
 		buf++;
 		off++;
@@ -281,7 +288,7 @@ static irqreturn_t bbc_i2c_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void reset_one_i2c(struct bbc_i2c_bus *bp)
+static void __init reset_one_i2c(struct bbc_i2c_bus *bp)
 {
 	writeb(I2C_PCF_PIN, bp->i2c_control_regs + 0x0);
 	writeb(bp->own, bp->i2c_control_regs + 0x1);
@@ -290,7 +297,7 @@ static void reset_one_i2c(struct bbc_i2c_bus *bp)
 	writeb(I2C_PCF_IDLE, bp->i2c_control_regs + 0x0);
 }
 
-static struct bbc_i2c_bus * attach_one_i2c(struct platform_device *op, int index)
+static struct bbc_i2c_bus * __init attach_one_i2c(struct platform_device *op, int index)
 {
 	struct bbc_i2c_bus *bp;
 	struct device_node *dp;
@@ -354,7 +361,7 @@ fail:
 extern int bbc_envctrl_init(struct bbc_i2c_bus *bp);
 extern void bbc_envctrl_cleanup(struct bbc_i2c_bus *bp);
 
-static int bbc_i2c_probe(struct platform_device *op)
+static int __devinit bbc_i2c_probe(struct platform_device *op)
 {
 	struct bbc_i2c_bus *bp;
 	int err, index = 0;
@@ -378,7 +385,7 @@ static int bbc_i2c_probe(struct platform_device *op)
 	return err;
 }
 
-static int bbc_i2c_remove(struct platform_device *op)
+static int __devexit bbc_i2c_remove(struct platform_device *op)
 {
 	struct bbc_i2c_bus *bp = dev_get_drvdata(&op->dev);
 
@@ -412,9 +419,20 @@ static struct platform_driver bbc_i2c_driver = {
 		.of_match_table = bbc_i2c_match,
 	},
 	.probe		= bbc_i2c_probe,
-	.remove		= bbc_i2c_remove,
+	.remove		= __devexit_p(bbc_i2c_remove),
 };
 
-module_platform_driver(bbc_i2c_driver);
+static int __init bbc_i2c_init(void)
+{
+	return platform_driver_register(&bbc_i2c_driver);
+}
+
+static void __exit bbc_i2c_exit(void)
+{
+	platform_driver_unregister(&bbc_i2c_driver);
+}
+
+module_init(bbc_i2c_init);
+module_exit(bbc_i2c_exit);
 
 MODULE_LICENSE("GPL");

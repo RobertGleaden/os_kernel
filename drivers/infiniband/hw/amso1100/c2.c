@@ -800,10 +800,13 @@ static int c2_xmit_frame(struct sk_buff *skb, struct net_device *netdev)
 	/* Loop thru additional data fragments and queue them */
 	if (skb_shinfo(skb)->nr_frags) {
 		for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
-			const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
-			maplen = skb_frag_size(frag);
-			mapaddr = skb_frag_dma_map(&c2dev->pcidev->dev, frag,
-						   0, maplen, DMA_TO_DEVICE);
+			skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+			maplen = frag->size;
+			mapaddr =
+			    pci_map_page(c2dev->pcidev, frag->page,
+					 frag->page_offset, maplen,
+					 PCI_DMA_TODEVICE);
+
 			elem = elem->next;
 			elem->skb = NULL;
 			elem->mapaddr = mapaddr;
@@ -920,7 +923,8 @@ static struct net_device *c2_devinit(struct c2_dev *c2dev,
 	return netdev;
 }
 
-static int c2_probe(struct pci_dev *pcidev, const struct pci_device_id *ent)
+static int __devinit c2_probe(struct pci_dev *pcidev,
+			      const struct pci_device_id *ent)
 {
 	int ret = 0, i;
 	unsigned long reg0_start, reg0_flags, reg0_len;
@@ -1082,7 +1086,6 @@ static int c2_probe(struct pci_dev *pcidev, const struct pci_device_id *ent)
 
 	/* Initialize network device */
 	if ((netdev = c2_devinit(c2dev, mmio_regs)) == NULL) {
-		ret = -ENOMEM;
 		iounmap(mmio_regs);
 		goto bail4;
 	}
@@ -1152,8 +1155,7 @@ static int c2_probe(struct pci_dev *pcidev, const struct pci_device_id *ent)
 		goto bail10;
 	}
 
-	ret = c2_register_device(c2dev);
-	if (ret)
+	if (c2_register_device(c2dev))
 		goto bail10;
 
 	return 0;
@@ -1192,7 +1194,7 @@ static int c2_probe(struct pci_dev *pcidev, const struct pci_device_id *ent)
 	return ret;
 }
 
-static void c2_remove(struct pci_dev *pcidev)
+static void __devexit c2_remove(struct pci_dev *pcidev)
 {
 	struct c2_dev *c2dev = pci_get_drvdata(pcidev);
 	struct net_device *netdev = c2dev->netdev;
@@ -1237,7 +1239,18 @@ static struct pci_driver c2_pci_driver = {
 	.name = DRV_NAME,
 	.id_table = c2_pci_table,
 	.probe = c2_probe,
-	.remove = c2_remove,
+	.remove = __devexit_p(c2_remove),
 };
 
-module_pci_driver(c2_pci_driver);
+static int __init c2_init_module(void)
+{
+	return pci_register_driver(&c2_pci_driver);
+}
+
+static void __exit c2_exit_module(void)
+{
+	pci_unregister_driver(&c2_pci_driver);
+}
+
+module_init(c2_init_module);
+module_exit(c2_exit_module);

@@ -567,6 +567,7 @@ static int mpu401_out(int dev, unsigned char midi_byte)
 static int mpu401_command(int dev, mpu_command_rec * cmd)
 {
 	int i, timeout, ok;
+	int ret = 0;
 	unsigned long   flags;
 	struct mpu_config *devc;
 
@@ -643,6 +644,7 @@ retry:
 			}
 		}
 	}
+	ret = 0;
 	cmd->data[0] = 0;
 
 	if (cmd->nr_returns)
@@ -664,7 +666,7 @@ retry:
 		}
 	}
 	spin_unlock_irqrestore(&devc->lock,flags);
-	return 0;
+	return ret;
 }
 
 static int mpu_cmd(int dev, int cmd, int data)

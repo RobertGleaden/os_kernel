@@ -40,7 +40,7 @@
  *		needed by SiS driver's memory management.
  */
 
-#include <drm/drmP.h>
+#include "drmP.h"
 
 /******************************************************************/
 /** \name Context bitmap support */
@@ -74,13 +74,23 @@ void drm_ctxbitmap_free(struct drm_device * dev, int ctx_handle)
  */
 static int drm_ctxbitmap_next(struct drm_device * dev)
 {
+	int new_id;
 	int ret;
 
+again:
+	if (idr_pre_get(&dev->ctx_idr, GFP_KERNEL) == 0) {
+		DRM_ERROR("Out of memory expanding drawable idr\n");
+		return -ENOMEM;
+	}
 	mutex_lock(&dev->struct_mutex);
-	ret = idr_alloc(&dev->ctx_idr, NULL, DRM_RESERVED_CONTEXTS, 0,
-			GFP_KERNEL);
+	ret = idr_get_new_above(&dev->ctx_idr, NULL,
+				DRM_RESERVED_CONTEXTS, &new_id);
+	if (ret == -EAGAIN) {
+		mutex_unlock(&dev->struct_mutex);
+		goto again;
+	}
 	mutex_unlock(&dev->struct_mutex);
-	return ret;
+	return new_id;
 }
 
 /**
@@ -107,7 +117,7 @@ int drm_ctxbitmap_init(struct drm_device * dev)
 void drm_ctxbitmap_cleanup(struct drm_device * dev)
 {
 	mutex_lock(&dev->struct_mutex);
-	idr_destroy(&dev->ctx_idr);
+	idr_remove_all(&dev->ctx_idr);
 	mutex_unlock(&dev->struct_mutex);
 }
 
@@ -144,6 +154,8 @@ int drm_getsareactx(struct drm_device *dev, void *data,
 		return -EINVAL;
 	}
 
+	mutex_unlock(&dev->struct_mutex);
+
 	request->handle = NULL;
 	list_for_each_entry(_entry, &dev->maplist, head) {
 		if (_entry->map == map) {
@@ -152,9 +164,6 @@ int drm_getsareactx(struct drm_device *dev, void *data,
 			break;
 		}
 	}
-
-	mutex_unlock(&dev->struct_mutex);
-
 	if (request->handle == NULL)
 		return -EINVAL;
 
@@ -251,6 +260,7 @@ static int drm_context_switch_complete(struct drm_device *dev,
 				       struct drm_file *file_priv, int new)
 {
 	dev->last_context = new;	/* PRE/POST: This is the _only_ writer. */
+	dev->last_switch = jiffies;
 
 	if (!_DRM_LOCK_IS_HELD(file_priv->master->lock.hw_lock->lock)) {
 		DRM_ERROR("Lock isn't held after context switch\n");
@@ -260,6 +270,7 @@ static int drm_context_switch_complete(struct drm_device *dev,
 	   when the kernel holds the lock, release
 	   that lock here. */
 	clear_bit(0, &dev->context_flag);
+	wake_up(&dev->context_wait);
 
 	return 0;
 }
@@ -334,8 +345,15 @@ int drm_addctx(struct drm_device *dev, void *data,
 
 	mutex_lock(&dev->ctxlist_mutex);
 	list_add(&ctx_entry->head, &dev->ctxlist);
+	++dev->ctx_count;
 	mutex_unlock(&dev->ctxlist_mutex);
 
+	return 0;
+}
+
+int drm_modctx(struct drm_device *dev, void *data, struct drm_file *file_priv)
+{
+	/* This does nothing */
 	return 0;
 }
 
@@ -431,6 +449,7 @@ int drm_rmctx(struct drm_device *dev, void *data,
 			if (pos->handle == ctx->handle) {
 				list_del(&pos->head);
 				kfree(pos);
+				--dev->ctx_count;
 			}
 		}
 	}

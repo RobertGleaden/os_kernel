@@ -42,7 +42,7 @@ static struct platform_device smc91x_device = {
 	.resource      = smc91x_resources,
 };
 
-#if IS_ENABLED(CONFIG_SERIAL_BFIN)
+#if defined(CONFIG_SERIAL_BFIN) || defined(CONFIG_SERIAL_BFIN_MODULE)
 #ifdef CONFIG_SERIAL_BFIN_UART0
 static struct resource bfin_uart0_resources[] = {
 	{
@@ -51,13 +51,8 @@ static struct resource bfin_uart0_resources[] = {
 		.flags = IORESOURCE_MEM,
 	},
 	{
-		.start = IRQ_UART_TX,
-		.end = IRQ_UART_TX,
-		.flags = IORESOURCE_IRQ,
-	},
-	{
 		.start = IRQ_UART_RX,
-		.end = IRQ_UART_RX,
+		.end = IRQ_UART_RX+1,
 		.flags = IORESOURCE_IRQ,
 	},
 	{
@@ -93,7 +88,7 @@ static struct platform_device bfin_uart0_device = {
 #endif
 #endif
 
-#if IS_ENABLED(CONFIG_BFIN_SIR)
+#if defined(CONFIG_BFIN_SIR) || defined(CONFIG_BFIN_SIR_MODULE)
 #ifdef CONFIG_BFIN_SIR0
 static struct resource bfin_sir0_resources[] = {
 	{
@@ -125,13 +120,13 @@ static struct platform_device bfin_sir0_device = {
 static struct platform_device *tepla_devices[] __initdata = {
 	&smc91x_device,
 
-#if IS_ENABLED(CONFIG_SERIAL_BFIN)
+#if defined(CONFIG_SERIAL_BFIN) || defined(CONFIG_SERIAL_BFIN_MODULE)
 #ifdef CONFIG_SERIAL_BFIN_UART0
 	&bfin_uart0_device,
 #endif
 #endif
 
-#if IS_ENABLED(CONFIG_BFIN_SIR)
+#if defined(CONFIG_BFIN_SIR) || defined(CONFIG_BFIN_SIR_MODULE)
 #ifdef CONFIG_BFIN_SIR0
 	&bfin_sir0_device,
 #endif

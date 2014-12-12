@@ -3,22 +3,20 @@
  * Licensed under the GPL
  */
 
-#include <linux/module.h>
-#include <linux/bootmem.h>
-#include <linux/mm.h>
-#include <linux/pfn.h>
-#include <asm/page.h>
-#include <as-layout.h>
-#include <init.h>
-#include <kern.h>
-#include <mem_user.h>
-#include <os.h>
+#include "linux/bootmem.h"
+#include "linux/mm.h"
+#include "linux/pfn.h"
+#include "asm/page.h"
+#include "as-layout.h"
+#include "init.h"
+#include "kern.h"
+#include "mem_user.h"
+#include "os.h"
 
 static int physmem_fd = -1;
 
 /* Changed during early boot */
 unsigned long high_physmem;
-EXPORT_SYMBOL(high_physmem);
 
 extern unsigned long long physmem_size;
 
@@ -103,7 +101,6 @@ void __init setup_physmem(unsigned long start, unsigned long reserve_end,
 	 */
 	os_seek_file(physmem_fd, __pa(&__syscall_stub_start));
 	os_write_file(physmem_fd, &__syscall_stub_start, PAGE_SIZE);
-	os_fsync_file(physmem_fd);
 
 	bootmap_size = init_bootmem(pfn, pfn + delta);
 	free_bootmem(__pa(reserve_end) + bootmap_size,
@@ -187,7 +184,6 @@ unsigned long find_iomem(char *driver, unsigned long *len_out)
 
 	return 0;
 }
-EXPORT_SYMBOL(find_iomem);
 
 static int setup_iomem(void)
 {

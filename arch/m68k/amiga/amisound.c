@@ -14,6 +14,7 @@
 #include <linux/string.h>
 #include <linux/module.h>
 
+#include <asm/system.h>
 #include <asm/amigahw.h>
 
 static unsigned short *snd_data;
@@ -51,7 +52,7 @@ void __init amiga_init_sound(void)
 
 	snd_data = amiga_chip_alloc_res(sizeof(sine_data), &beep_res);
 	if (!snd_data) {
-		pr_crit("amiga init_sound: failed to allocate chipmem\n");
+		printk (KERN_CRIT "amiga init_sound: failed to allocate chipmem\n");
 		return;
 	}
 	memcpy (snd_data, sine_data, sizeof(sine_data));

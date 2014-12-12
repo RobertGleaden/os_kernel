@@ -23,7 +23,6 @@
 
 extern FILE *yyin;
 extern int yyparse(void);
-extern YYLTYPE yylloc;
 
 struct boot_info *the_boot_info;
 int treesource_error;
@@ -35,7 +34,6 @@ struct boot_info *dt_from_source(const char *fname)
 
 	srcfile_push(fname);
 	yyin = current_srcfile->f;
-	yylloc.file = current_srcfile;
 
 	if (yyparse() != 0)
 		die("Unable to parse input tree\n");
@@ -281,3 +279,4 @@ void dt_to_source(FILE *f, struct boot_info *bi)
 
 	write_tree_source_node(f, bi->dt, 0);
 }
+

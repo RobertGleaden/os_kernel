@@ -1,4 +1,6 @@
-/* ALSA Soc Audio Layer - I2S core for newer Samsung SoCs.
+/* sound/soc/samsung/s3c-i2c-v2.c
+ *
+ * ALSA Soc Audio Layer - I2S core for newer Samsung SoCs.
  *
  * Copyright (c) 2006 Wolfson Microelectronics PLC.
  *	Graeme Gregory graeme.gregory@wolfsonmicro.com
@@ -14,7 +16,6 @@
  * option) any later version.
  */
 
-#include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/clk.h>
 #include <linux/io.h>
@@ -31,7 +32,11 @@
 #undef S3C_IIS_V2_SUPPORTED
 
 #if defined(CONFIG_CPU_S3C2412) || defined(CONFIG_CPU_S3C2413) \
-	|| defined(CONFIG_ARCH_S3C64XX) || defined(CONFIG_CPU_S5PV210)
+	|| defined(CONFIG_CPU_S5PV210)
+#define S3C_IIS_V2_SUPPORTED
+#endif
+
+#ifdef CONFIG_PLAT_S3C64XX
 #define S3C_IIS_V2_SUPPORTED
 #endif
 
@@ -322,13 +327,13 @@ static int s3c_i2sv2_hw_params(struct snd_pcm_substream *substream,
 
 	iismod &= ~S3C64XX_IISMOD_BLC_MASK;
 	/* Sample size */
-	switch (params_width(params)) {
-	case 8:
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S8:
 		iismod |= S3C64XX_IISMOD_BLC_8BIT;
 		break;
-	case 16:
+	case SNDRV_PCM_FORMAT_S16_LE:
 		break;
-	case 24:
+	case SNDRV_PCM_FORMAT_S24_LE:
 		iismod |= S3C64XX_IISMOD_BLC_24BIT;
 		break;
 	}
@@ -725,11 +730,10 @@ static int s3c2412_i2s_resume(struct snd_soc_dai *dai)
 #define s3c2412_i2s_resume  NULL
 #endif
 
-int s3c_i2sv2_register_component(struct device *dev, int id,
-			   struct snd_soc_component_driver *cmp_drv,
-			   struct snd_soc_dai_driver *dai_drv)
+int s3c_i2sv2_register_dai(struct device *dev, int id,
+		struct snd_soc_dai_driver *drv)
 {
-	struct snd_soc_dai_ops *ops = dai_drv->ops;
+	struct snd_soc_dai_ops *ops = drv->ops;
 
 	ops->trigger = s3c2412_i2s_trigger;
 	if (!ops->hw_params)
@@ -742,11 +746,11 @@ int s3c_i2sv2_register_component(struct device *dev, int id,
 	if (!ops->delay)
 		ops->delay = s3c2412_i2s_delay;
 
-	dai_drv->suspend = s3c2412_i2s_suspend;
-	dai_drv->resume = s3c2412_i2s_resume;
+	drv->suspend = s3c2412_i2s_suspend;
+	drv->resume = s3c2412_i2s_resume;
 
-	return devm_snd_soc_register_component(dev, cmp_drv, dai_drv, 1);
+	return snd_soc_register_dai(dev, drv);
 }
-EXPORT_SYMBOL_GPL(s3c_i2sv2_register_component);
+EXPORT_SYMBOL_GPL(s3c_i2sv2_register_dai);
 
 MODULE_LICENSE("GPL");

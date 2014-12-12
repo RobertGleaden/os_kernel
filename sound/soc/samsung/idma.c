@@ -15,7 +15,6 @@
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/slab.h>
-#include <linux/module.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
 #include <sound/soc.h>
@@ -35,6 +34,14 @@ static const struct snd_pcm_hardware idma_hardware = {
 		    SNDRV_PCM_INFO_MMAP_VALID |
 		    SNDRV_PCM_INFO_PAUSE |
 		    SNDRV_PCM_INFO_RESUME,
+	.formats = SNDRV_PCM_FMTBIT_S16_LE |
+		    SNDRV_PCM_FMTBIT_U16_LE |
+		    SNDRV_PCM_FMTBIT_S24_LE |
+		    SNDRV_PCM_FMTBIT_U24_LE |
+		    SNDRV_PCM_FMTBIT_U8 |
+		    SNDRV_PCM_FMTBIT_S8,
+	.channels_min = 2,
+	.channels_max = 2,
 	.buffer_bytes_max = MAX_IDMA_BUFFER,
 	.period_bytes_min = 128,
 	.period_bytes_max = MAX_IDMA_PERIOD,
@@ -59,8 +66,6 @@ static struct idma_info {
 	void		 __iomem  *regs;
 	dma_addr_t	lp_tx_addr;
 } idma;
-
-static int idma_irq;
 
 static void idma_getpos(dma_addr_t *src)
 {
@@ -249,6 +254,7 @@ static int idma_mmap(struct snd_pcm_substream *substream,
 
 	/* From snd_pcm_lib_mmap_iomem */
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+	vma->vm_flags |= VM_IO;
 	size = vma->vm_end - vma->vm_start;
 	offset = vma->vm_pgoff << PAGE_SHIFT;
 	ret = io_remap_pfn_range(vma, vma->vm_start,
@@ -274,7 +280,7 @@ static irqreturn_t iis_irq(int irqno, void *dev_id)
 
 		addr = readl(idma.regs + I2SLVL0ADDR) - idma.lp_tx_addr;
 		addr += prtd->periodsz;
-		addr %= (u32)(prtd->end - prtd->start);
+		addr %= (prtd->end - prtd->start);
 		addr += idma.lp_tx_addr;
 
 		writel(addr, idma.regs + I2SLVL0ADDR);
@@ -298,7 +304,7 @@ static int idma_open(struct snd_pcm_substream *substream)
 	if (prtd == NULL)
 		return -ENOMEM;
 
-	ret = request_irq(idma_irq, iis_irq, 0, "i2s", prtd);
+	ret = request_irq(IRQ_I2S0, iis_irq, 0, "i2s", prtd);
 	if (ret < 0) {
 		pr_err("fail to claim i2s irq , ret = %d\n", ret);
 		kfree(prtd);
@@ -317,7 +323,7 @@ static int idma_close(struct snd_pcm_substream *substream)
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct idma_ctrl *prtd = runtime->private_data;
 
-	free_irq(idma_irq, prtd);
+	free_irq(IRQ_I2S0, prtd);
 
 	if (!prtd)
 		pr_err("idma_close called with prtd == NULL\n");
@@ -375,45 +381,49 @@ static int preallocate_idma_buffer(struct snd_pcm *pcm, int stream)
 	return 0;
 }
 
+static u64 idma_mask = DMA_BIT_MASK(32);
+
 static int idma_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_card *card = rtd->card->snd_card;
+	struct snd_soc_dai *dai = rtd->cpu_dai;
 	struct snd_pcm *pcm = rtd->pcm;
-	int ret;
+	int ret = 0;
 
-	ret = dma_coerce_mask_and_coherent(card->dev, DMA_BIT_MASK(32));
-	if (ret)
-		return ret;
+	if (!card->dev->dma_mask)
+		card->dev->dma_mask = &idma_mask;
+	if (!card->dev->coherent_dma_mask)
+		card->dev->coherent_dma_mask = DMA_BIT_MASK(32);
 
-	if (pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream) {
+	if (dai->driver->playback.channels_min)
 		ret = preallocate_idma_buffer(pcm,
 				SNDRV_PCM_STREAM_PLAYBACK);
-	}
 
 	return ret;
 }
 
-void idma_reg_addr_init(void __iomem *regs, dma_addr_t addr)
+void idma_reg_addr_init(void *regs, dma_addr_t addr)
 {
 	spin_lock_init(&idma.lock);
 	idma.regs = regs;
 	idma.lp_tx_addr = addr;
 }
-EXPORT_SYMBOL_GPL(idma_reg_addr_init);
 
-static struct snd_soc_platform_driver asoc_idma_platform = {
+struct snd_soc_platform_driver asoc_idma_platform = {
 	.ops = &idma_ops,
 	.pcm_new = idma_new,
 	.pcm_free = idma_free,
 };
 
-static int asoc_idma_platform_probe(struct platform_device *pdev)
+static int __devinit asoc_idma_platform_probe(struct platform_device *pdev)
 {
-	idma_irq = platform_get_irq(pdev, 0);
-	if (idma_irq < 0)
-		return idma_irq;
+	return snd_soc_register_platform(&pdev->dev, &asoc_idma_platform);
+}
 
-	return devm_snd_soc_register_platform(&pdev->dev, &asoc_idma_platform);
+static int __devexit asoc_idma_platform_remove(struct platform_device *pdev)
+{
+	snd_soc_unregister_platform(&pdev->dev);
+	return 0;
 }
 
 static struct platform_driver asoc_idma_driver = {
@@ -423,9 +433,20 @@ static struct platform_driver asoc_idma_driver = {
 	},
 
 	.probe = asoc_idma_platform_probe,
+	.remove = __devexit_p(asoc_idma_platform_remove),
 };
 
-module_platform_driver(asoc_idma_driver);
+static int __init asoc_idma_init(void)
+{
+	return platform_driver_register(&asoc_idma_driver);
+}
+module_init(asoc_idma_init);
+
+static void __exit asoc_idma_exit(void)
+{
+	platform_driver_unregister(&asoc_idma_driver);
+}
+module_exit(asoc_idma_exit);
 
 MODULE_AUTHOR("Jaswinder Singh, <jassisinghbrar@gmail.com>");
 MODULE_DESCRIPTION("Samsung ASoC IDMA Driver");

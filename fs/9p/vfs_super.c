@@ -89,7 +89,7 @@ v9fs_fill_super(struct super_block *sb, struct v9fs_session_info *v9ses,
 	if (v9ses->cache)
 		sb->s_bdi->ra_pages = (VM_MAX_READAHEAD * 1024)/PAGE_CACHE_SIZE;
 
-	sb->s_flags |= MS_ACTIVE | MS_DIRSYNC | MS_NOATIME;
+	sb->s_flags = flags | MS_ACTIVE | MS_DIRSYNC | MS_NOATIME;
 	if (!v9ses->cache)
 		sb->s_flags |= MS_SYNCHRONOUS;
 
@@ -117,11 +117,11 @@ static struct dentry *v9fs_mount(struct file_system_type *fs_type, int flags,
 	struct inode *inode = NULL;
 	struct dentry *root = NULL;
 	struct v9fs_session_info *v9ses = NULL;
-	umode_t mode = S_IRWXUGO | S_ISVTX;
+	int mode = S_IRWXUGO | S_ISVTX;
 	struct p9_fid *fid;
 	int retval = 0;
 
-	p9_debug(P9_DEBUG_VFS, "\n");
+	P9_DPRINTK(P9_DEBUG_VFS, " \n");
 
 	v9ses = kzalloc(sizeof(struct v9fs_session_info), GFP_KERNEL);
 	if (!v9ses)
@@ -137,14 +137,14 @@ static struct dentry *v9fs_mount(struct file_system_type *fs_type, int flags,
 		goto close_session;
 	}
 
-	sb = sget(fs_type, NULL, v9fs_set_super, flags, v9ses);
+	sb = sget(fs_type, NULL, v9fs_set_super, v9ses);
 	if (IS_ERR(sb)) {
 		retval = PTR_ERR(sb);
 		goto clunk_fid;
 	}
 	v9fs_fill_super(sb, v9ses, flags, data);
 
-	if (v9ses->cache == CACHE_LOOSE || v9ses->cache == CACHE_FSCACHE)
+	if (v9ses->cache)
 		sb->s_d_op = &v9fs_cached_dentry_operations;
 	else
 		sb->s_d_op = &v9fs_dentry_operations;
@@ -155,8 +155,9 @@ static struct dentry *v9fs_mount(struct file_system_type *fs_type, int flags,
 		goto release_sb;
 	}
 
-	root = d_make_root(inode);
+	root = d_alloc_root(inode);
 	if (!root) {
+		iput(inode);
 		retval = -ENOMEM;
 		goto release_sb;
 	}
@@ -190,7 +191,7 @@ static struct dentry *v9fs_mount(struct file_system_type *fs_type, int flags,
 		goto release_sb;
 	v9fs_fid_add(root, fid);
 
-	p9_debug(P9_DEBUG_VFS, " simple set mount, return 0\n");
+	P9_DPRINTK(P9_DEBUG_VFS, " simple set mount, return 0\n");
 	return dget(sb->s_root);
 
 clunk_fid:
@@ -222,7 +223,7 @@ static void v9fs_kill_super(struct super_block *s)
 {
 	struct v9fs_session_info *v9ses = s->s_fs_info;
 
-	p9_debug(P9_DEBUG_VFS, " %p\n", s);
+	P9_DPRINTK(P9_DEBUG_VFS, " %p\n", s);
 
 	kill_anon_super(s);
 
@@ -230,7 +231,7 @@ static void v9fs_kill_super(struct super_block *s)
 	v9fs_session_close(v9ses);
 	kfree(v9ses);
 	s->s_fs_info = NULL;
-	p9_debug(P9_DEBUG_VFS, "exiting kill_super\n");
+	P9_DPRINTK(P9_DEBUG_VFS, "exiting kill_super\n");
 }
 
 static void
@@ -259,7 +260,7 @@ static int v9fs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	if (v9fs_proto_dotl(v9ses)) {
 		res = p9_client_statfs(fid, &rs);
 		if (res == 0) {
-			buf->f_type = rs.type;
+			buf->f_type = V9FS_MAGIC;
 			buf->f_bsize = rs.bsize;
 			buf->f_blocks = rs.blocks;
 			buf->f_bfree = rs.bfree;
@@ -282,7 +283,7 @@ static int v9fs_drop_inode(struct inode *inode)
 {
 	struct v9fs_session_info *v9ses;
 	v9ses = v9fs_inode2v9ses(inode);
-	if (v9ses->cache == CACHE_LOOSE || v9ses->cache == CACHE_FSCACHE)
+	if (v9ses->cache)
 		return generic_drop_inode(inode);
 	/*
 	 * in case of non cached mode always drop the
@@ -302,7 +303,7 @@ static int v9fs_write_inode(struct inode *inode,
 	 * send an fsync request to server irrespective of
 	 * wbc->sync_mode.
 	 */
-	p9_debug(P9_DEBUG_VFS, "%s: inode %p\n", __func__, inode);
+	P9_DPRINTK(P9_DEBUG_VFS, "%s: inode %p\n", __func__, inode);
 	v9inode = V9FS_I(inode);
 	if (!v9inode->writeback_fid)
 		return 0;
@@ -325,12 +326,10 @@ static int v9fs_write_inode_dotl(struct inode *inode,
 	 * send an fsync request to server irrespective of
 	 * wbc->sync_mode.
 	 */
+	P9_DPRINTK(P9_DEBUG_VFS, "%s: inode %p\n", __func__, inode);
 	v9inode = V9FS_I(inode);
-	p9_debug(P9_DEBUG_VFS, "%s: inode %p, writeback_fid %p\n",
-		 __func__, inode, v9inode->writeback_fid);
 	if (!v9inode->writeback_fid)
 		return 0;
-
 	ret = p9_client_fsync(v9inode->writeback_fid, 0);
 	if (ret < 0) {
 		__mark_inode_dirty(inode, I_DIRTY_DATASYNC);
@@ -365,6 +364,5 @@ struct file_system_type v9fs_fs_type = {
 	.mount = v9fs_mount,
 	.kill_sb = v9fs_kill_super,
 	.owner = THIS_MODULE,
-	.fs_flags = FS_RENAME_DOES_D_MOVE,
+	.fs_flags = FS_RENAME_DOES_D_MOVE|FS_REVAL_DOT,
 };
-MODULE_ALIAS_FS("9p");

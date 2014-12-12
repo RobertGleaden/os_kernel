@@ -24,7 +24,8 @@
  * the GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program;  if not, see <http://www.gnu.org/licenses/>.
+ * along with this program;  if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  *
  */
 
@@ -95,7 +96,7 @@ struct netlbl_af4list *netlbl_af4list_search_exact(__be32 addr,
 }
 
 
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 /**
  * netlbl_af6list_search - Search for a matching IPv6 address entry
  * @addr: IPv6 address
@@ -184,7 +185,7 @@ int netlbl_af4list_add(struct netlbl_af4list *entry, struct list_head *head)
 	return 0;
 }
 
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 /**
  * netlbl_af6list_add - Add a new IPv6 address entry to a list
  * @entry: address entry
@@ -262,7 +263,7 @@ struct netlbl_af4list *netlbl_af4list_remove(__be32 addr, __be32 mask,
 	return entry;
 }
 
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 /**
  * netlbl_af6list_remove_entry - Remove an IPv6 address entry
  * @entry: address entry
@@ -341,7 +342,7 @@ void netlbl_af4list_audit_addr(struct audit_buffer *audit_buf,
 	}
 }
 
-#if IS_ENABLED(CONFIG_IPV6)
+#if defined(CONFIG_IPV6) || defined(CONFIG_IPV6_MODULE)
 /**
  * netlbl_af6list_audit_addr - Audit an IPv6 address
  * @audit_buf: audit buffer

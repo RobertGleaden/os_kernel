@@ -1,24 +1,24 @@
 #ifndef _VME_USER_H_
 #define _VME_USER_H_
 
-#define VME_USER_BUS_MAX	1
+#define USER_BUS_MAX                  1
 
 /*
  * VMEbus Master Window Configuration Structure
  */
 struct vme_master {
-	__u32 enable;		/* State of Window */
-	__u64 vme_addr;		/* Starting Address on the VMEbus */
-	__u64 size;		/* Window Size */
-	__u32 aspace;		/* Address Space */
-	__u32 cycle;		/* Cycle properties */
-	__u32 dwidth;		/* Maximum Data Width */
+	int enable;			/* State of Window */
+	unsigned long long vme_addr;	/* Starting Address on the VMEbus */
+	unsigned long long size;	/* Window Size */
+	vme_address_t aspace;		/* Address Space */
+	vme_cycle_t cycle;		/* Cycle properties */
+	vme_width_t dwidth;		/* Maximum Data Width */
 #if 0
-	char prefetchenable;		/* Prefetch Read Enable State */
-	int prefetchsize;		/* Prefetch Read Size (Cache Lines) */
-	char wrpostenable;		/* Write Post State */
+	char prefetchEnable;		/* Prefetch Read Enable State */
+	int prefetchSize;		/* Prefetch Read Size (Cache Lines) */
+	char wrPostEnable;		/* Write Post State */
 #endif
-} __packed;
+};
 
 
 /*
@@ -31,17 +31,17 @@ struct vme_master {
 
 /* VMEbus Slave Window Configuration Structure */
 struct vme_slave {
-	__u32 enable;		/* State of Window */
-	__u64 vme_addr;		/* Starting Address on the VMEbus */
-	__u64 size;		/* Window Size */
-	__u32 aspace;		/* Address Space */
-	__u32 cycle;		/* Cycle properties */
+	int enable;			/* State of Window */
+	unsigned long long vme_addr;	/* Starting Address on the VMEbus */
+	unsigned long long size;	/* Window Size */
+	vme_address_t aspace;		/* Address Space */
+	vme_cycle_t cycle;		/* Cycle properties */
 #if 0
-	char wrpostenable;		/* Write Post State */
-	char rmwlock;			/* Lock PCI during RMW Cycles */
-	char data64bitcapable;		/* non-VMEbus capable of 64-bit Data */
+	char wrPostEnable;		/* Write Post State */
+	char rmwLock;			/* Lock PCI during RMW Cycles */
+	char data64BitCapable;		/* non-VMEbus capable of 64-bit Data */
 #endif
-} __packed;
+};
 
 struct vme_irq_id {
 	__u8 level;

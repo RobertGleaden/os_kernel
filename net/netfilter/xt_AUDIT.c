@@ -98,7 +98,6 @@ static void audit_ip6(struct audit_buffer *ab, struct sk_buff *skb)
 	struct ipv6hdr _ip6h;
 	const struct ipv6hdr *ih;
 	u8 nexthdr;
-	__be16 frag_off;
 	int offset;
 
 	ih = skb_header_pointer(skb, skb_network_offset(skb), sizeof(_ip6h), &_ip6h);
@@ -109,7 +108,7 @@ static void audit_ip6(struct audit_buffer *ab, struct sk_buff *skb)
 
 	nexthdr = ih->nexthdr;
 	offset = ipv6_skip_exthdr(skb, skb_network_offset(skb) + sizeof(_ip6h),
-				  &nexthdr, &frag_off);
+				  &nexthdr);
 
 	audit_log_format(ab, " saddr=%pI6c daddr=%pI6c proto=%hhu",
 			 &ih->saddr, &ih->daddr, nexthdr);
@@ -123,9 +122,6 @@ audit_tg(struct sk_buff *skb, const struct xt_action_param *par)
 {
 	const struct xt_audit_info *info = par->targinfo;
 	struct audit_buffer *ab;
-
-	if (audit_enabled == 0)
-		goto errout;
 
 	ab = audit_log_start(NULL, GFP_ATOMIC, AUDIT_NETFILTER_PKT);
 	if (ab == NULL)
@@ -146,11 +142,11 @@ audit_tg(struct sk_buff *skb, const struct xt_action_param *par)
 
 		if (par->family == NFPROTO_BRIDGE) {
 			switch (eth_hdr(skb)->h_proto) {
-			case htons(ETH_P_IP):
+			case __constant_htons(ETH_P_IP):
 				audit_ip4(ab, skb);
 				break;
 
-			case htons(ETH_P_IPV6):
+			case __constant_htons(ETH_P_IPV6):
 				audit_ip6(ab, skb);
 				break;
 			}

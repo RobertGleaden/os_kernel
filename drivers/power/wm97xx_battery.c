@@ -25,8 +25,9 @@
 #include <linux/irq.h>
 #include <linux/slab.h>
 
+static DEFINE_MUTEX(bat_lock);
 static struct work_struct bat_work;
-static DEFINE_MUTEX(work_lock);
+static struct mutex work_lock;
 static int bat_status = POWER_SUPPLY_STATUS_UNKNOWN;
 static enum power_supply_property *prop;
 
@@ -146,7 +147,7 @@ static irqreturn_t wm97xx_chrg_irq(int irq, void *data)
 #ifdef CONFIG_PM
 static int wm97xx_bat_suspend(struct device *dev)
 {
-	flush_work(&bat_work);
+	flush_work_sync(&bat_work);
 	return 0;
 }
 
@@ -162,7 +163,7 @@ static const struct dev_pm_ops wm97xx_bat_pm_ops = {
 };
 #endif
 
-static int wm97xx_bat_probe(struct platform_device *dev)
+static int __devinit wm97xx_bat_probe(struct platform_device *dev)
 {
 	int ret = 0;
 	int props = 1;	/* POWER_SUPPLY_PROP_PRESENT */
@@ -180,6 +181,8 @@ static int wm97xx_bat_probe(struct platform_device *dev)
 	if (dev->id != -1)
 		return -EINVAL;
 
+	mutex_init(&work_lock);
+
 	if (!pdata) {
 		dev_err(&dev->dev, "No platform_data supplied\n");
 		return -EINVAL;
@@ -193,7 +196,7 @@ static int wm97xx_bat_probe(struct platform_device *dev)
 		if (ret)
 			goto err2;
 		ret = request_irq(gpio_to_irq(pdata->charge_gpio),
-				wm97xx_chrg_irq, 0,
+				wm97xx_chrg_irq, IRQF_DISABLED,
 				"AC Detect", dev);
 		if (ret)
 			goto err2;
@@ -212,10 +215,8 @@ static int wm97xx_bat_probe(struct platform_device *dev)
 		props++;	/* POWER_SUPPLY_PROP_VOLTAGE_MIN */
 
 	prop = kzalloc(props * sizeof(*prop), GFP_KERNEL);
-	if (!prop) {
-		ret = -ENOMEM;
+	if (!prop)
 		goto err3;
-	}
 
 	prop[i++] = POWER_SUPPLY_PROP_PRESENT;
 	if (pdata->charge_gpio >= 0)
@@ -263,7 +264,7 @@ err:
 	return ret;
 }
 
-static int wm97xx_bat_remove(struct platform_device *dev)
+static int __devexit wm97xx_bat_remove(struct platform_device *dev)
 {
 	struct wm97xx_pdata *wmdata = dev->dev.platform_data;
 	struct wm97xx_batt_pdata *pdata = wmdata->batt_pdata;
@@ -287,10 +288,21 @@ static struct platform_driver wm97xx_bat_driver = {
 #endif
 	},
 	.probe		= wm97xx_bat_probe,
-	.remove		= wm97xx_bat_remove,
+	.remove		= __devexit_p(wm97xx_bat_remove),
 };
 
-module_platform_driver(wm97xx_bat_driver);
+static int __init wm97xx_bat_init(void)
+{
+	return platform_driver_register(&wm97xx_bat_driver);
+}
+
+static void __exit wm97xx_bat_exit(void)
+{
+	platform_driver_unregister(&wm97xx_bat_driver);
+}
+
+module_init(wm97xx_bat_init);
+module_exit(wm97xx_bat_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Marek Vasut <marek.vasut@gmail.com>");

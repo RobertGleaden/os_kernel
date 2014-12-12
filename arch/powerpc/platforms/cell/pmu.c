@@ -24,7 +24,6 @@
 
 #include <linux/interrupt.h>
 #include <linux/types.h>
-#include <linux/export.h>
 #include <asm/io.h>
 #include <asm/irq_regs.h>
 #include <asm/machdep.h>
@@ -382,7 +381,7 @@ static int __init cbe_init_pm_irq(void)
 	unsigned int irq;
 	int rc, node;
 
-	for_each_online_node(node) {
+	for_each_node(node) {
 		irq = irq_create_mapping(NULL, IIC_IRQ_IOEX_PMI |
 					       (node << IIC_IRQ_NODE_SHIFT));
 		if (irq == NO_IRQ) {
@@ -392,7 +391,7 @@ static int __init cbe_init_pm_irq(void)
 		}
 
 		rc = request_irq(irq, cbe_pm_irq,
-				 0, "cbe-pmu-0", NULL);
+				 IRQF_DISABLED, "cbe-pmu-0", NULL);
 		if (rc) {
 			printk("ERROR: Request for irq on node %d failed\n",
 			       node);

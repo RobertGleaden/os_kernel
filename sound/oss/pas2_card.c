@@ -41,19 +41,19 @@ static int      pas_irq;
 static int      pas_sb_base;
 DEFINE_SPINLOCK(pas_lock);
 #ifndef CONFIG_PAS_JOYSTICK
-static bool	joystick;
+static int	joystick;
 #else
-static bool 	joystick = 1;
+static int 	joystick = 1;
 #endif
 #ifdef SYMPHONY_PAS
-static bool 	symphony = 1;
+static int 	symphony = 1;
 #else
-static bool 	symphony;
+static int 	symphony;
 #endif
 #ifdef BROKEN_BUS_CLOCK
-static bool	broken_bus_clock = 1;
+static int	broken_bus_clock = 1;
 #else
-static bool	broken_bus_clock;
+static int	broken_bus_clock;
 #endif
 
 static struct address_info cfg;
@@ -73,6 +73,8 @@ static char    *pas_model_names[] = {
  * These routines perform the I/O address translation required
  * to support other than the default base address
  */
+
+extern void     mix_write(unsigned char data, int ioaddr);
 
 unsigned char pas_read(int ioaddr)
 {
@@ -331,11 +333,6 @@ static void __init attach_pas_card(struct address_info *hw_config)
 		{
 			char            temp[100];
 
-			if (pas_model < 0 ||
-			    pas_model >= ARRAY_SIZE(pas_model_names)) {
-				printk(KERN_ERR "pas2 unrecognized model.\n");
-				return;
-			}
 			sprintf(temp,
 			    "%s rev %d", pas_model_names[(int) pas_model],
 				    pas_read(0x2789));

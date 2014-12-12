@@ -28,8 +28,6 @@
 
 #define _RTL871X_MLME_C_
 
-#include <linux/etherdevice.h>
-
 #include "osdep_service.h"
 #include "drv_types.h"
 #include "recv_osdep.h"
@@ -54,16 +52,13 @@ static sint _init_mlme_priv(struct _adapter *padapter)
 	pmlmepriv->fw_state = 0;
 	pmlmepriv->cur_network.network.InfrastructureMode =
 				 Ndis802_11AutoUnknown;
-	/* Maybe someday we should rename this variable to "active_mode"(Jeff)*/
-	pmlmepriv->passive_mode = 1; /* 1: active, 0: passive. */
 	spin_lock_init(&(pmlmepriv->lock));
 	spin_lock_init(&(pmlmepriv->lock2));
 	_init_queue(&(pmlmepriv->free_bss_pool));
 	_init_queue(&(pmlmepriv->scanned_queue));
 	set_scanned_network_val(pmlmepriv, 0);
 	memset(&pmlmepriv->assoc_ssid, 0, sizeof(struct ndis_802_11_ssid));
-	pbuf = kmalloc(MAX_BSS_CNT * (sizeof(struct wlan_network)),
-		       GFP_ATOMIC);
+	pbuf = _malloc(MAX_BSS_CNT * (sizeof(struct wlan_network)));
 	if (pbuf == NULL)
 		return _FAIL;
 	pmlmepriv->free_bss_buf = pbuf;
@@ -140,7 +135,7 @@ static void _free_network_nolock(struct mlme_priv *pmlmepriv,
 
 /*
 	return the wlan_network with the matching addr
-	Shall be called under atomic context...
+	Shall be calle under atomic context...
 	to avoid possible racing condition...
 */
 static struct wlan_network *_r8712_find_network(struct  __queue *scanned_queue,
@@ -149,8 +144,9 @@ static struct wlan_network *_r8712_find_network(struct  __queue *scanned_queue,
 	unsigned long irqL;
 	struct list_head *phead, *plist;
 	struct wlan_network *pnetwork = NULL;
+	u8 zero_addr[ETH_ALEN] = {0, 0, 0, 0, 0, 0};
 
-	if (is_zero_ether_addr(addr))
+	if (!memcmp(zero_addr, addr, ETH_ALEN))
 		return NULL;
 	spin_lock_irqsave(&scanned_queue->lock, irqL);
 	phead = get_list_head(scanned_queue);
@@ -257,7 +253,7 @@ void r8712_free_network_queue(struct _adapter *dev)
 /*
 	return the wlan_network with the matching addr
 
-	Shall be called under atomic context...
+	Shall be calle under atomic context...
 	to avoid possible racing condition...
 */
 static struct wlan_network *r8712_find_network(struct  __queue *scanned_queue,
@@ -489,12 +485,6 @@ static int is_desired_network(struct _adapter *adapter,
 	if ((psecuritypriv->PrivacyAlgrthm != _NO_PRIVACY_) &&
 		    (pnetwork->network.Privacy == 0))
 		bselected = false;
-	if (check_fwstate(&adapter->mlmepriv, WIFI_ADHOC_STATE) == true) {
-		if (pnetwork->network.InfrastructureMode !=
-			adapter->mlmepriv.cur_network.network.
-			InfrastructureMode)
-			bselected = false;
-	}
 	return bselected;
 }
 
@@ -553,7 +543,7 @@ void r8712_survey_event_callback(struct _adapter *adapter, u8 *pbuf)
 			ibss_wlan = r8712_find_network(
 						&pmlmepriv->scanned_queue,
 						pnetwork->MacAddress);
-			if (ibss_wlan) {
+			if (!ibss_wlan) {
 				memcpy(ibss_wlan->network.IEs,
 					pnetwork->IEs, 8);
 				goto exit;
@@ -605,6 +595,9 @@ void r8712_surveydone_event_callback(struct _adapter *adapter, u8 *pbuf)
 						 adapter->registrypriv.
 							dev_network.MacAddress;
 					pmlmepriv->fw_state ^= _FW_UNDER_SURVEY;
+					memset(&pdev_network->Ssid, 0,
+						sizeof(struct
+						       ndis_802_11_ssid));
 					memcpy(&pdev_network->Ssid,
 						&pmlmepriv->assoc_ssid,
 						sizeof(struct
@@ -690,11 +683,9 @@ void r8712_ind_disconnect(struct _adapter *padapter)
 {
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
 
-	if (check_fwstate(pmlmepriv, _FW_LINKED) == true) {
-		_clr_fwstate_(pmlmepriv, _FW_LINKED);
-		padapter->ledpriv.LedControlHandler(padapter, LED_CTL_NO_LINK);
-		r8712_os_indicate_disconnect(padapter);
-	}
+	_clr_fwstate_(pmlmepriv, _FW_LINKED);
+	padapter->ledpriv.LedControlHandler(padapter, LED_CTL_NO_LINK);
+	r8712_os_indicate_disconnect(padapter);
 	if (padapter->pwrctrlpriv.pwr_mode !=
 	    padapter->registrypriv.power_mgnt) {
 		_cancel_timer_ex(&pmlmepriv->dhcp_timer);
@@ -726,9 +717,10 @@ void r8712_joinbss_event_callback(struct _adapter *adapter, u8 *pbuf)
 	struct wlan_network *pnetwork;
 
 	if (sizeof(struct list_head) == 4 * sizeof(u32)) {
-		pnetwork = kmalloc(sizeof(struct wlan_network), GFP_ATOMIC);
+		pnetwork = (struct wlan_network *)
+			   _malloc(sizeof(struct wlan_network));
 		memcpy((u8 *)pnetwork+16, (u8 *)pbuf + 8,
-			sizeof(struct wlan_network) - 16);
+			 sizeof(struct wlan_network) - 16);
 	} else
 		pnetwork = (struct wlan_network *)pbuf;
 
@@ -1003,6 +995,8 @@ void r8712_stadel_event_callback(struct _adapter *adapter, u8 *pbuf)
 			memcpy(pdev_network, &tgt_network->network,
 				r8712_get_ndis_wlan_bssid_ex_sz(&tgt_network->
 							network));
+			memset(&pdev_network->Ssid, 0,
+				sizeof(struct ndis_802_11_ssid));
 			memcpy(&pdev_network->Ssid,
 				&pmlmepriv->assoc_ssid,
 				sizeof(struct ndis_802_11_ssid));
@@ -1033,7 +1027,7 @@ void r8712_cpwm_event_callback(struct _adapter *adapter, u8 *pbuf)
  *	 and the WiFi client will drop the data with seq number 0.
  *	So, the 8712 firmware has to inform driver with receiving the
  *	 ADDBA-Req frame so that the driver can reset the
- *	sequence value of Rx reorder control.
+ *	sequence value of Rx reorder contorl.
  */
 void r8712_got_addbareq_event_callback(struct _adapter *adapter, u8 *pbuf)
 {
@@ -1043,6 +1037,9 @@ void r8712_got_addbareq_event_callback(struct _adapter *adapter, u8 *pbuf)
 	struct	sta_priv *pstapriv = &adapter->stapriv;
 	struct	recv_reorder_ctrl *precvreorder_ctrl = NULL;
 
+	printk(KERN_INFO "r8712u: [%s] mac = %pM, seq = %d, tid = %d\n",
+	     __func__, pAddbareq_pram->MacAddress,
+	    pAddbareq_pram->StartSeqNum, pAddbareq_pram->tid);
 	psta = r8712_get_stainfo(pstapriv, pAddbareq_pram->MacAddress);
 	if (psta) {
 		precvreorder_ctrl =
@@ -1211,16 +1208,19 @@ sint r8712_set_auth(struct _adapter *adapter,
 	struct cmd_priv	*pcmdpriv = &adapter->cmdpriv;
 	struct cmd_obj *pcmd;
 	struct setauth_parm *psetauthparm;
+	sint ret = _SUCCESS;
 
-	pcmd = kmalloc(sizeof(struct cmd_obj), GFP_ATOMIC);
+	pcmd = (struct cmd_obj *)_malloc(sizeof(struct cmd_obj));
 	if (pcmd == NULL)
 		return _FAIL;
 
-	psetauthparm = kzalloc(sizeof(struct setauth_parm), GFP_ATOMIC);
+	psetauthparm = (struct setauth_parm *)_malloc(
+			sizeof(struct setauth_parm));
 	if (psetauthparm == NULL) {
 		kfree((unsigned char *)pcmd);
 		return _FAIL;
 	}
+	memset(psetauthparm, 0, sizeof(struct setauth_parm));
 	psetauthparm->mode = (u8)psecuritypriv->AuthAlgrthm;
 	pcmd->cmdcode = _SetAuth_CMD_;
 	pcmd->parmbuf = (unsigned char *)psetauthparm;
@@ -1229,7 +1229,7 @@ sint r8712_set_auth(struct _adapter *adapter,
 	pcmd->rspsz = 0;
 	_init_listhead(&pcmd->list);
 	r8712_enqueue_cmd(pcmdpriv, pcmd);
-	return _SUCCESS;
+	return ret;
 }
 
 sint r8712_set_key(struct _adapter *adapter,
@@ -1240,16 +1240,16 @@ sint r8712_set_key(struct _adapter *adapter,
 	struct cmd_obj *pcmd;
 	struct setkey_parm *psetkeyparm;
 	u8 keylen;
-	sint ret = _SUCCESS;
 
-	pcmd = kmalloc(sizeof(struct cmd_obj), GFP_ATOMIC);
+	pcmd = (struct cmd_obj *)_malloc(sizeof(struct cmd_obj));
 	if (pcmd == NULL)
 		return _FAIL;
-	psetkeyparm = kzalloc(sizeof(struct setkey_parm), GFP_ATOMIC);
+	psetkeyparm = (struct setkey_parm *)_malloc(sizeof(struct setkey_parm));
 	if (psetkeyparm == NULL) {
-		ret = _FAIL;
-		goto err_free_cmd;
+		kfree((unsigned char *)pcmd);
+		return _FAIL;
 	}
+	memset(psetkeyparm, 0, sizeof(struct setkey_parm));
 	if (psecuritypriv->AuthAlgrthm == 2) { /* 802.1X */
 		psetkeyparm->algorithm =
 			 (u8)psecuritypriv->XGrpPrivacy;
@@ -1271,28 +1271,19 @@ sint r8712_set_key(struct _adapter *adapter,
 			psecuritypriv->DefKey[keyid].skey, keylen);
 		break;
 	case _TKIP_:
-		if (keyid < 1 || keyid > 2) {
-			ret = _FAIL;
-			goto err_free_parm;
-		}
 		keylen = 16;
 		memcpy(psetkeyparm->key,
 			&psecuritypriv->XGrpKey[keyid - 1], keylen);
 		psetkeyparm->grpkey = 1;
 		break;
 	case _AES_:
-		if (keyid < 1 || keyid > 2) {
-			ret = _FAIL;
-			goto err_free_parm;
-		}
 		keylen = 16;
 		memcpy(psetkeyparm->key,
 			&psecuritypriv->XGrpKey[keyid - 1], keylen);
 		psetkeyparm->grpkey = 1;
 		break;
 	default:
-		ret = _FAIL;
-		goto err_free_parm;
+		return _FAIL;
 	}
 	pcmd->cmdcode = _SetKey_CMD_;
 	pcmd->parmbuf = (u8 *)psetkeyparm;
@@ -1301,13 +1292,7 @@ sint r8712_set_key(struct _adapter *adapter,
 	pcmd->rspsz = 0;
 	_init_listhead(&pcmd->list);
 	r8712_enqueue_cmd(pcmdpriv, pcmd);
-	return ret;
-
-err_free_parm:
-	kfree(psetkeyparm);
-err_free_cmd:
-	kfree(pcmd);
-	return ret;
+	return _SUCCESS;
 }
 
 /* adjust IEs for r8712_joinbss_cmd in WMM */
@@ -1646,7 +1631,7 @@ void r8712_update_registrypriv_dev_network(struct _adapter *adapter)
 	struct wlan_network	*cur_network = &adapter->mlmepriv.cur_network;
 
 	pdev_network->Privacy = cpu_to_le32(psecuritypriv->PrivacyAlgrthm
-					    > 0 ? 1 : 0); /* adhoc no 802.1x */
+					    > 0 ? 1 : 0) ; /* adhoc no 802.1x */
 	pdev_network->Rssi = 0;
 	switch (pregistrypriv->wireless_mode) {
 	case WIRELESS_11B:
@@ -1672,7 +1657,7 @@ void r8712_update_registrypriv_dev_network(struct _adapter *adapter)
 	/* 1. Supported rates
 	 * 2. IE
 	 */
-	sz = r8712_generate_ie(pregistrypriv);
+	sz = r8712_generate_ie(pregistrypriv, adapter);
 	pdev_network->IELength = sz;
 	pdev_network->Length = r8712_get_ndis_wlan_bssid_ex_sz(
 			      (struct ndis_wlan_bssid_ex *)pdev_network);
@@ -1776,7 +1761,7 @@ static void update_ht_cap(struct _adapter *padapter, u8 *pie, uint ie_len)
 		phtpriv->rx_ampdu_maxlen = max_ampdu_sz;
 	}
 	/* for A-MPDU Rx reordering buffer control for bmc_sta & sta_info
-	 * if A-MPDU Rx is enabled, resetting rx_ordering_ctrl
+	 * if A-MPDU Rx is enabled, reseting rx_ordering_ctrl
 	 * wstart_b(indicate_seq) to default value=0xffff
 	 * todo: check if AP can send A-MPDU packets
 	 */
@@ -1791,7 +1776,7 @@ static void update_ht_cap(struct _adapter *padapter, u8 *pie, uint ie_len)
 	psta = r8712_get_stainfo(&padapter->stapriv,
 				 pcur_network->network.MacAddress);
 	if (psta) {
-		for (i = 0; i < 16; i++) {
+		for (i = 0; i < 16 ; i++) {
 			preorder_ctrl = &psta->recvreorder_ctrl[i];
 			preorder_ctrl->indicate_seq = 0xffff;
 			preorder_ctrl->wend_b = 0xffff;
@@ -1816,4 +1801,40 @@ void r8712_issue_addbareq_cmd(struct _adapter *padapter, int priority)
 			phtpriv->baddbareq_issued[priority] = true;
 		}
 	}
+}
+
+/*the function is >= passive_level*/
+unsigned int r8712_add_ht_addt_info(struct _adapter *padapter,
+			      u8 *in_ie, u8 *out_ie,
+			      uint in_len, uint *pout_len)
+{
+	u32 ielen, out_len =  0;
+	unsigned char *p, *pframe;
+	struct ieee80211_ht_addt_info ht_addt_info;
+	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
+	struct ht_priv *phtpriv = &pmlmepriv->htpriv;
+	struct registry_priv *pregistrypriv = &padapter->registrypriv;
+	out_len = *pout_len;
+
+	if (pregistrypriv->ht_enable == 1) {
+		p = r8712_get_ie(in_ie+12, _HT_ADD_INFO_IE_,
+				 &ielen, in_len - 12);
+		if (p && (ielen > 0)) {
+			; /* dummy branch */
+		} else {
+			if (p == NULL) {
+				int sz = sizeof(struct ieee80211_ht_addt_info);
+				memset(&ht_addt_info, 0, sz);
+				/*need to add the HT additional IEs*/
+				ht_addt_info.control_chan =
+						pregistrypriv->channel;
+				pframe = r8712_set_ie(out_ie + out_len,
+						_HT_ADD_INFO_IE_,
+						sz,
+						(unsigned char *)&ht_addt_info,
+						pout_len);
+			}
+		}
+	}
+	return phtpriv->ht_option;
 }

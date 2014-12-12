@@ -29,13 +29,12 @@
  *
  * Authors:
  *    Nicolai Haehnle <prefect_@gmx.net>
- *
- * ------------------------ This file is DEPRECATED! -------------------------
  */
 
-#include <drm/drmP.h>
-#include <drm/drm_buffer.h>
-#include <drm/radeon_drm.h>
+#include "drmP.h"
+#include "drm.h"
+#include "drm_buffer.h"
+#include "radeon_drm.h"
 #include "radeon_drv.h"
 #include "r300_reg.h"
 
@@ -75,7 +74,7 @@ static int r300_emit_cliprects(drm_radeon_private_t *dev_priv,
 		OUT_RING(CP_PACKET0(R300_RE_CLIPRECT_TL_0, nr * 2 - 1));
 
 		for (i = 0; i < nr; ++i) {
-			if (copy_from_user
+			if (DRM_COPY_FROM_USER_UNCHECKED
 			    (&box, &cmdbuf->boxes[n + i], sizeof(box))) {
 				DRM_ERROR("copy cliprect faulted\n");
 				return -EFAULT;
@@ -792,7 +791,7 @@ static __inline__ int r300_emit_packet3(drm_radeon_private_t *dev_priv,
 /**
  * Emit the sequence to pacify R300.
  */
-static void r300_pacify(drm_radeon_private_t *dev_priv)
+static __inline__ void r300_pacify(drm_radeon_private_t *dev_priv)
 {
 	uint32_t cache_z, cache_3d, cache_2d;
 	RING_LOCALS;
@@ -928,12 +927,12 @@ static int r300_scratch(drm_radeon_private_t *dev_priv,
 		buf_idx = drm_buffer_pointer_to_dword(cmdbuf->buffer, 0);
 		*buf_idx *= 2; /* 8 bytes per buf */
 
-		if (copy_to_user(ref_age_base + *buf_idx,
+		if (DRM_COPY_TO_USER(ref_age_base + *buf_idx,
 				&dev_priv->scratch_ages[header.scratch.reg],
 				sizeof(u32)))
 			return -EINVAL;
 
-		if (copy_from_user(&h_pending,
+		if (DRM_COPY_FROM_USER(&h_pending,
 				ref_age_base + *buf_idx + 1,
 				sizeof(u32)))
 			return -EINVAL;
@@ -943,7 +942,7 @@ static int r300_scratch(drm_radeon_private_t *dev_priv,
 
 		h_pending--;
 
-		if (copy_to_user(ref_age_base + *buf_idx + 1,
+		if (DRM_COPY_TO_USER(ref_age_base + *buf_idx + 1,
 					&h_pending,
 					sizeof(u32)))
 			return -EINVAL;

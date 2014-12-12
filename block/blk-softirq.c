@@ -8,7 +8,6 @@
 #include <linux/blkdev.h>
 #include <linux/interrupt.h>
 #include <linux/cpu.h>
-#include <linux/sched.h>
 
 #include "blk.h"
 
@@ -23,20 +22,20 @@ static void blk_done_softirq(struct softirq_action *h)
 	struct list_head *cpu_list, local_list;
 
 	local_irq_disable();
-	cpu_list = this_cpu_ptr(&blk_cpu_done);
+	cpu_list = &__get_cpu_var(blk_cpu_done);
 	list_replace_init(cpu_list, &local_list);
 	local_irq_enable();
 
 	while (!list_empty(&local_list)) {
 		struct request *rq;
 
-		rq = list_entry(local_list.next, struct request, ipi_list);
-		list_del_init(&rq->ipi_list);
+		rq = list_entry(local_list.next, struct request, csd.list);
+		list_del_init(&rq->csd.list);
 		rq->q->softirq_done_fn(rq);
 	}
 }
 
-#ifdef CONFIG_SMP
+#if defined(CONFIG_SMP) && defined(CONFIG_USE_GENERIC_SMP_HELPERS)
 static void trigger_softirq(void *data)
 {
 	struct request *rq = data;
@@ -44,10 +43,10 @@ static void trigger_softirq(void *data)
 	struct list_head *list;
 
 	local_irq_save(flags);
-	list = this_cpu_ptr(&blk_cpu_done);
-	list_add_tail(&rq->ipi_list, list);
+	list = &__get_cpu_var(blk_cpu_done);
+	list_add_tail(&rq->csd.list, list);
 
-	if (list->next == &rq->ipi_list)
+	if (list->next == &rq->csd.list)
 		raise_softirq_irqoff(BLOCK_SOFTIRQ);
 
 	local_irq_restore(flags);
@@ -65,21 +64,21 @@ static int raise_blk_irq(int cpu, struct request *rq)
 		data->info = rq;
 		data->flags = 0;
 
-		smp_call_function_single_async(cpu, data);
+		__smp_call_function_single(cpu, data, 0);
 		return 0;
 	}
 
 	return 1;
 }
-#else /* CONFIG_SMP */
+#else /* CONFIG_SMP && CONFIG_USE_GENERIC_SMP_HELPERS */
 static int raise_blk_irq(int cpu, struct request *rq)
 {
 	return 1;
 }
 #endif
 
-static int blk_cpu_notify(struct notifier_block *self, unsigned long action,
-			  void *hcpu)
+static int __cpuinit blk_cpu_notify(struct notifier_block *self,
+				    unsigned long action, void *hcpu)
 {
 	/*
 	 * If a CPU goes away, splice its entries to the current CPU
@@ -90,7 +89,7 @@ static int blk_cpu_notify(struct notifier_block *self, unsigned long action,
 
 		local_irq_disable();
 		list_splice_init(&per_cpu(blk_cpu_done, cpu),
-				 this_cpu_ptr(&blk_cpu_done));
+				 &__get_cpu_var(blk_cpu_done));
 		raise_softirq_irqoff(BLOCK_SOFTIRQ);
 		local_irq_enable();
 	}
@@ -98,16 +97,15 @@ static int blk_cpu_notify(struct notifier_block *self, unsigned long action,
 	return NOTIFY_OK;
 }
 
-static struct notifier_block blk_cpu_notifier = {
+static struct notifier_block __cpuinitdata blk_cpu_notifier = {
 	.notifier_call	= blk_cpu_notify,
 };
 
 void __blk_complete_request(struct request *req)
 {
-	int ccpu, cpu;
+	int ccpu, cpu, group_cpu = NR_CPUS;
 	struct request_queue *q = req->q;
 	unsigned long flags;
-	bool shared = false;
 
 	BUG_ON(!q->softirq_done_fn);
 
@@ -119,24 +117,26 @@ void __blk_complete_request(struct request *req)
 	 */
 	if (req->cpu != -1) {
 		ccpu = req->cpu;
-		if (!test_bit(QUEUE_FLAG_SAME_FORCE, &q->queue_flags))
-			shared = cpus_share_cache(cpu, ccpu);
+		if (!test_bit(QUEUE_FLAG_SAME_FORCE, &q->queue_flags)) {
+			ccpu = blk_cpu_to_group(ccpu);
+			group_cpu = blk_cpu_to_group(cpu);
+		}
 	} else
 		ccpu = cpu;
 
 	/*
-	 * If current CPU and requested CPU share a cache, run the softirq on
-	 * the current CPU. One might concern this is just like
+	 * If current CPU and requested CPU are in the same group, running
+	 * softirq in current CPU. One might concern this is just like
 	 * QUEUE_FLAG_SAME_FORCE, but actually not. blk_complete_request() is
 	 * running in interrupt handler, and currently I/O controller doesn't
 	 * support multiple interrupts, so current CPU is unique actually. This
 	 * avoids IPI sending from current CPU to the first CPU of a group.
 	 */
-	if (ccpu == cpu || shared) {
+	if (ccpu == cpu || ccpu == group_cpu) {
 		struct list_head *list;
 do_local:
-		list = this_cpu_ptr(&blk_cpu_done);
-		list_add_tail(&req->ipi_list, list);
+		list = &__get_cpu_var(blk_cpu_done);
+		list_add_tail(&req->csd.list, list);
 
 		/*
 		 * if the list only contains our just added request,
@@ -144,7 +144,7 @@ do_local:
 		 * entries there, someone already raised the irq but it
 		 * hasn't run yet.
 		 */
-		if (list->next == &req->ipi_list)
+		if (list->next == &req->csd.list)
 			raise_softirq_irqoff(BLOCK_SOFTIRQ);
 	} else if (raise_blk_irq(ccpu, req))
 		goto do_local;

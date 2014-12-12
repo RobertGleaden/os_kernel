@@ -18,7 +18,6 @@
 #include <linux/highmem.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
-#include <asm/cache_insns.h>
 #include <asm/cacheflush.h>
 
 /*
@@ -133,9 +132,9 @@ static void flush_icache_all(void)
 	jump_to_uncached();
 
 	/* Flush I-cache */
-	ccr = __raw_readl(SH_CCR);
+	ccr = __raw_readl(CCR);
 	ccr |= CCR_CACHE_ICI;
-	__raw_writel(ccr, SH_CCR);
+	__raw_writel(ccr, CCR);
 
 	/*
 	 * back_to_cached() will take care of the barrier for us, don't add
@@ -245,7 +244,7 @@ static void sh4_flush_cache_page(void *args)
 		if (map_coherent)
 			vaddr = kmap_coherent(page, address);
 		else
-			vaddr = kmap_atomic(page);
+			vaddr = kmap_atomic(page, KM_USER0);
 
 		address = (unsigned long)vaddr;
 	}
@@ -260,7 +259,7 @@ static void sh4_flush_cache_page(void *args)
 		if (map_coherent)
 			kunmap_coherent(vaddr);
 		else
-			kunmap_atomic(vaddr);
+			kunmap_atomic(vaddr, KM_USER0);
 	}
 }
 

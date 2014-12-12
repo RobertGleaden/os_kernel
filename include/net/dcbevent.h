@@ -11,7 +11,8 @@
  * more details.
  *
  * You should have received a copy of the GNU General Public License along with
- * this program; if not, see <http://www.gnu.org/licenses/>.
+ * this program; if not, write to the Free Software Foundation, Inc., 59 Temple
+ * Place - Suite 330, Boston, MA 02111-1307 USA.
  *
  * Author: John Fastabend <john.r.fastabend@intel.com>
  */
@@ -23,26 +24,8 @@ enum dcbevent_notif_type {
 	DCB_APP_EVENT = 1,
 };
 
-#ifdef CONFIG_DCB
-int register_dcbevent_notifier(struct notifier_block *nb);
-int unregister_dcbevent_notifier(struct notifier_block *nb);
-int call_dcbevent_notifiers(unsigned long val, void *v);
-#else
-static inline int
-register_dcbevent_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-
-static inline int unregister_dcbevent_notifier(struct notifier_block *nb)
-{
-	return 0;
-}
-
-static inline int call_dcbevent_notifiers(unsigned long val, void *v)
-{
-	return 0;
-}
-#endif /* CONFIG_DCB */
+extern int register_dcbevent_notifier(struct notifier_block *nb);
+extern int unregister_dcbevent_notifier(struct notifier_block *nb);
+extern int call_dcbevent_notifiers(unsigned long val, void *v);
 
 #endif

@@ -407,7 +407,7 @@ static void ace_dump_regs(struct ace_device *ace)
 		 ace_in32(ace, ACE_CFGLBA), ace_in(ace, ACE_FATSTAT));
 }
 
-static void ace_fix_driveid(u16 *id)
+void ace_fix_driveid(u16 *id)
 {
 #if defined(__BIG_ENDIAN)
 	int i;
@@ -456,14 +456,14 @@ static inline void ace_fsm_yieldirq(struct ace_device *ace)
 {
 	dev_dbg(ace->dev, "ace_fsm_yieldirq()\n");
 
-	if (!ace->irq)
+	if (ace->irq == NO_IRQ)
 		/* No IRQ assigned, so need to poll */
 		tasklet_schedule(&ace->fsm_tasklet);
 	ace->fsm_continue_flag = 0;
 }
 
 /* Get the next read/write request; ending requests that we don't handle */
-static struct request *ace_get_next_request(struct request_queue *q)
+struct request *ace_get_next_request(struct request_queue * q)
 {
 	struct request *req;
 
@@ -661,7 +661,7 @@ static void ace_fsm_dostate(struct ace_device *ace)
 			rq_data_dir(req));
 
 		ace->req = req;
-		ace->data_ptr = bio_data(req->bio);
+		ace->data_ptr = req->buffer;
 		ace->data_count = blk_rq_cur_sectors(req) * ACE_BUF_PER_SECTOR;
 		ace_out32(ace, ACE_MPULBA, blk_rq_pos(req) & 0x0FFFFFFF);
 
@@ -733,7 +733,7 @@ static void ace_fsm_dostate(struct ace_device *ace)
 			 *      blk_rq_sectors(ace->req),
 			 *      blk_rq_cur_sectors(ace->req));
 			 */
-			ace->data_ptr = bio_data(ace->req->bio);
+			ace->data_ptr = ace->req->buffer;
 			ace->data_count = blk_rq_cur_sectors(ace->req) * 16;
 			ace_fsm_yieldirq(ace);
 			break;
@@ -915,7 +915,7 @@ static int ace_open(struct block_device *bdev, fmode_t mode)
 	return 0;
 }
 
-static void ace_release(struct gendisk *disk, fmode_t mode)
+static int ace_release(struct gendisk *disk, fmode_t mode)
 {
 	struct ace_device *ace = disk->private_data;
 	unsigned long flags;
@@ -932,6 +932,7 @@ static void ace_release(struct gendisk *disk, fmode_t mode)
 	}
 	spin_unlock_irqrestore(&ace->lock, flags);
 	mutex_unlock(&xsysace_mutex);
+	return 0;
 }
 
 static int ace_getgeo(struct block_device *bdev, struct hd_geometry *geo)
@@ -960,7 +961,7 @@ static const struct block_device_operations ace_fops = {
 /* --------------------------------------------------------------------
  * SystemACE device setup/teardown code
  */
-static int ace_setup(struct ace_device *ace)
+static int __devinit ace_setup(struct ace_device *ace)
 {
 	u16 version;
 	u16 val;
@@ -1033,12 +1034,12 @@ static int ace_setup(struct ace_device *ace)
 		ACE_CTRL_DATABUFRDYIRQ | ACE_CTRL_ERRORIRQ);
 
 	/* Now we can hook up the irq handler */
-	if (ace->irq) {
+	if (ace->irq != NO_IRQ) {
 		rc = request_irq(ace->irq, ace_interrupt, 0, "systemace", ace);
 		if (rc) {
 			/* Failure - fall back to polled mode */
 			dev_err(ace->dev, "request_irq failed\n");
-			ace->irq = 0;
+			ace->irq = NO_IRQ;
 		}
 	}
 
@@ -1073,7 +1074,7 @@ err_ioremap:
 	return -ENOMEM;
 }
 
-static void ace_teardown(struct ace_device *ace)
+static void __devexit ace_teardown(struct ace_device *ace)
 {
 	if (ace->gd) {
 		del_gendisk(ace->gd);
@@ -1085,14 +1086,15 @@ static void ace_teardown(struct ace_device *ace)
 
 	tasklet_kill(&ace->fsm_tasklet);
 
-	if (ace->irq)
+	if (ace->irq != NO_IRQ)
 		free_irq(ace->irq, ace);
 
 	iounmap(ace->baseaddr);
 }
 
-static int ace_alloc(struct device *dev, int id, resource_size_t physaddr,
-		     int irq, int bus_width)
+static int __devinit
+ace_alloc(struct device *dev, int id, resource_size_t physaddr,
+	  int irq, int bus_width)
 {
 	struct ace_device *ace;
 	int rc;
@@ -1133,7 +1135,7 @@ err_noreg:
 	return rc;
 }
 
-static void ace_free(struct device *dev)
+static void __devexit ace_free(struct device *dev)
 {
 	struct ace_device *ace = dev_get_drvdata(dev);
 	dev_dbg(dev, "ace_free(%p)\n", dev);
@@ -1149,18 +1151,19 @@ static void ace_free(struct device *dev)
  * Platform Bus Support
  */
 
-static int ace_probe(struct platform_device *dev)
+static int __devinit ace_probe(struct platform_device *dev)
 {
 	resource_size_t physaddr = 0;
 	int bus_width = ACE_BUS_WIDTH_16; /* FIXME: should not be hard coded */
 	u32 id = dev->id;
-	int irq = 0;
+	int irq = NO_IRQ;
 	int i;
 
 	dev_dbg(&dev->dev, "ace_probe(%p)\n", dev);
 
 	/* device id and bus width */
-	if (of_property_read_u32(dev->dev.of_node, "port-number", &id))
+	of_property_read_u32(dev->dev.of_node, "port-number", &id);
+	if (id < 0)
 		id = 0;
 	if (of_find_property(dev->dev.of_node, "8-bit", NULL))
 		bus_width = ACE_BUS_WIDTH_8;
@@ -1179,7 +1182,7 @@ static int ace_probe(struct platform_device *dev)
 /*
  * Platform bus remove() method
  */
-static int ace_remove(struct platform_device *dev)
+static int __devexit ace_remove(struct platform_device *dev)
 {
 	ace_free(&dev->dev);
 	return 0;
@@ -1187,7 +1190,7 @@ static int ace_remove(struct platform_device *dev)
 
 #if defined(CONFIG_OF)
 /* Match table for of_platform binding */
-static const struct of_device_id ace_of_match[] = {
+static const struct of_device_id ace_of_match[] __devinitconst = {
 	{ .compatible = "xlnx,opb-sysace-1.00.b", },
 	{ .compatible = "xlnx,opb-sysace-1.00.c", },
 	{ .compatible = "xlnx,xps-sysace-1.00.a", },
@@ -1201,7 +1204,7 @@ MODULE_DEVICE_TABLE(of, ace_of_match);
 
 static struct platform_driver ace_platform_driver = {
 	.probe = ace_probe,
-	.remove = ace_remove,
+	.remove = __devexit_p(ace_remove),
 	.driver = {
 		.owner = THIS_MODULE,
 		.name = "xsysace",

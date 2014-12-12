@@ -15,7 +15,7 @@
 #include <linux/errno.h>
 #include <linux/stddef.h>
 #include <linux/slab.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/string.h>
 #include <linux/relay.h>
 #include <linux/vmalloc.h>
@@ -164,14 +164,10 @@ depopulate:
  */
 static struct rchan_buf *relay_create_buf(struct rchan *chan)
 {
-	struct rchan_buf *buf;
-
-	if (chan->n_subbufs > UINT_MAX / sizeof(size_t *))
-		return NULL;
-
-	buf = kzalloc(sizeof(struct rchan_buf), GFP_KERNEL);
+	struct rchan_buf *buf = kzalloc(sizeof(struct rchan_buf), GFP_KERNEL);
 	if (!buf)
 		return NULL;
+
 	buf->padding = kmalloc(chan->n_subbufs * sizeof(size_t *), GFP_KERNEL);
 	if (!buf->padding)
 		goto free_buf;
@@ -227,13 +223,14 @@ static void relay_destroy_buf(struct rchan_buf *buf)
  *	relay_remove_buf - remove a channel buffer
  *	@kref: target kernel reference that contains the relay buffer
  *
- *	Removes the file from the filesystem, which also frees the
+ *	Removes the file from the fileystem, which also frees the
  *	rchan_buf_struct and the channel buffer.  Should only be called from
  *	kref_put().
  */
 static void relay_remove_buf(struct kref *kref)
 {
 	struct rchan_buf *buf = container_of(kref, struct rchan_buf, kref);
+	buf->chan->cb->remove_buf_file(buf->dentry);
 	relay_destroy_buf(buf);
 }
 
@@ -305,7 +302,7 @@ static void buf_unmapped_default_callback(struct rchan_buf *buf,
  */
 static struct dentry *create_buf_file_default_callback(const char *filename,
 						       struct dentry *parent,
-						       umode_t mode,
+						       int mode,
 						       struct rchan_buf *buf,
 						       int *is_global)
 {
@@ -483,7 +480,6 @@ static void relay_close_buf(struct rchan_buf *buf)
 {
 	buf->finalized = 1;
 	del_timer_sync(&buf->timer);
-	buf->chan->cb->remove_buf_file(buf->dentry);
 	kref_put(&buf->kref, relay_remove_buf);
 }
 
@@ -516,7 +512,7 @@ static void setup_callbacks(struct rchan *chan,
  *
  * 	Returns the success/failure of the operation. (%NOTIFY_OK, %NOTIFY_BAD)
  */
-static int relay_hotcpu_callback(struct notifier_block *nb,
+static int __cpuinit relay_hotcpu_callback(struct notifier_block *nb,
 				unsigned long action,
 				void *hcpu)
 {
@@ -578,8 +574,6 @@ struct rchan *relay_open(const char *base_filename,
 
 	if (!(subbuf_size && n_subbufs))
 		return NULL;
-	if (subbuf_size > UINT_MAX / n_subbufs)
-		return NULL;
 
 	chan = kzalloc(sizeof(struct rchan), GFP_KERNEL);
 	if (!chan)
@@ -588,7 +582,7 @@ struct rchan *relay_open(const char *base_filename,
 	chan->version = RELAYFS_CHANNEL_VERSION;
 	chan->n_subbufs = n_subbufs;
 	chan->subbuf_size = subbuf_size;
-	chan->alloc_size = PAGE_ALIGN(subbuf_size * n_subbufs);
+	chan->alloc_size = FIX_SIZE(subbuf_size * n_subbufs);
 	chan->parent = parent;
 	chan->private_data = private_data;
 	if (base_filename) {
@@ -1099,7 +1093,8 @@ static size_t relay_file_read_end_pos(struct rchan_buf *buf,
 static int subbuf_read_actor(size_t read_start,
 			     struct rchan_buf *buf,
 			     size_t avail,
-			     read_descriptor_t *desc)
+			     read_descriptor_t *desc,
+			     read_actor_t actor)
 {
 	void *from;
 	int ret = 0;
@@ -1120,13 +1115,15 @@ static int subbuf_read_actor(size_t read_start,
 typedef int (*subbuf_actor_t) (size_t read_start,
 			       struct rchan_buf *buf,
 			       size_t avail,
-			       read_descriptor_t *desc);
+			       read_descriptor_t *desc,
+			       read_actor_t actor);
 
 /*
  *	relay_file_read_subbufs - read count bytes, bridging subbuf boundaries
  */
 static ssize_t relay_file_read_subbufs(struct file *filp, loff_t *ppos,
 					subbuf_actor_t subbuf_actor,
+					read_actor_t actor,
 					read_descriptor_t *desc)
 {
 	struct rchan_buf *buf = filp->private_data;
@@ -1136,7 +1133,7 @@ static ssize_t relay_file_read_subbufs(struct file *filp, loff_t *ppos,
 	if (!desc->count)
 		return 0;
 
-	mutex_lock(&file_inode(filp)->i_mutex);
+	mutex_lock(&filp->f_path.dentry->d_inode->i_mutex);
 	do {
 		if (!relay_file_read_avail(buf, *ppos))
 			break;
@@ -1147,7 +1144,7 @@ static ssize_t relay_file_read_subbufs(struct file *filp, loff_t *ppos,
 			break;
 
 		avail = min(desc->count, avail);
-		ret = subbuf_actor(read_start, buf, avail, desc);
+		ret = subbuf_actor(read_start, buf, avail, desc, actor);
 		if (desc->error < 0)
 			break;
 
@@ -1156,7 +1153,7 @@ static ssize_t relay_file_read_subbufs(struct file *filp, loff_t *ppos,
 			*ppos = relay_file_read_end_pos(buf, read_start, ret);
 		}
 	} while (desc->count && ret);
-	mutex_unlock(&file_inode(filp)->i_mutex);
+	mutex_unlock(&filp->f_path.dentry->d_inode->i_mutex);
 
 	return desc->written;
 }
@@ -1171,7 +1168,8 @@ static ssize_t relay_file_read(struct file *filp,
 	desc.count = count;
 	desc.arg.buf = buffer;
 	desc.error = 0;
-	return relay_file_read_subbufs(filp, ppos, subbuf_read_actor, &desc);
+	return relay_file_read_subbufs(filp, ppos, subbuf_read_actor,
+				       NULL, &desc);
 }
 
 static void relay_consume_bytes(struct rchan_buf *rbuf, int bytes_consumed)
@@ -1195,6 +1193,8 @@ static void relay_pipe_buf_release(struct pipe_inode_info *pipe,
 
 static const struct pipe_buf_operations relay_pipe_buf_ops = {
 	.can_merge = 0,
+	.map = generic_pipe_buf_map,
+	.unmap = generic_pipe_buf_unmap,
 	.confirm = generic_pipe_buf_confirm,
 	.release = relay_pipe_buf_release,
 	.steal = generic_pipe_buf_steal,
@@ -1229,7 +1229,6 @@ static ssize_t subbuf_splice_actor(struct file *in,
 	struct splice_pipe_desc spd = {
 		.pages = pages,
 		.nr_pages = 0,
-		.nr_pages_max = PIPE_DEF_BUFFERS,
 		.partial = partial,
 		.flags = flags,
 		.ops = &relay_pipe_buf_ops,
@@ -1251,7 +1250,7 @@ static ssize_t subbuf_splice_actor(struct file *in,
 	subbuf_pages = rbuf->chan->alloc_size >> PAGE_SHIFT;
 	pidx = (read_start / PAGE_SIZE) % subbuf_pages;
 	poff = read_start & ~PAGE_MASK;
-	nr_pages = min_t(unsigned int, subbuf_pages, spd.nr_pages_max);
+	nr_pages = min_t(unsigned int, subbuf_pages, pipe->buffers);
 
 	for (total_len = 0; spd.nr_pages < nr_pages; spd.nr_pages++) {
 		unsigned int this_len, this_end, private;
@@ -1297,8 +1296,8 @@ static ssize_t subbuf_splice_actor(struct file *in,
                 ret += padding;
 
 out:
-	splice_shrink_spd(&spd);
-	return ret;
+	splice_shrink_spd(pipe, &spd);
+        return ret;
 }
 
 static ssize_t relay_file_splice_read(struct file *in,

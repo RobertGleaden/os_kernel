@@ -20,16 +20,16 @@
 * Attach/Detach Functions and helpers *
 \*************************************/
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/pci.h>
 #include <linux/slab.h>
 #include "ath5k.h"
 #include "reg.h"
 #include "debug.h"
+#include "base.h"
 
 /**
- * ath5k_hw_post() - Power On Self Test helper function
+ * ath5k_hw_post - Power On Self Test helper function
+ *
  * @ah: The &struct ath5k_hw
  */
 static int ath5k_hw_post(struct ath5k_hw *ah)
@@ -93,8 +93,9 @@ static int ath5k_hw_post(struct ath5k_hw *ah)
 }
 
 /**
- * ath5k_hw_init() - Check if hw is supported and init the needed structs
- * @ah: The &struct ath5k_hw associated with the device
+ * ath5k_hw_init - Check if hw is supported and init the needed structs
+ *
+ * @ah: The &struct ath5k_hw we got from the driver's init_softc function
  *
  * Check if the device is supported, perform a POST and initialize the needed
  * structs. Returns -ENOMEM if we don't have memory for the needed structs,
@@ -113,6 +114,7 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 	/*
 	 * HW information
 	 */
+	ah->ah_radar.r_enabled = AR5K_TUNE_RADAR_ALERT;
 	ah->ah_bwmode = AR5K_BWMODE_DEFAULT;
 	ah->ah_txpower.txp_tpc = AR5K_TUNE_TPC_TXPOWER;
 	ah->ah_imr = 0;
@@ -135,8 +137,9 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 	else
 		ah->ah_version = AR5K_AR5212;
 
-	/* Get the MAC version */
+	/* Get the MAC revision */
 	ah->ah_mac_version = AR5K_REG_MS(srev, AR5K_SREV_VER);
+	ah->ah_mac_revision = AR5K_REG_MS(srev, AR5K_SREV_REV);
 
 	/* Fill the ath5k_hw struct with the needed functions */
 	ret = ath5k_hw_init_desc_functions(ah);
@@ -144,7 +147,7 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 		goto err;
 
 	/* Bring device out of sleep and reset its units */
-	ret = ath5k_hw_nic_wakeup(ah, NULL);
+	ret = ath5k_hw_nic_wakeup(ah, 0, true);
 	if (ret)
 		goto err;
 
@@ -152,7 +155,8 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 	ah->ah_phy_revision = ath5k_hw_reg_read(ah, AR5K_PHY_CHIP_ID) &
 			0xffffffff;
 	ah->ah_radio_5ghz_revision = ath5k_hw_radio_revision(ah,
-			IEEE80211_BAND_5GHZ);
+			CHANNEL_5GHZ);
+	ah->ah_phy = AR5K_PHY(0);
 
 	/* Try to identify radio chip based on its srev */
 	switch (ah->ah_radio_5ghz_revision & 0xf0) {
@@ -160,14 +164,14 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 		ah->ah_radio = AR5K_RF5111;
 		ah->ah_single_chip = false;
 		ah->ah_radio_2ghz_revision = ath5k_hw_radio_revision(ah,
-							IEEE80211_BAND_2GHZ);
+							CHANNEL_2GHZ);
 		break;
 	case AR5K_SREV_RAD_5112:
 	case AR5K_SREV_RAD_2112:
 		ah->ah_radio = AR5K_RF5112;
 		ah->ah_single_chip = false;
 		ah->ah_radio_2ghz_revision = ath5k_hw_radio_revision(ah,
-							IEEE80211_BAND_2GHZ);
+							CHANNEL_2GHZ);
 		break;
 	case AR5K_SREV_RAD_2413:
 		ah->ah_radio = AR5K_RF2413;
@@ -204,7 +208,7 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 			ah->ah_radio = AR5K_RF5111;
 			ah->ah_single_chip = false;
 			ah->ah_radio_2ghz_revision = ath5k_hw_radio_revision(ah,
-							IEEE80211_BAND_2GHZ);
+								CHANNEL_2GHZ);
 		} else if (ah->ah_mac_version == (AR5K_SREV_AR2425 >> 4) ||
 			   ah->ah_mac_version == (AR5K_SREV_AR2417 >> 4) ||
 			   ah->ah_phy_revision == AR5K_SREV_PHY_2425) {
@@ -298,7 +302,7 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 
 		/* Reset SERDES to load new settings */
 		ath5k_hw_reg_write(ah, 0x00000000, AR5K_PCIE_SERDES_RESET);
-		usleep_range(1000, 1500);
+		mdelay(1);
 	}
 
 	/* Get misc capabilities */
@@ -306,6 +310,11 @@ int ath5k_hw_init(struct ath5k_hw *ah)
 	if (ret) {
 		ATH5K_ERR(ah, "unable to get device capabilities\n");
 		goto err;
+	}
+
+	if (test_bit(ATH_STAT_2G_DISABLED, ah->status)) {
+		__clear_bit(AR5K_MODE_11B, ah->ah_capabilities.cap_mode);
+		__clear_bit(AR5K_MODE_11G, ah->ah_capabilities.cap_mode);
 	}
 
 	/* Crypto settings */
@@ -344,7 +353,8 @@ err:
 }
 
 /**
- * ath5k_hw_deinit() - Free the &struct ath5k_hw
+ * ath5k_hw_deinit - Free the ath5k_hw struct
+ *
  * @ah: The &struct ath5k_hw
  */
 void ath5k_hw_deinit(struct ath5k_hw *ah)

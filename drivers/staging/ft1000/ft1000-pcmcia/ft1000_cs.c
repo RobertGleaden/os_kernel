@@ -41,11 +41,13 @@ MODULE_LICENSE("GPL");
 
 /*====================================================================*/
 
+struct net_device *init_ft1000_card(struct pcmcia_device *link,
+					void *ft1000_reset);
+void stop_ft1000_card(struct net_device *);
+
 static int ft1000_config(struct pcmcia_device *link);
 static void ft1000_detach(struct pcmcia_device *link);
 static int ft1000_attach(struct pcmcia_device *link);
-
-#include "ft1000.h"
 
 /*====================================================================*/
 
@@ -73,7 +75,7 @@ static void ft1000_detach(struct pcmcia_device *link)
 	free_netdev(dev);
 }
 
-static int ft1000_confcheck(struct pcmcia_device *link, void *priv_data)
+int ft1000_confcheck(struct pcmcia_device *link, void *priv_data)
 {
 	return pcmcia_request_io(link);
 }
@@ -95,20 +97,20 @@ static int ft1000_config(struct pcmcia_device *link)
 	/* setup IO window */
 	ret = pcmcia_loop_config(link, ft1000_confcheck, NULL);
 	if (ret) {
-		dev_err(&link->dev, "Could not configure pcmcia\n");
+		printk(KERN_INFO "ft1000: Could not configure pcmcia\n");
 		return -ENODEV;
 	}
 
 	/* configure device */
 	ret = pcmcia_enable_device(link);
 	if (ret) {
-		dev_err(&link->dev, "Could not enable pcmcia\n");
+		printk(KERN_INFO "ft1000: could not enable pcmcia\n");
 		goto failed;
 	}
 
 	link->priv = init_ft1000_card(link, &ft1000_reset);
 	if (!link->priv) {
-		dev_err(&link->dev, "Could not register as network device\n");
+		printk(KERN_INFO "ft1000: Could not register as network device\n");
 		goto failed;
 	}
 

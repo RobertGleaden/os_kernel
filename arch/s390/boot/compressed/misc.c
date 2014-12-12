@@ -47,10 +47,6 @@ static unsigned long free_mem_end_ptr;
 #include "../../../../lib/decompress_bunzip2.c"
 #endif
 
-#ifdef CONFIG_KERNEL_LZ4
-#include "../../../../lib/decompress_unlz4.c"
-#endif
-
 #ifdef CONFIG_KERNEL_LZMA
 #include "../../../../lib/decompress_unlzma.c"
 #endif
@@ -65,7 +61,7 @@ static unsigned long free_mem_end_ptr;
 
 extern _sclp_print_early(const char *);
 
-static int puts(const char *s)
+int puts(const char *s)
 {
 	_sclp_print_early(s);
 	return 0;
@@ -75,37 +71,34 @@ void *memset(void *s, int c, size_t n)
 {
 	char *xs;
 
-	xs = s;
-	while (n--)
-		*xs++ = c;
+	if (c == 0)
+		return __builtin_memset(s, 0, n);
+
+	xs = (char *) s;
+	if (n > 0)
+		do {
+			*xs++ = c;
+		} while (--n > 0);
 	return s;
 }
 
-void *memcpy(void *dest, const void *src, size_t n)
+void *memcpy(void *__dest, __const void *__src, size_t __n)
 {
-	const char *s = src;
-	char *d = dest;
-
-	while (n--)
-		*d++ = *s++;
-	return dest;
+	return __builtin_memcpy(__dest, __src, __n);
 }
 
-void *memmove(void *dest, const void *src, size_t n)
+void *memmove(void *__dest, __const void *__src, size_t __n)
 {
-	const char *s = src;
-	char *d = dest;
+	char *d;
+	const char *s;
 
-	if (d <= s) {
-		while (n--)
-			*d++ = *s++;
-	} else {
-		d += n;
-		s += n;
-		while (n--)
-			*--d = *--s;
-	}
-	return dest;
+	if (__dest <= __src)
+		return __builtin_memcpy(__dest, __src, __n);
+	d = __dest + __n;
+	s = __src + __n;
+	while (__n--)
+		*--d = *--s;
+	return __dest;
 }
 
 static void error(char *x)

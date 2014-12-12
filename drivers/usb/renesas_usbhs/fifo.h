@@ -19,9 +19,10 @@
 
 #include <linux/interrupt.h>
 #include <linux/sh_dma.h>
-#include <linux/workqueue.h>
 #include <asm/dma.h>
 #include "pipe.h"
+
+#define	DMA_ADDR_INVALID	(~(dma_addr_t)0)
 
 struct usbhs_fifo {
 	char *name;
@@ -30,6 +31,7 @@ struct usbhs_fifo {
 	u32 ctr;	/* xFIFOCTR */
 
 	struct usbhs_pipe	*pipe;
+	struct tasklet_struct	tasklet;
 
 	struct dma_chan		*tx_chan;
 	struct dma_chan		*rx_chan;
@@ -49,16 +51,12 @@ struct usbhs_pkt {
 	struct list_head node;
 	struct usbhs_pipe *pipe;
 	struct usbhs_pkt_handle *handler;
-	void (*done)(struct usbhs_priv *priv,
-		     struct usbhs_pkt *pkt);
-	struct work_struct work;
 	dma_addr_t dma;
 	void *buf;
 	int length;
 	int trans;
 	int actual;
 	int zero;
-	int sequence;
 };
 
 struct usbhs_pkt_handle {
@@ -78,6 +76,12 @@ void usbhs_fifo_quit(struct usbhs_priv *priv);
 /*
  * packet info
  */
+enum {
+	USBHSF_PKT_PREPARE,
+	USBHSF_PKT_TRY_RUN,
+	USBHSF_PKT_DMA_DONE,
+};
+
 extern struct usbhs_pkt_handle usbhs_fifo_pio_push_handler;
 extern struct usbhs_pkt_handle usbhs_fifo_pio_pop_handler;
 extern struct usbhs_pkt_handle usbhs_ctrl_stage_end_handler;
@@ -85,18 +89,16 @@ extern struct usbhs_pkt_handle usbhs_ctrl_stage_end_handler;
 extern struct usbhs_pkt_handle usbhs_fifo_dma_push_handler;
 extern struct usbhs_pkt_handle usbhs_fifo_dma_pop_handler;
 
-extern struct usbhs_pkt_handle usbhs_dcp_status_stage_in_handler;
-extern struct usbhs_pkt_handle usbhs_dcp_status_stage_out_handler;
-
-extern struct usbhs_pkt_handle usbhs_dcp_data_stage_in_handler;
-extern struct usbhs_pkt_handle usbhs_dcp_data_stage_out_handler;
 
 void usbhs_pkt_init(struct usbhs_pkt *pkt);
 void usbhs_pkt_push(struct usbhs_pipe *pipe, struct usbhs_pkt *pkt,
-		    void (*done)(struct usbhs_priv *priv,
-				 struct usbhs_pkt *pkt),
-		    void *buf, int len, int zero, int sequence);
+		    struct usbhs_pkt_handle *handler,
+		    void *buf, int len, int zero);
 struct usbhs_pkt *usbhs_pkt_pop(struct usbhs_pipe *pipe, struct usbhs_pkt *pkt);
-void usbhs_pkt_start(struct usbhs_pipe *pipe);
+int __usbhs_pkt_handler(struct usbhs_pipe *pipe, int type);
+
+#define usbhs_pkt_start(p)	__usbhs_pkt_handler(p, USBHSF_PKT_PREPARE)
+#define usbhs_pkt_run(p)	__usbhs_pkt_handler(p, USBHSF_PKT_TRY_RUN)
+#define usbhs_pkt_dmadone(p)	__usbhs_pkt_handler(p, USBHSF_PKT_DMA_DONE)
 
 #endif /* RENESAS_USB_FIFO_H */

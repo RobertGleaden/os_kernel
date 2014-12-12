@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2012 Intel Corporation. All rights reserved.
- * Copyright (c) 2006 - 2012 QLogic Corporation. All rights reserved.
+ * Copyright (c) 2010 QLogic Corporation. All rights reserved.
+ * Copyright (c) 2006, 2007, 2008, 2009 QLogic Corporation. All rights reserved.
  * Copyright (c) 2003, 2004, 2005, 2006 PathScale, Inc. All rights reserved.
  *
  * This software is available to you under a choice of one of two
@@ -46,15 +46,11 @@
 #include <linux/pci.h>
 #include <linux/poll.h>
 #include <linux/vmalloc.h>
-#include <linux/export.h>
 #include <linux/fs.h>
 #include <linux/uaccess.h>
 
 #include "qib.h"
 #include "qib_common.h"
-
-#undef pr_fmt
-#define pr_fmt(fmt) QIB_DRV_NAME ": " fmt
 
 /*
  * Each client that opens the diag device must read then write
@@ -546,7 +542,7 @@ static ssize_t qib_diagpkt_write(struct file *fp,
 				 size_t count, loff_t *off)
 {
 	u32 __iomem *piobuf;
-	u32 plen, pbufn, maxlen_reserve;
+	u32 plen, clen, pbufn;
 	struct qib_diag_xpkt dp;
 	u32 *tmpbuf = NULL;
 	struct qib_devdata *dd;
@@ -590,24 +586,19 @@ static ssize_t qib_diagpkt_write(struct file *fp,
 	}
 	ppd = &dd->pport[dp.port - 1];
 
-	/*
-	 * need total length before first word written, plus 2 Dwords. One Dword
-	 * is for padding so we get the full user data when not aligned on
-	 * a word boundary. The other Dword is to make sure we have room for the
-	 * ICRC which gets tacked on later.
-	 */
-	maxlen_reserve = 2 * sizeof(u32);
-	if (dp.len > ppd->ibmaxlen - maxlen_reserve) {
-		ret = -EINVAL;
-		goto bail;
-	}
-
+	/* need total length before first word written */
+	/* +1 word is for the qword padding */
 	plen = sizeof(u32) + dp.len;
+	clen = dp.len >> 2;
 
+	if ((plen + 4) > ppd->ibmaxlen) {
+		ret = -EINVAL;
+		goto bail;      /* before writing pbc */
+	}
 	tmpbuf = vmalloc(plen);
 	if (!tmpbuf) {
-		qib_devinfo(dd->pcidev,
-			"Unable to allocate tmp buffer, failing\n");
+		qib_devinfo(dd->pcidev, "Unable to allocate tmp buffer, "
+			 "failing\n");
 		ret = -ENOMEM;
 		goto bail;
 	}
@@ -643,11 +634,11 @@ static ssize_t qib_diagpkt_write(struct file *fp,
 	 */
 	if (dd->flags & QIB_PIO_FLUSH_WC) {
 		qib_flush_wc();
-		qib_pio_copy(piobuf + 2, tmpbuf, plen - 1);
+		qib_pio_copy(piobuf + 2, tmpbuf, clen - 1);
 		qib_flush_wc();
-		__raw_writel(tmpbuf[plen - 1], piobuf + plen + 1);
+		__raw_writel(tmpbuf[clen - 1], piobuf + clen + 1);
 	} else
-		qib_pio_copy(piobuf + 2, tmpbuf, plen);
+		qib_pio_copy(piobuf + 2, tmpbuf, clen);
 
 	if (dd->flags & QIB_USE_SPCL_TRIG) {
 		u32 spcl_off = (pbufn >= dd->piobcnt2k) ? 2047 : 1023;
@@ -694,23 +685,28 @@ int qib_register_observer(struct qib_devdata *dd,
 			  const struct diag_observer *op)
 {
 	struct diag_observer_list_elt *olp;
-	unsigned long flags;
+	int ret = -EINVAL;
 
 	if (!dd || !op)
-		return -EINVAL;
+		goto bail;
+	ret = -ENOMEM;
 	olp = vmalloc(sizeof *olp);
 	if (!olp) {
-		pr_err("vmalloc for observer failed\n");
-		return -ENOMEM;
+		printk(KERN_ERR QIB_DRV_NAME ": vmalloc for observer failed\n");
+		goto bail;
 	}
+	if (olp) {
+		unsigned long flags;
 
-	spin_lock_irqsave(&dd->qib_diag_trans_lock, flags);
-	olp->op = op;
-	olp->next = dd->diag_observer_list;
-	dd->diag_observer_list = olp;
-	spin_unlock_irqrestore(&dd->qib_diag_trans_lock, flags);
-
-	return 0;
+		spin_lock_irqsave(&dd->qib_diag_trans_lock, flags);
+		olp->op = op;
+		olp->next = dd->diag_observer_list;
+		dd->diag_observer_list = olp;
+		spin_unlock_irqrestore(&dd->qib_diag_trans_lock, flags);
+		ret = 0;
+	}
+bail:
+	return ret;
 }
 
 /* Remove all registered observers when device is closed */

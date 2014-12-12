@@ -19,17 +19,6 @@
 #include "../pci.h"
 #include "portdrv.h"
 
-bool pciehp_msi_disabled;
-
-static int __init pciehp_setup(char *str)
-{
-	if (!strncmp(str, "nomsi", 5))
-		pciehp_msi_disabled = true;
-
-	return 1;
-}
-__setup("pcie_hp=", pciehp_setup);
-
 /**
  * release_pcie_device - free PCI Express port service device structure
  * @dev: Port service device to release
@@ -46,7 +35,7 @@ static void release_pcie_device(struct device *dev)
  * pcie_port_msix_add_entry - add entry to given array of MSI-X entries
  * @entries: Array of MSI-X entries
  * @new_entry: Index of the entry to add to the array
- * @nr_entries: Number of entries already in the array
+ * @nr_entries: Number of entries aleady in the array
  *
  * Return value: Position of the added entry in the array
  */
@@ -79,10 +68,9 @@ static int pcie_port_enable_msix(struct pci_dev *dev, int *vectors, int mask)
 	u16 reg16;
 	u32 reg32;
 
-	nr_entries = pci_msix_vec_count(dev);
-	if (nr_entries < 0)
-		return nr_entries;
-	BUG_ON(!nr_entries);
+	nr_entries = pci_msix_table_size(dev);
+	if (!nr_entries)
+		return -EINVAL;
 	if (nr_entries > PCIE_PORT_MAX_MSIX_ENTRIES)
 		nr_entries = PCIE_PORT_MAX_MSIX_ENTRIES;
 
@@ -99,7 +87,7 @@ static int pcie_port_enable_msix(struct pci_dev *dev, int *vectors, int mask)
 	for (i = 0; i < nr_entries; i++)
 		msix_entries[i].entry = i;
 
-	status = pci_enable_msix_exact(dev, msix_entries, nr_entries);
+	status = pci_enable_msix(dev, msix_entries, nr_entries);
 	if (status)
 		goto Exit;
 
@@ -121,7 +109,8 @@ static int pcie_port_enable_msix(struct pci_dev *dev, int *vectors, int mask)
 		 * the value in this field indicates which MSI-X Table entry is
 		 * used to generate the interrupt message."
 		 */
-		pcie_capability_read_word(dev, PCI_EXP_FLAGS, &reg16);
+		pos = pci_pcie_cap(dev);
+		pci_read_config_word(dev, pos + PCI_EXP_FLAGS, &reg16);
 		entry = (reg16 & PCI_EXP_FLAGS_IRQ) >> 9;
 		if (entry >= nr_entries)
 			goto Error;
@@ -171,7 +160,7 @@ static int pcie_port_enable_msix(struct pci_dev *dev, int *vectors, int mask)
 		pci_disable_msix(dev);
 
 		/* Now allocate the MSI-X vectors for real */
-		status = pci_enable_msix_exact(dev, msix_entries, nvec);
+		status = pci_enable_msix(dev, msix_entries, nvec);
 		if (status)
 			goto Exit;
 	}
@@ -200,13 +189,9 @@ static int init_service_irqs(struct pci_dev *dev, int *irqs, int mask)
 {
 	int i, irq = -1;
 
-	/*
-	 * If MSI cannot be used for PCIe PME or hotplug, we have to use
-	 * INTx or other interrupts, e.g. system shared interrupt.
-	 */
-	if (((mask & PCIE_PORT_SERVICE_PME) && pcie_pme_no_msi()) ||
-	    ((mask & PCIE_PORT_SERVICE_HP) && pciehp_no_msi())) {
-		if (dev->irq)
+	/* We have to use INTx if MSI cannot be used for PCIe PME. */
+	if ((mask & PCIE_PORT_SERVICE_PME) && pcie_pme_no_msi()) {
+		if (dev->pin)
 			irq = dev->irq;
 		goto no_msi;
 	}
@@ -215,12 +200,8 @@ static int init_service_irqs(struct pci_dev *dev, int *irqs, int mask)
 	if (!pcie_port_enable_msix(dev, irqs, mask))
 		return 0;
 
-	/*
-	 * We're not going to use MSI-X, so try MSI and fall back to INTx.
-	 * If neither MSI/MSI-X nor INTx available, try other interrupt.  On
-	 * some platforms, root port doesn't support MSI/MSI-X/INTx in RC mode.
-	 */
-	if (!pci_enable_msi(dev) || dev->irq)
+	/* We're not going to use MSI-X, so try MSI and fall back to INTx */
+	if (!pci_enable_msi(dev) || dev->pin)
 		irq = dev->irq;
 
  no_msi:
@@ -253,29 +234,30 @@ static void cleanup_service_irqs(struct pci_dev *dev)
  */
 static int get_port_device_capability(struct pci_dev *dev)
 {
-	int services = 0;
+	int services = 0, pos;
+	u16 reg16;
 	u32 reg32;
-	int cap_mask = 0;
+	int cap_mask;
 	int err;
 
 	if (pcie_ports_disabled)
 		return 0;
 
-	cap_mask = PCIE_PORT_SERVICE_PME | PCIE_PORT_SERVICE_HP
-			| PCIE_PORT_SERVICE_VC;
-	if (pci_aer_available())
-		cap_mask |= PCIE_PORT_SERVICE_AER;
-
-	if (pcie_ports_auto) {
-		err = pcie_port_platform_notify(dev, &cap_mask);
-		if (err)
+	err = pcie_port_platform_notify(dev, &cap_mask);
+	if (!pcie_ports_auto) {
+		cap_mask = PCIE_PORT_SERVICE_PME | PCIE_PORT_SERVICE_HP
+				| PCIE_PORT_SERVICE_VC;
+		if (pci_aer_available())
+			cap_mask |= PCIE_PORT_SERVICE_AER;
+	} else if (err) {
 			return 0;
 	}
 
+	pos = pci_pcie_cap(dev);
+	pci_read_config_word(dev, pos + PCI_EXP_FLAGS, &reg16);
 	/* Hot-Plug Capable */
-	if ((cap_mask & PCIE_PORT_SERVICE_HP) &&
-	    pcie_caps_reg(dev) & PCI_EXP_FLAGS_SLOT) {
-		pcie_capability_read_dword(dev, PCI_EXP_SLTCAP, &reg32);
+	if ((cap_mask & PCIE_PORT_SERVICE_HP) && (reg16 & PCI_EXP_FLAGS_SLOT)) {
+		pci_read_config_dword(dev, pos + PCI_EXP_SLTCAP, &reg32);
 		if (reg32 & PCI_EXP_SLTCAP_HPC) {
 			services |= PCIE_PORT_SERVICE_HP;
 			/*
@@ -283,8 +265,10 @@ static int get_port_device_capability(struct pci_dev *dev)
 			 * enabled by the BIOS and the hot-plug service driver
 			 * is not loaded.
 			 */
-			pcie_capability_clear_word(dev, PCI_EXP_SLTCTL,
-				PCI_EXP_SLTCTL_CCIE | PCI_EXP_SLTCTL_HPIE);
+			pos += PCI_EXP_SLTCTL;
+			pci_read_config_word(dev, pos, &reg16);
+			reg16 &= ~(PCI_EXP_SLTCTL_CCIE | PCI_EXP_SLTCTL_HPIE);
+			pci_write_config_word(dev, pos, reg16);
 		}
 	}
 	/* AER capable */
@@ -302,7 +286,7 @@ static int get_port_device_capability(struct pci_dev *dev)
 		services |= PCIE_PORT_SERVICE_VC;
 	/* Root ports are capable of generating PME too */
 	if ((cap_mask & PCIE_PORT_SERVICE_PME)
-	    && pci_pcie_type(dev) == PCI_EXP_TYPE_ROOT_PORT) {
+	    && dev->pcie_type == PCI_EXP_TYPE_ROOT_PORT) {
 		services |= PCIE_PORT_SERVICE_PME;
 		/*
 		 * Disable PME interrupt on this port in case it's been enabled
@@ -340,17 +324,16 @@ static int pcie_device_init(struct pci_dev *pdev, int service, int irq)
 	device->release = release_pcie_device;	/* callback to free pcie dev */
 	dev_set_name(device, "%s:pcie%02x",
 		     pci_name(pdev),
-		     get_descriptor_id(pci_pcie_type(pdev), service));
+		     get_descriptor_id(pdev->pcie_type, service));
 	device->parent = &pdev->dev;
 	device_enable_async_suspend(device);
 
 	retval = device_register(device);
-	if (retval) {
-		put_device(device);
-		return retval;
-	}
-
-	return 0;
+	if (retval)
+		kfree(pcie);
+	else
+		get_device(device);
+	return retval;
 }
 
 /**
@@ -379,13 +362,10 @@ int pcie_port_device_register(struct pci_dev *dev)
 	/*
 	 * Initialize service irqs. Don't use service devices that
 	 * require interrupts if there is no way to generate them.
-	 * However, some drivers may have a polling mode (e.g. pciehp_poll_mode)
-	 * that can be used in the absence of irqs.  Allow them to determine
-	 * if that is to be used.
 	 */
 	status = init_service_irqs(dev, irqs, capabilities);
 	if (status) {
-		capabilities &= PCIE_PORT_SERVICE_VC | PCIE_PORT_SERVICE_HP;
+		capabilities &= PCIE_PORT_SERVICE_VC;
 		if (!capabilities)
 			goto error_disable;
 	}
@@ -459,8 +439,10 @@ int pcie_port_device_resume(struct device *dev)
 
 static int remove_iter(struct device *dev, void *data)
 {
-	if (dev->bus == &pcie_port_bus_type)
+	if (dev->bus == &pcie_port_bus_type) {
+		put_device(dev);
 		device_unregister(dev);
+	}
 	return 0;
 }
 
@@ -501,12 +483,12 @@ static int pcie_port_probe_service(struct device *dev)
 
 	pciedev = to_pcie_device(dev);
 	status = driver->probe(pciedev);
-	if (status)
-		return status;
-
-	dev_printk(KERN_DEBUG, dev, "service driver %s loaded\n", driver->name);
-	get_device(dev);
-	return 0;
+	if (!status) {
+		dev_printk(KERN_DEBUG, dev, "service driver %s loaded\n",
+			driver->name);
+		get_device(dev);
+	}
+	return status;
 }
 
 /**
@@ -557,7 +539,7 @@ int pcie_port_service_register(struct pcie_port_service_driver *new)
 	if (pcie_ports_disabled)
 		return -ENODEV;
 
-	new->driver.name = new->name;
+	new->driver.name = (char *)new->name;
 	new->driver.bus = &pcie_port_bus_type;
 	new->driver.probe = pcie_port_probe_service;
 	new->driver.remove = pcie_port_remove_service;

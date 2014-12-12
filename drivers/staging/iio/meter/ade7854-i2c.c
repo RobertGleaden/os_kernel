@@ -10,9 +10,8 @@
 #include <linux/kernel.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
-#include <linux/module.h>
 
-#include <linux/iio/iio.h>
+#include "../iio.h"
 #include "ade7854.h"
 
 static int ade7854_i2c_write_reg_8(struct device *dev,
@@ -20,7 +19,7 @@ static int ade7854_i2c_write_reg_8(struct device *dev,
 		u8 value)
 {
 	int ret;
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 
 	mutex_lock(&st->buf_lock);
@@ -39,7 +38,7 @@ static int ade7854_i2c_write_reg_16(struct device *dev,
 		u16 value)
 {
 	int ret;
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 
 	mutex_lock(&st->buf_lock);
@@ -59,7 +58,7 @@ static int ade7854_i2c_write_reg_24(struct device *dev,
 		u32 value)
 {
 	int ret;
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 
 	mutex_lock(&st->buf_lock);
@@ -80,7 +79,7 @@ static int ade7854_i2c_write_reg_32(struct device *dev,
 		u32 value)
 {
 	int ret;
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 
 	mutex_lock(&st->buf_lock);
@@ -101,7 +100,7 @@ static int ade7854_i2c_read_reg_8(struct device *dev,
 		u16 reg_address,
 		u8 *val)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 	int ret;
 
@@ -127,7 +126,7 @@ static int ade7854_i2c_read_reg_16(struct device *dev,
 		u16 reg_address,
 		u16 *val)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 	int ret;
 
@@ -153,7 +152,7 @@ static int ade7854_i2c_read_reg_24(struct device *dev,
 		u16 reg_address,
 		u32 *val)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 	int ret;
 
@@ -179,7 +178,7 @@ static int ade7854_i2c_read_reg_32(struct device *dev,
 		u16 reg_address,
 		u32 *val)
 {
-	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
+	struct iio_dev *indio_dev = dev_get_drvdata(dev);
 	struct ade7854_state *st = iio_priv(indio_dev);
 	int ret;
 
@@ -201,14 +200,14 @@ out:
 	return ret;
 }
 
-static int ade7854_i2c_probe(struct i2c_client *client,
+static int __devinit ade7854_i2c_probe(struct i2c_client *client,
 		const struct i2c_device_id *id)
 {
 	int ret;
 	struct ade7854_state *st;
 	struct iio_dev *indio_dev;
 
-	indio_dev = devm_iio_device_alloc(&client->dev, sizeof(*st));
+	indio_dev = iio_allocate_device(sizeof(*st));
 	if (indio_dev == NULL)
 		return -ENOMEM;
 	st = iio_priv(indio_dev);
@@ -225,11 +224,13 @@ static int ade7854_i2c_probe(struct i2c_client *client,
 	st->irq = client->irq;
 
 	ret = ade7854_probe(indio_dev, &client->dev);
+	if (ret)
+		iio_free_device(indio_dev);
 
 	return ret;
 }
 
-static int ade7854_i2c_remove(struct i2c_client *client)
+static int __devexit ade7854_i2c_remove(struct i2c_client *client)
 {
 	return ade7854_remove(i2c_get_clientdata(client));
 }
@@ -248,10 +249,22 @@ static struct i2c_driver ade7854_i2c_driver = {
 		.name = "ade7854",
 	},
 	.probe    = ade7854_i2c_probe,
-	.remove   = ade7854_i2c_remove,
+	.remove   = __devexit_p(ade7854_i2c_remove),
 	.id_table = ade7854_id,
 };
-module_i2c_driver(ade7854_i2c_driver);
+
+static __init int ade7854_i2c_init(void)
+{
+	return i2c_add_driver(&ade7854_i2c_driver);
+}
+module_init(ade7854_i2c_init);
+
+static __exit void ade7854_i2c_exit(void)
+{
+	i2c_del_driver(&ade7854_i2c_driver);
+}
+module_exit(ade7854_i2c_exit);
+
 
 MODULE_AUTHOR("Barry Song <21cnbao@gmail.com>");
 MODULE_DESCRIPTION("Analog Devices ADE7854/58/68/78 Polyphase Multifunction Energy Metering IC I2C Driver");

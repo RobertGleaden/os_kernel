@@ -22,7 +22,6 @@
 #include <linux/platform_device.h>
 #include <linux/parport.h>
 #include <linux/spinlock.h>
-#include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <sound/core.h>
@@ -36,7 +35,7 @@
 
 static int index[SNDRV_CARDS]  = SNDRV_DEFAULT_IDX;
 static char *id[SNDRV_CARDS]   = SNDRV_DEFAULT_STR;
-static bool enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
+static int enable[SNDRV_CARDS] = SNDRV_DEFAULT_ENABLE_PNP;
 
 static struct platform_device *platform_devices[SNDRV_CARDS]; 
 static int device_count;
@@ -83,9 +82,9 @@ static int snd_mts64_free(struct mts64 *mts)
 	return 0;
 }
 
-static int snd_mts64_create(struct snd_card *card,
-			    struct pardevice *pardev,
-			    struct mts64 **rchip)
+static int __devinit snd_mts64_create(struct snd_card *card, 
+				      struct pardevice *pardev, 
+				      struct mts64 **rchip)
 {
 	struct mts64 *mts;
 
@@ -214,7 +213,7 @@ static int mts64_device_ready(struct parport *p)
  *  0 init ok
  *  -EIO failure
  */
-static int mts64_device_init(struct parport *p)
+static int __devinit mts64_device_init(struct parport *p)
 {
 	int i;
 
@@ -290,7 +289,7 @@ static u8 mts64_map_midi_input(u8 c)
  *  0       device found
  *  -ENODEV no device
  */
-static int mts64_probe(struct parport *p)
+static int __devinit mts64_probe(struct parport *p)
 {
 	u8 c;
 
@@ -483,7 +482,7 @@ __out:
 	return changed;
 }
 
-static struct snd_kcontrol_new mts64_ctl_smpte_switch = {
+static struct snd_kcontrol_new mts64_ctl_smpte_switch __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_RAWMIDI,
 	.name  = "SMPTE Playback Switch",
 	.index = 0,
@@ -556,7 +555,7 @@ static int snd_mts64_ctl_smpte_time_put(struct snd_kcontrol *kctl,
 	return changed;
 }
 
-static struct snd_kcontrol_new mts64_ctl_smpte_time_hours = {
+static struct snd_kcontrol_new mts64_ctl_smpte_time_hours __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_RAWMIDI,
 	.name  = "SMPTE Time Hours",
 	.index = 0,
@@ -567,7 +566,7 @@ static struct snd_kcontrol_new mts64_ctl_smpte_time_hours = {
 	.put  = snd_mts64_ctl_smpte_time_put
 };
 
-static struct snd_kcontrol_new mts64_ctl_smpte_time_minutes = {
+static struct snd_kcontrol_new mts64_ctl_smpte_time_minutes __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_RAWMIDI,
 	.name  = "SMPTE Time Minutes",
 	.index = 0,
@@ -578,7 +577,7 @@ static struct snd_kcontrol_new mts64_ctl_smpte_time_minutes = {
 	.put  = snd_mts64_ctl_smpte_time_put
 };
 
-static struct snd_kcontrol_new mts64_ctl_smpte_time_seconds = {
+static struct snd_kcontrol_new mts64_ctl_smpte_time_seconds __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_RAWMIDI,
 	.name  = "SMPTE Time Seconds",
 	.index = 0,
@@ -589,7 +588,7 @@ static struct snd_kcontrol_new mts64_ctl_smpte_time_seconds = {
 	.put  = snd_mts64_ctl_smpte_time_put
 };
 
-static struct snd_kcontrol_new mts64_ctl_smpte_time_frames = {
+static struct snd_kcontrol_new mts64_ctl_smpte_time_frames __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_RAWMIDI,
 	.name  = "SMPTE Time Frames",
 	.index = 0,
@@ -651,7 +650,7 @@ static int snd_mts64_ctl_smpte_fps_put(struct snd_kcontrol *kctl,
 	return changed;
 }
 
-static struct snd_kcontrol_new mts64_ctl_smpte_fps = {
+static struct snd_kcontrol_new mts64_ctl_smpte_fps __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_RAWMIDI,
 	.name  = "SMPTE Fps",
 	.index = 0,
@@ -663,11 +662,11 @@ static struct snd_kcontrol_new mts64_ctl_smpte_fps = {
 };
 
 
-static int snd_mts64_ctl_create(struct snd_card *card,
-				struct mts64 *mts)
+static int __devinit snd_mts64_ctl_create(struct snd_card *card, 
+					  struct mts64 *mts) 
 {
 	int err, i;
-	static struct snd_kcontrol_new *control[] = {
+	static struct snd_kcontrol_new *control[] __devinitdata = {
 		&mts64_ctl_smpte_switch,
 		&mts64_ctl_smpte_time_hours,
 		&mts64_ctl_smpte_time_minutes,
@@ -774,7 +773,7 @@ static struct snd_rawmidi_ops snd_mts64_rawmidi_input_ops = {
 };
 
 /* Create and initialize the rawmidi component */
-static int snd_mts64_rawmidi_create(struct snd_card *card)
+static int __devinit snd_mts64_rawmidi_create(struct snd_card *card)
 {
 	struct mts64 *mts = card->private_data;
 	struct snd_rawmidi *rmidi;
@@ -860,7 +859,7 @@ __out:
 	spin_unlock(&mts->lock);
 }
 
-static int snd_mts64_probe_port(struct parport *p)
+static int __devinit snd_mts64_probe_port(struct parport *p)
 {
 	struct pardevice *pardev;
 	int res;
@@ -884,7 +883,7 @@ static int snd_mts64_probe_port(struct parport *p)
 	return res;
 }
 
-static void snd_mts64_attach(struct parport *p)
+static void __devinit snd_mts64_attach(struct parport *p)
 {
 	struct platform_device *device;
 
@@ -940,7 +939,7 @@ static void snd_mts64_card_private_free(struct snd_card *card)
 	snd_mts64_free(mts);
 }
 
-static int snd_mts64_probe(struct platform_device *pdev)
+static int __devinit snd_mts64_probe(struct platform_device *pdev)
 {
 	struct pardevice *pardev;
 	struct parport *p;
@@ -959,8 +958,7 @@ static int snd_mts64_probe(struct platform_device *pdev)
 	if ((err = snd_mts64_probe_port(p)) < 0)
 		return err;
 
-	err = snd_card_new(&pdev->dev, index[dev], id[dev], THIS_MODULE,
-			   0, &card);
+	err = snd_card_create(index[dev], id[dev], THIS_MODULE, 0, &card);
 	if (err < 0) {
 		snd_printd("Cannot create card\n");
 		return err;
@@ -1010,6 +1008,8 @@ static int snd_mts64_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, card);
 
+	snd_card_set_dev(card, &pdev->dev);
+
 	/* At this point card will be usable */
 	if ((err = snd_card_register(card)) < 0) {
 		snd_printd("Cannot register card\n");
@@ -1024,7 +1024,7 @@ __err:
 	return err;
 }
 
-static int snd_mts64_remove(struct platform_device *pdev)
+static int __devexit snd_mts64_remove(struct platform_device *pdev)
 {
 	struct snd_card *card = platform_get_drvdata(pdev);
 
@@ -1037,10 +1037,9 @@ static int snd_mts64_remove(struct platform_device *pdev)
 
 static struct platform_driver snd_mts64_driver = {
 	.probe  = snd_mts64_probe,
-	.remove = snd_mts64_remove,
+	.remove = __devexit_p(snd_mts64_remove),
 	.driver = {
-		.name = PLATFORM_DRIVER,
-		.owner	= THIS_MODULE,
+		.name = PLATFORM_DRIVER
 	}
 };
 

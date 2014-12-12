@@ -47,7 +47,7 @@ dump_user_backtrace_32(struct stack_frame_ia32 *head)
 	unsigned long bytes;
 
 	bytes = copy_from_user_nmi(bufhead, head, sizeof(bufhead));
-	if (bytes != 0)
+	if (bytes != sizeof(bufhead))
 		return NULL;
 
 	fp = (struct stack_frame_ia32 *) compat_ptr(bufhead[0].next_frame);
@@ -67,7 +67,7 @@ x86_backtrace_32(struct pt_regs * const regs, unsigned int depth)
 {
 	struct stack_frame_ia32 *head;
 
-	/* User process is IA32 */
+	/* User process is 32-bit */
 	if (!current || !test_thread_flag(TIF_IA32))
 		return 0;
 
@@ -93,7 +93,7 @@ static struct stack_frame *dump_user_backtrace(struct stack_frame *head)
 	unsigned long bytes;
 
 	bytes = copy_from_user_nmi(bufhead, head, sizeof(bufhead));
-	if (bytes != 0)
+	if (bytes != sizeof(bufhead))
 		return NULL;
 
 	oprofile_add_trace(bufhead[0].return_address);

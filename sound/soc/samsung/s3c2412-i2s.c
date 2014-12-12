@@ -20,24 +20,22 @@
 #include <linux/gpio.h>
 #include <linux/clk.h>
 #include <linux/io.h>
-#include <linux/module.h>
 
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
 
+#include <mach/regs-gpio.h>
 #include <mach/dma.h>
-#include <mach/gpio-samsung.h>
-#include <plat/gpio-cfg.h>
 
 #include "dma.h"
 #include "regs-i2s-v2.h"
 #include "s3c2412-i2s.h"
 
-static struct s3c_dma_client s3c2412_dma_client_out = {
+static struct s3c2410_dma_client s3c2412_dma_client_out = {
 	.name		= "I2S PCM Stereo out"
 };
 
-static struct s3c_dma_client s3c2412_dma_client_in = {
+static struct s3c2410_dma_client s3c2412_dma_client_in = {
 	.name		= "I2S PCM Stereo in"
 };
 
@@ -71,10 +69,10 @@ static int s3c2412_i2s_probe(struct snd_soc_dai *dai)
 	s3c2412_i2s.dma_playback = &s3c2412_i2s_pcm_stereo_out;
 
 	s3c2412_i2s.iis_cclk = clk_get(dai->dev, "i2sclk");
-	if (IS_ERR(s3c2412_i2s.iis_cclk)) {
+	if (s3c2412_i2s.iis_cclk == NULL) {
 		pr_err("failed to get i2sclk clock\n");
 		iounmap(s3c2412_i2s.regs);
-		return PTR_ERR(s3c2412_i2s.iis_cclk);
+		return -ENODEV;
 	}
 
 	/* Set MPLL as the source for IIS CLK */
@@ -84,9 +82,12 @@ static int s3c2412_i2s_probe(struct snd_soc_dai *dai)
 
 	s3c2412_i2s.iis_cclk = s3c2412_i2s.iis_pclk;
 
-	/* Configure the I2S pins (GPE0...GPE4) in correct mode */
-	s3c_gpio_cfgall_range(S3C2410_GPE(0), 5, S3C_GPIO_SFN(2),
-			      S3C_GPIO_PULL_NONE);
+	/* Configure the I2S pins in correct mode */
+	s3c2410_gpio_cfgpin(S3C2410_GPE0, S3C2410_GPE0_I2SLRCK);
+	s3c2410_gpio_cfgpin(S3C2410_GPE1, S3C2410_GPE1_I2SSCLK);
+	s3c2410_gpio_cfgpin(S3C2410_GPE2, S3C2410_GPE2_CDCLK);
+	s3c2410_gpio_cfgpin(S3C2410_GPE3, S3C2410_GPE3_I2SSDI);
+	s3c2410_gpio_cfgpin(S3C2410_GPE4, S3C2410_GPE4_I2SSDO);
 
 	return 0;
 }
@@ -120,11 +121,11 @@ static int s3c2412_i2s_hw_params(struct snd_pcm_substream *substream,
 	iismod = readl(i2s->regs + S3C2412_IISMOD);
 	pr_debug("%s: r: IISMOD: %x\n", __func__, iismod);
 
-	switch (params_width(params)) {
-	case 8:
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S8:
 		iismod |= S3C2412_IISMOD_8BIT;
 		break;
-	case 16:
+	case SNDRV_PCM_FORMAT_S16_LE:
 		iismod &= ~S3C2412_IISMOD_8BIT;
 		break;
 	}
@@ -140,7 +141,7 @@ static int s3c2412_i2s_hw_params(struct snd_pcm_substream *substream,
 	SNDRV_PCM_RATE_22050 | SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 | \
 	SNDRV_PCM_RATE_48000 | SNDRV_PCM_RATE_88200 | SNDRV_PCM_RATE_96000)
 
-static const struct snd_soc_dai_ops s3c2412_i2s_dai_ops = {
+static struct snd_soc_dai_ops s3c2412_i2s_dai_ops = {
 	.hw_params	= s3c2412_i2s_hw_params,
 };
 
@@ -162,38 +163,37 @@ static struct snd_soc_dai_driver s3c2412_i2s_dai = {
 	.ops = &s3c2412_i2s_dai_ops,
 };
 
-static const struct snd_soc_component_driver s3c2412_i2s_component = {
-	.name		= "s3c2412-i2s",
-};
-
-static int s3c2412_iis_dev_probe(struct platform_device *pdev)
+static __devinit int s3c2412_iis_dev_probe(struct platform_device *pdev)
 {
-	int ret = 0;
+	return snd_soc_register_dai(&pdev->dev, &s3c2412_i2s_dai);
+}
 
-	ret = s3c_i2sv2_register_component(&pdev->dev, -1,
-					   &s3c2412_i2s_component,
-					   &s3c2412_i2s_dai);
-	if (ret) {
-		pr_err("failed to register the dai\n");
-		return ret;
-	}
-
-	ret = samsung_asoc_dma_platform_register(&pdev->dev);
-	if (ret)
-		pr_err("failed to register the DMA: %d\n", ret);
-
-	return ret;
+static __devexit int s3c2412_iis_dev_remove(struct platform_device *pdev)
+{
+	snd_soc_unregister_dai(&pdev->dev);
+	return 0;
 }
 
 static struct platform_driver s3c2412_iis_driver = {
 	.probe  = s3c2412_iis_dev_probe,
+	.remove = s3c2412_iis_dev_remove,
 	.driver = {
 		.name = "s3c2412-iis",
 		.owner = THIS_MODULE,
 	},
 };
 
-module_platform_driver(s3c2412_iis_driver);
+static int __init s3c2412_i2s_init(void)
+{
+	return platform_driver_register(&s3c2412_iis_driver);
+}
+module_init(s3c2412_i2s_init);
+
+static void __exit s3c2412_i2s_exit(void)
+{
+	platform_driver_unregister(&s3c2412_iis_driver);
+}
+module_exit(s3c2412_i2s_exit);
 
 /* Module information */
 MODULE_AUTHOR("Ben Dooks, <ben@simtec.co.uk>");

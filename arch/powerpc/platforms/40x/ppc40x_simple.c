@@ -50,15 +50,12 @@ machine_device_initcall(ppc40x_simple, ppc40x_device_probe);
  * Again, if your board needs to do things differently then create a
  * board.c file for it rather than adding it to this list.
  */
-static const char * const board[] __initconst = {
+static const char *board[] __initdata = {
 	"amcc,acadia",
 	"amcc,haleakala",
 	"amcc,kilauea",
 	"amcc,makalu",
-	"apm,klondike",
-	"est,hotfoot",
-	"plathome,obs600",
-	NULL
+	"est,hotfoot"
 };
 
 static int __init ppc40x_probe(void)

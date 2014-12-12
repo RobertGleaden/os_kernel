@@ -50,15 +50,13 @@
 
      <sect1><title>Delaying, scheduling, and timer routines</title>
 !Iinclude/linux/sched.h
-!Ekernel/sched/core.c
-!Ikernel/sched/cpupri.c
-!Ikernel/sched/fair.c
+!Ekernel/sched.c
 !Iinclude/linux/completion.h
 !Ekernel/timer.c
      </sect1>
      <sect1><title>Wait queues and Wake events</title>
 !Iinclude/linux/wait.h
-!Ekernel/sched/wait.c
+!Ekernel/wait.c
      </sect1>
      <sect1><title>High-resolution timers</title>
 !Iinclude/linux/ktime.h
@@ -84,13 +82,10 @@ X!Iinclude/linux/kobject.h
 
      <sect1><title>Kernel utility functions</title>
 !Iinclude/linux/kernel.h
-!Ekernel/printk/printk.c
+!Ekernel/printk.c
 !Ekernel/panic.c
 !Ekernel/sys.c
-!Ekernel/rcu/srcu.c
-!Ekernel/rcu/tree.c
-!Ekernel/rcu/tree_plugin.h
-!Ekernel/rcu/update.c
+!Ekernel/rcupdate.c
      </sect1>
 
      <sect1><title>Device Resource Management</title>
@@ -105,12 +100,9 @@ X!Iinclude/linux/kobject.h
 !Iinclude/linux/device.h
      </sect1>
      <sect1><title>Device Drivers Base</title>
-!Idrivers/base/init.c
 !Edrivers/base/driver.c
 !Edrivers/base/core.c
-!Edrivers/base/syscore.c
 !Edrivers/base/class.c
-!Idrivers/base/node.c
 !Edrivers/base/firmware_class.c
 !Edrivers/base/transport_class.c
 <!-- Cannot be included, because
@@ -119,20 +111,13 @@ X!Iinclude/linux/kobject.h
      exceed allowed 44 characters maximum
 X!Edrivers/base/attribute_container.c
 -->
-!Edrivers/base/dd.c
+!Edrivers/base/sys.c
 <!--
 X!Edrivers/base/interface.c
 -->
 !Iinclude/linux/platform_device.h
 !Edrivers/base/platform.c
 !Edrivers/base/bus.c
-     </sect1>
-     <sect1><title>Device Drivers DMA Management</title>
-!Edrivers/base/dma-buf.c
-!Edrivers/base/reservation.c
-!Iinclude/linux/reservation.h
-!Edrivers/base/dma-coherent.c
-!Edrivers/base/dma-mapping.c
      </sect1>
      <sect1><title>Device Drivers Power Management</title>
 !Edrivers/base/power/main.c
@@ -231,8 +216,9 @@ X!Isound/sound_firmware.c
 
   <chapter id="uart16x50">
      <title>16x50 UART Driver</title>
+!Iinclude/linux/serial_core.h
 !Edrivers/tty/serial/serial_core.c
-!Edrivers/tty/serial/8250/8250_core.c
+!Edrivers/tty/serial/8250.c
   </chapter>
 
   <chapter id="fbdev">
@@ -276,7 +262,7 @@ X!Isound/sound_firmware.c
      </para>
 
      <sect1><title>Frame Buffer Memory</title>
-!Edrivers/video/fbdev/core/fbmem.c
+!Edrivers/video/fbmem.c
      </sect1>
 <!--
      <sect1><title>Frame Buffer Console</title>
@@ -284,7 +270,7 @@ X!Edrivers/video/console/fbcon.c
      </sect1>
 -->
      <sect1><title>Frame Buffer Colormap</title>
-!Edrivers/video/fbdev/core/fbcmap.c
+!Edrivers/video/fbcmap.c
      </sect1>
 <!-- FIXME:
   drivers/video/fbgen.c has no docs, which stuffs up the sgml.  Comment
@@ -294,18 +280,18 @@ X!Idrivers/video/fbgen.c
      </sect1>
 KAO -->
      <sect1><title>Frame Buffer Video Mode Database</title>
-!Idrivers/video/fbdev/core/modedb.c
-!Edrivers/video/fbdev/core/modedb.c
+!Idrivers/video/modedb.c
+!Edrivers/video/modedb.c
      </sect1>
      <sect1><title>Frame Buffer Macintosh Video Mode Database</title>
-!Edrivers/video/fbdev/macmodes.c
+!Edrivers/video/macmodes.c
      </sect1>
      <sect1><title>Frame Buffer Fonts</title>
         <para>
-           Refer to the file lib/fonts/fonts.c for more information.
+           Refer to the file drivers/video/console/fonts.c for more information.
         </para>
 <!-- FIXME: Removed for now since no structured comments in source
-X!Ilib/fonts/fonts.c
+X!Idrivers/video/console/fonts.c
 -->
      </sect1>
   </chapter>
@@ -449,23 +435,6 @@ X!Ilib/fonts/fonts.c
 !Iinclude/linux/i2c.h
 !Fdrivers/i2c/i2c-boardinfo.c i2c_register_board_info
 !Edrivers/i2c/i2c-core.c
-  </chapter>
-
-  <chapter id="hsi">
-     <title>High Speed Synchronous Serial Interface (HSI)</title>
-
-     <para>
-	High Speed Synchronous Serial Interface (HSI) is a
-	serial interface mainly used for connecting application
-	engines (APE) with cellular modem engines (CMT) in cellular
-	handsets.
-
-	HSI provides multiplexing for up to 16 logical channels,
-	low-latency and full duplex communication.
-     </para>
-
-!Iinclude/linux/hsi/hsi.h
-!Edrivers/hsi/hsi.c
   </chapter>
 
 </book>

@@ -23,7 +23,6 @@
 #include <linux/rtc.h>
 #include <linux/workqueue.h>
 #include <linux/spi/spi.h>
-#include <linux/module.h>
 
 #define DRV_VERSION "0.2"
 
@@ -64,7 +63,7 @@ static int
 rs5c348_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
 	struct spi_device *spi = to_spi_device(dev);
-	struct rs5c348_plat_data *pdata = dev_get_platdata(&spi->dev);
+	struct rs5c348_plat_data *pdata = spi->dev.platform_data;
 	u8 txbuf[5+7], *txp;
 	int ret;
 
@@ -100,7 +99,7 @@ static int
 rs5c348_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct spi_device *spi = to_spi_device(dev);
-	struct rs5c348_plat_data *pdata = dev_get_platdata(&spi->dev);
+	struct rs5c348_plat_data *pdata = spi->dev.platform_data;
 	u8 txbuf[5], rxbuf[7];
 	int ret;
 
@@ -122,12 +121,9 @@ rs5c348_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	tm->tm_min = bcd2bin(rxbuf[RS5C348_REG_MINS] & RS5C348_MINS_MASK);
 	tm->tm_hour = bcd2bin(rxbuf[RS5C348_REG_HOURS] & RS5C348_HOURS_MASK);
 	if (!pdata->rtc_24h) {
-		if (rxbuf[RS5C348_REG_HOURS] & RS5C348_BIT_PM) {
-			tm->tm_hour -= 20;
-			tm->tm_hour %= 12;
+		tm->tm_hour %= 12;
+		if (rxbuf[RS5C348_REG_HOURS] & RS5C348_BIT_PM)
 			tm->tm_hour += 12;
-		} else
-			tm->tm_hour %= 12;
 	}
 	tm->tm_wday = bcd2bin(rxbuf[RS5C348_REG_WDAY] & RS5C348_WDAY_MASK);
 	tm->tm_mday = bcd2bin(rxbuf[RS5C348_REG_DAY] & RS5C348_DAY_MASK);
@@ -152,14 +148,13 @@ static const struct rtc_class_ops rs5c348_rtc_ops = {
 
 static struct spi_driver rs5c348_driver;
 
-static int rs5c348_probe(struct spi_device *spi)
+static int __devinit rs5c348_probe(struct spi_device *spi)
 {
 	int ret;
 	struct rtc_device *rtc;
 	struct rs5c348_plat_data *pdata;
 
-	pdata = devm_kzalloc(&spi->dev, sizeof(struct rs5c348_plat_data),
-				GFP_KERNEL);
+	pdata = kzalloc(sizeof(struct rs5c348_plat_data), GFP_KERNEL);
 	if (!pdata)
 		return -ENOMEM;
 	spi->dev.platform_data = pdata;
@@ -203,7 +198,7 @@ static int rs5c348_probe(struct spi_device *spi)
 	if (ret & RS5C348_BIT_24H)
 		pdata->rtc_24h = 1;
 
-	rtc = devm_rtc_device_register(&spi->dev, rs5c348_driver.driver.name,
+	rtc = rtc_device_register(rs5c348_driver.driver.name, &spi->dev,
 				  &rs5c348_rtc_ops, THIS_MODULE);
 
 	if (IS_ERR(rtc)) {
@@ -215,18 +210,43 @@ static int rs5c348_probe(struct spi_device *spi)
 
 	return 0;
  kfree_exit:
+	kfree(pdata);
 	return ret;
+}
+
+static int __devexit rs5c348_remove(struct spi_device *spi)
+{
+	struct rs5c348_plat_data *pdata = spi->dev.platform_data;
+	struct rtc_device *rtc = pdata->rtc;
+
+	if (rtc)
+		rtc_device_unregister(rtc);
+	kfree(pdata);
+	return 0;
 }
 
 static struct spi_driver rs5c348_driver = {
 	.driver = {
 		.name	= "rtc-rs5c348",
+		.bus	= &spi_bus_type,
 		.owner	= THIS_MODULE,
 	},
 	.probe	= rs5c348_probe,
+	.remove	= __devexit_p(rs5c348_remove),
 };
 
-module_spi_driver(rs5c348_driver);
+static __init int rs5c348_init(void)
+{
+	return spi_register_driver(&rs5c348_driver);
+}
+
+static __exit void rs5c348_exit(void)
+{
+	spi_unregister_driver(&rs5c348_driver);
+}
+
+module_init(rs5c348_init);
+module_exit(rs5c348_exit);
 
 MODULE_AUTHOR("Atsushi Nemoto <anemo@mba.ocn.ne.jp>");
 MODULE_DESCRIPTION("Ricoh RS5C348 RTC driver");

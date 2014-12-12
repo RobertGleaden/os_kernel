@@ -33,8 +33,7 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#include <drm/drmP.h>
-#include <linux/export.h>
+#include "drmP.h"
 #if defined(__ia64__)
 #include <linux/efi.h>
 #include <linux/slab.h>
@@ -43,19 +42,18 @@
 static void drm_vm_open(struct vm_area_struct *vma);
 static void drm_vm_close(struct vm_area_struct *vma);
 
-static pgprot_t drm_io_prot(struct drm_local_map *map,
-			    struct vm_area_struct *vma)
+static pgprot_t drm_io_prot(uint32_t map_type, struct vm_area_struct *vma)
 {
 	pgprot_t tmp = vm_get_page_prot(vma->vm_flags);
 
 #if defined(__i386__) || defined(__x86_64__)
-	if (map->type == _DRM_REGISTERS && !(map->flags & _DRM_WRITE_COMBINING))
-		tmp = pgprot_noncached(tmp);
-	else
-		tmp = pgprot_writecombine(tmp);
+	if (boot_cpu_data.x86 > 3 && map_type != _DRM_AGP) {
+		pgprot_val(tmp) |= _PAGE_PCD;
+		pgprot_val(tmp) &= ~_PAGE_PWT;
+	}
 #elif defined(__powerpc__)
 	pgprot_val(tmp) |= _PAGE_NO_CACHE;
-	if (map->type == _DRM_REGISTERS)
+	if (map_type == _DRM_REGISTERS)
 		pgprot_val(tmp) |= _PAGE_GUARDED;
 #elif defined(__ia64__)
 	if (efi_range_is_wc(vma->vm_start, vma->vm_end -
@@ -63,7 +61,7 @@ static pgprot_t drm_io_prot(struct drm_local_map *map,
 		tmp = pgprot_writecombine(tmp);
 	else
 		tmp = pgprot_noncached(tmp);
-#elif defined(__sparc__) || defined(__arm__) || defined(__mips__)
+#elif defined(__sparc__) || defined(__arm__)
 	tmp = pgprot_noncached(tmp);
 #endif
 	return tmp;
@@ -101,7 +99,7 @@ static int drm_do_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	/*
 	 * Find the right map
 	 */
-	if (!dev->agp)
+	if (!drm_core_has_AGP(dev))
 		goto vm_fault_error;
 
 	if (!dev->agp || !dev->agp->cant_use_aperture)
@@ -220,6 +218,7 @@ static void drm_vm_shm_close(struct vm_area_struct *vma)
 
 	DRM_DEBUG("0x%08lx,0x%08lx\n",
 		  vma->vm_start, vma->vm_end - vma->vm_start);
+	atomic_dec(&dev->vma_count);
 
 	map = vma->vm_private_data;
 
@@ -250,7 +249,13 @@ static void drm_vm_shm_close(struct vm_area_struct *vma)
 			switch (map->type) {
 			case _DRM_REGISTERS:
 			case _DRM_FRAME_BUFFER:
-				arch_phys_wc_del(map->mtrr);
+				if (drm_core_has_MTRR(dev) && map->mtrr >= 0) {
+					int retcode;
+					retcode = mtrr_del(map->mtrr,
+							   map->offset,
+							   map->size);
+					DRM_DEBUG("mtrr_del = %d\n", retcode);
+				}
 				iounmap(map->handle);
 				break;
 			case _DRM_SHM:
@@ -264,6 +269,9 @@ static void drm_vm_shm_close(struct vm_area_struct *vma)
 				dmah.busaddr = map->offset;
 				dmah.size = map->size;
 				__drm_pci_free(dev, &dmah);
+				break;
+			case _DRM_GEM:
+				DRM_ERROR("tried to rmmap GEM object\n");
 				break;
 			}
 			kfree(map);
@@ -297,7 +305,7 @@ static int drm_do_vm_dma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	offset = (unsigned long)vmf->virtual_address - vma->vm_start;	/* vm_[pg]off[set] should be 0 */
 	page_nr = offset >> PAGE_SHIFT; /* page_nr could just be vmf->pgoff */
-	page = virt_to_page((void *)dma->pagelist[page_nr]);
+	page = virt_to_page((dma->pagelist[page_nr] + (offset & (~PAGE_MASK))));
 
 	get_page(page);
 	vmf->page = page;
@@ -397,13 +405,15 @@ static const struct vm_operations_struct drm_vm_sg_ops = {
  * Create a new drm_vma_entry structure as the \p vma private data entry and
  * add it to drm_device::vmalist.
  */
-void drm_vm_open_locked(struct drm_device *dev,
-		struct vm_area_struct *vma)
+void drm_vm_open_locked(struct vm_area_struct *vma)
 {
+	struct drm_file *priv = vma->vm_file->private_data;
+	struct drm_device *dev = priv->minor->dev;
 	struct drm_vma_entry *vma_entry;
 
 	DRM_DEBUG("0x%08lx,0x%08lx\n",
 		  vma->vm_start, vma->vm_end - vma->vm_start);
+	atomic_inc(&dev->vma_count);
 
 	vma_entry = kmalloc(sizeof(*vma_entry), GFP_KERNEL);
 	if (vma_entry) {
@@ -412,7 +422,6 @@ void drm_vm_open_locked(struct drm_device *dev,
 		list_add(&vma_entry->head, &dev->vmalist);
 	}
 }
-EXPORT_SYMBOL_GPL(drm_vm_open_locked);
 
 static void drm_vm_open(struct vm_area_struct *vma)
 {
@@ -420,17 +429,19 @@ static void drm_vm_open(struct vm_area_struct *vma)
 	struct drm_device *dev = priv->minor->dev;
 
 	mutex_lock(&dev->struct_mutex);
-	drm_vm_open_locked(dev, vma);
+	drm_vm_open_locked(vma);
 	mutex_unlock(&dev->struct_mutex);
 }
 
-void drm_vm_close_locked(struct drm_device *dev,
-		struct vm_area_struct *vma)
+void drm_vm_close_locked(struct vm_area_struct *vma)
 {
+	struct drm_file *priv = vma->vm_file->private_data;
+	struct drm_device *dev = priv->minor->dev;
 	struct drm_vma_entry *pt, *temp;
 
 	DRM_DEBUG("0x%08lx,0x%08lx\n",
 		  vma->vm_start, vma->vm_end - vma->vm_start);
+	atomic_dec(&dev->vma_count);
 
 	list_for_each_entry_safe(pt, temp, &dev->vmalist, head) {
 		if (pt->vma == vma) {
@@ -455,7 +466,7 @@ static void drm_vm_close(struct vm_area_struct *vma)
 	struct drm_device *dev = priv->minor->dev;
 
 	mutex_lock(&dev->struct_mutex);
-	drm_vm_close_locked(dev, vma);
+	drm_vm_close_locked(vma);
 	mutex_unlock(&dev->struct_mutex);
 }
 
@@ -504,9 +515,11 @@ static int drm_mmap_dma(struct file *filp, struct vm_area_struct *vma)
 
 	vma->vm_ops = &drm_vm_dma_ops;
 
-	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_flags |= VM_RESERVED;	/* Don't swap */
+	vma->vm_flags |= VM_DONTEXPAND;
 
-	drm_vm_open_locked(dev, vma);
+	vma->vm_file = filp;	/* Needed for drm_vm_open() */
+	drm_vm_open_locked(vma);
 	return 0;
 }
 
@@ -589,7 +602,7 @@ int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 	switch (map->type) {
 #if !defined(__arm__)
 	case _DRM_AGP:
-		if (dev->agp && dev->agp->cant_use_aperture) {
+		if (drm_core_has_AGP(dev) && dev->agp->cant_use_aperture) {
 			/*
 			 * On some platforms we can't talk to bus dma address from the CPU, so for
 			 * memory of type DRM_AGP, we'll deal with sorting out the real physical
@@ -606,12 +619,22 @@ int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 	case _DRM_FRAME_BUFFER:
 	case _DRM_REGISTERS:
 		offset = drm_core_get_reg_ofs(dev);
-		vma->vm_page_prot = drm_io_prot(map, vma);
+		vma->vm_flags |= VM_IO;	/* not in core dump */
+		vma->vm_page_prot = drm_io_prot(map->type, vma);
+#if !defined(__arm__)
 		if (io_remap_pfn_range(vma, vma->vm_start,
 				       (map->offset + offset) >> PAGE_SHIFT,
 				       vma->vm_end - vma->vm_start,
 				       vma->vm_page_prot))
 			return -EAGAIN;
+#else
+		if (remap_pfn_range(vma, vma->vm_start,
+					(map->offset + offset) >> PAGE_SHIFT,
+					vma->vm_end - vma->vm_start,
+					vma->vm_page_prot))
+			return -EAGAIN;
+#endif
+
 		DRM_DEBUG("   Type = %d; start = 0x%lx, end = 0x%lx,"
 			  " offset = 0x%llx\n",
 			  map->type,
@@ -631,18 +654,24 @@ int drm_mmap_locked(struct file *filp, struct vm_area_struct *vma)
 	case _DRM_SHM:
 		vma->vm_ops = &drm_vm_shm_ops;
 		vma->vm_private_data = (void *)map;
+		/* Don't let this area swap.  Change when
+		   DRM_KERNEL advisory is supported. */
+		vma->vm_flags |= VM_RESERVED;
 		break;
 	case _DRM_SCATTER_GATHER:
 		vma->vm_ops = &drm_vm_sg_ops;
 		vma->vm_private_data = (void *)map;
+		vma->vm_flags |= VM_RESERVED;
 		vma->vm_page_prot = drm_dma_prot(map->type, vma);
 		break;
 	default:
 		return -EINVAL;	/* This should never happen. */
 	}
-	vma->vm_flags |= VM_DONTEXPAND | VM_DONTDUMP;
+	vma->vm_flags |= VM_RESERVED;	/* Don't swap */
+	vma->vm_flags |= VM_DONTEXPAND;
 
-	drm_vm_open_locked(dev, vma);
+	vma->vm_file = filp;	/* Needed for drm_vm_open() */
+	drm_vm_open_locked(vma);
 	return 0;
 }
 
@@ -651,9 +680,6 @@ int drm_mmap(struct file *filp, struct vm_area_struct *vma)
 	struct drm_file *priv = filp->private_data;
 	struct drm_device *dev = priv->minor->dev;
 	int ret;
-
-	if (drm_device_is_unplugged(dev))
-		return -ENODEV;
 
 	mutex_lock(&dev->struct_mutex);
 	ret = drm_mmap_locked(filp, vma);

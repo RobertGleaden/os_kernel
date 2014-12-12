@@ -26,6 +26,7 @@
 #include <linux/mm.h>
 #include <linux/init.h>
 
+#include <asm/system.h>
 #include <asm/segment.h>
 #include <asm/tlbflush.h>
 #include <asm/pgtable.h>

@@ -18,7 +18,6 @@
  */
 
 #include <linux/kthread.h>
-#include <linux/export.h>
 
 #include "usbip_common.h"
 
@@ -85,7 +84,7 @@ int usbip_start_eh(struct usbip_device *ud)
 
 	ud->eh = kthread_run(event_handler_loop, ud, "usbip_eh");
 	if (IS_ERR(ud->eh)) {
-		pr_warn("Unable to start control thread\n");
+		pr_warning("Unable to start control thread\n");
 		return PTR_ERR(ud->eh);
 	}
 
@@ -105,12 +104,10 @@ EXPORT_SYMBOL_GPL(usbip_stop_eh);
 
 void usbip_event_add(struct usbip_device *ud, unsigned long event)
 {
-	unsigned long flags;
-
-	spin_lock_irqsave(&ud->lock, flags);
+	spin_lock(&ud->lock);
 	ud->event |= event;
 	wake_up(&ud->eh_waitq);
-	spin_unlock_irqrestore(&ud->lock, flags);
+	spin_unlock(&ud->lock);
 }
 EXPORT_SYMBOL_GPL(usbip_event_add);
 

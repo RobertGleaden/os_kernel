@@ -2,7 +2,7 @@
  *
  * keymap imported from ir-keymaps.c
  *
- * Copyright (c) 2010 by Mauro Carvalho Chehab
+ * Copyright (c) 2010 by Mauro Carvalho Chehab <mchehab@redhat.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -11,7 +11,6 @@
  */
 
 #include <media/rc-map.h>
-#include <linux/module.h>
 
 /* Pinnacle PCTV HD 800i mini remote */
 
@@ -21,7 +20,6 @@ static struct rc_map_table pinnacle_pctv_hd[] = {
 	{ 0x0701, KEY_MENU }, /* Pinnacle logo */
 	{ 0x0739, KEY_POWER },
 	{ 0x0703, KEY_VOLUMEUP },
-	{ 0x0705, KEY_OK },
 	{ 0x0709, KEY_VOLUMEDOWN },
 	{ 0x0706, KEY_CHANNELUP },
 	{ 0x070c, KEY_CHANNELDOWN },
@@ -68,4 +66,4 @@ module_init(init_rc_map_pinnacle_pctv_hd)
 module_exit(exit_rc_map_pinnacle_pctv_hd)
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Mauro Carvalho Chehab");
+MODULE_AUTHOR("Mauro Carvalho Chehab <mchehab@redhat.com>");

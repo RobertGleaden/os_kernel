@@ -52,7 +52,7 @@ machine_device_initcall(ppc44x_simple, ppc44x_device_probe);
 static char *board[] __initdata = {
 	"amcc,arches",
 	"amcc,bamboo",
-	"apm,bluestone",
+	"amcc,bluestone",
 	"amcc,glacier",
 	"ibm,ebony",
 	"amcc,eiger",

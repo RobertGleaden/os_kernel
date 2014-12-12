@@ -37,6 +37,7 @@
 #include <linux/list.h>
 #include <linux/timer.h>
 #include <linux/spinlock.h>
+#include <linux/init.h>
 #include <linux/device.h>
 #include <linux/interrupt.h>
 
@@ -505,10 +506,8 @@ static void ep0_rxstate(struct musb *musb)
 			req->status = -EOVERFLOW;
 			count = len;
 		}
-		if (count > 0) {
-			musb_read_fifo(&musb->endpoints[0], count, buf);
-			req->actual += count;
-		}
+		musb_read_fifo(&musb->endpoints[0], count, buf);
+		req->actual += count;
 		csr = MUSB_CSR0_P_SVDRXPKTRDY;
 		if (count < 64 || req->actual == req->length) {
 			musb->ep0_state = MUSB_EP0_STAGE_STATUSIN;
@@ -675,16 +674,10 @@ irqreturn_t musb_g_ep0_irq(struct musb *musb)
 	csr = musb_readw(regs, MUSB_CSR0);
 	len = musb_readb(regs, MUSB_COUNT0);
 
-	dev_dbg(musb->controller, "csr %04x, count %d, ep0stage %s\n",
-			csr, len, decode_ep0stage(musb->ep0_state));
-
-	if (csr & MUSB_CSR0_P_DATAEND) {
-		/*
-		 * If DATAEND is set we should not call the callback,
-		 * hence the status stage is not complete.
-		 */
-		return IRQ_HANDLED;
-	}
+	dev_dbg(musb->controller, "csr %04x, count %d, myaddr %d, ep0stage %s\n",
+			csr, len,
+			musb_readb(mbase, MUSB_FADDR),
+			decode_ep0stage(musb->ep0_state));
 
 	/* I sent a stall.. need to acknowledge it now.. */
 	if (csr & MUSB_CSR0_P_SENTSTALL) {

@@ -20,7 +20,6 @@
  */
 
 #include "emu8000_local.h"
-#include <linux/export.h>
 #include <sound/asoundef.h>
 
 /*
@@ -175,7 +174,7 @@ get_voice(struct snd_emux *emu, struct snd_emux_port *port)
 	hw = emu->hw;
 
 	for (i = 0; i < END; i++) {
-		best[i].time = (unsigned int)(-1); /* XXX MAX_?INT really */
+		best[i].time = (unsigned int)(-1); /* XXX MAX_?INT really */;
 		best[i].voice = -1;
 	}
 

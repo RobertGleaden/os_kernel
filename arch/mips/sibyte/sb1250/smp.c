@@ -48,7 +48,7 @@ static void *mailbox_regs[] = {
 /*
  * SMP init and finish on secondary CPUs
  */
-void sb1250_smp_init(void)
+void __cpuinit sb1250_smp_init(void)
 {
 	unsigned int imask = STATUSF_IP4 | STATUSF_IP3 | STATUSF_IP2 |
 		STATUSF_IP1 | STATUSF_IP0;
@@ -83,7 +83,7 @@ static inline void sb1250_send_ipi_mask(const struct cpumask *mask,
 /*
  * Code to run on secondary just after probing the CPU
  */
-static void sb1250_init_secondary(void)
+static void __cpuinit sb1250_init_secondary(void)
 {
 	extern void sb1250_smp_init(void);
 
@@ -94,7 +94,7 @@ static void sb1250_init_secondary(void)
  * Do any tidying up before marking online and running the idle
  * loop
  */
-static void sb1250_smp_finish(void)
+static void __cpuinit sb1250_smp_finish(void)
 {
 	extern void sb1250_clockevent_init(void);
 
@@ -103,10 +103,17 @@ static void sb1250_smp_finish(void)
 }
 
 /*
+ * Final cleanup after all secondaries booted
+ */
+static void sb1250_cpus_done(void)
+{
+}
+
+/*
  * Setup the PC, SP, and GP of a secondary processor and start it
  * running!
  */
-static void sb1250_boot_secondary(int cpu, struct task_struct *idle)
+static void __cpuinit sb1250_boot_secondary(int cpu, struct task_struct *idle)
 {
 	int retval;
 
@@ -119,7 +126,7 @@ static void sb1250_boot_secondary(int cpu, struct task_struct *idle)
 
 /*
  * Use CFE to find out how many CPUs are available, setting up
- * cpu_possible_mask and the logical/physical mappings.
+ * cpu_possible_map and the logical/physical mappings.
  * XXXKW will the boot CPU ever not be physical 0?
  *
  * Common setup before any secondaries are started
@@ -128,13 +135,14 @@ static void __init sb1250_smp_setup(void)
 {
 	int i, num;
 
-	init_cpu_possible(cpumask_of(0));
+	cpus_clear(cpu_possible_map);
+	cpu_set(0, cpu_possible_map);
 	__cpu_number_map[0] = 0;
 	__cpu_logical_map[0] = 0;
 
 	for (i = 1, num = 0; i < NR_CPUS; i++) {
 		if (cfe_cpu_stop(i) == 0) {
-			set_cpu_possible(i, true);
+			cpu_set(i, cpu_possible_map);
 			__cpu_number_map[i] = ++num;
 			__cpu_logical_map[num] = i;
 		}
@@ -151,6 +159,7 @@ struct plat_smp_ops sb_smp_ops = {
 	.send_ipi_mask		= sb1250_send_ipi_mask,
 	.init_secondary		= sb1250_init_secondary,
 	.smp_finish		= sb1250_smp_finish,
+	.cpus_done		= sb1250_cpus_done,
 	.boot_secondary		= sb1250_boot_secondary,
 	.smp_setup		= sb1250_smp_setup,
 	.prepare_cpus		= sb1250_prepare_cpus,
@@ -162,7 +171,7 @@ void sb1250_mailbox_interrupt(void)
 	int irq = K_INT_MBOX_0;
 	unsigned int action;
 
-	kstat_incr_irq_this_cpu(irq);
+	kstat_incr_irqs_this_cpu(irq, irq_to_desc(irq));
 	/* Load the mailbox register to figure out what we're supposed to do */
 	action = (____raw_readq(mailbox_regs[cpu]) >> 48) & 0xffff;
 

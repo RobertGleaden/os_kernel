@@ -14,8 +14,17 @@
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
-#include <linux/device.h>
+#include <linux/sysdev.h>
+#include <cpu/dma.h>
 #include <asm-generic/dma.h>
+
+#ifdef CONFIG_NR_DMA_CHANNELS
+#  define MAX_DMA_CHANNELS	(CONFIG_NR_DMA_CHANNELS)
+#elif defined(CONFIG_NR_ONCHIP_DMA_CHANNELS)
+#  define MAX_DMA_CHANNELS	(CONFIG_NR_ONCHIP_DMA_CHANNELS)
+#else
+#  define MAX_DMA_CHANNELS	0
+#endif
 
 /*
  * Read and write modes can mean drastically different things depending on the
@@ -82,7 +91,7 @@ struct dma_channel {
 
 	wait_queue_head_t wait_queue;
 
-	struct device dev;
+	struct sys_device dev;
 	void *priv_data;
 };
 

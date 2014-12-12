@@ -121,6 +121,9 @@ struct tmio_nand {
 
 #define mtd_to_tmio(m)			container_of(m, struct tmio_nand, mtd)
 
+#ifdef CONFIG_MTD_CMDLINE_PARTS
+static const char *part_probes[] = { "cmdlinepart", NULL };
+#endif
 
 /*--------------------------------------------------------------------------*/
 
@@ -256,6 +259,18 @@ static void tmio_nand_read_buf(struct mtd_info *mtd, u_char *buf, int len)
 	tmio_ioread16_rep(tmio->fcr + FCR_DATA, buf, len >> 1);
 }
 
+static int
+tmio_nand_verify_buf(struct mtd_info *mtd, const u_char *buf, int len)
+{
+	struct tmio_nand *tmio = mtd_to_tmio(mtd);
+	u16				*p = (u16 *) buf;
+
+	for (len >>= 1; len; len--)
+		if (*(p++) != tmio_ioread16(tmio->fcr + FCR_DATA))
+			return -EFAULT;
+	return 0;
+}
+
 static void tmio_nand_enable_hwecc(struct mtd_info *mtd, int mode)
 {
 	struct tmio_nand *tmio = mtd_to_tmio(mtd);
@@ -357,7 +372,7 @@ static void tmio_hw_stop(struct platform_device *dev, struct tmio_nand *tmio)
 
 static int tmio_probe(struct platform_device *dev)
 {
-	struct tmio_nand_data *data = dev_get_platdata(&dev->dev);
+	struct tmio_nand_data *data = dev->dev.platform_data;
 	struct resource *fcr = platform_get_resource(dev,
 			IORESOURCE_MEM, 0);
 	struct resource *ccr = platform_get_resource(dev,
@@ -366,14 +381,18 @@ static int tmio_probe(struct platform_device *dev)
 	struct tmio_nand *tmio;
 	struct mtd_info *mtd;
 	struct nand_chip *nand_chip;
+	struct mtd_partition *parts;
+	int nbparts = 0;
 	int retval;
 
 	if (data == NULL)
 		dev_warn(&dev->dev, "NULL platform data!\n");
 
-	tmio = devm_kzalloc(&dev->dev, sizeof(*tmio), GFP_KERNEL);
-	if (!tmio)
-		return -ENOMEM;
+	tmio = kzalloc(sizeof *tmio, GFP_KERNEL);
+	if (!tmio) {
+		retval = -ENOMEM;
+		goto err_kzalloc;
+	}
 
 	tmio->dev = dev;
 
@@ -383,18 +402,22 @@ static int tmio_probe(struct platform_device *dev)
 	mtd->priv = nand_chip;
 	mtd->name = "tmio-nand";
 
-	tmio->ccr = devm_ioremap(&dev->dev, ccr->start, resource_size(ccr));
-	if (!tmio->ccr)
-		return -EIO;
+	tmio->ccr = ioremap(ccr->start, resource_size(ccr));
+	if (!tmio->ccr) {
+		retval = -EIO;
+		goto err_iomap_ccr;
+	}
 
 	tmio->fcr_base = fcr->start & 0xfffff;
-	tmio->fcr = devm_ioremap(&dev->dev, fcr->start, resource_size(fcr));
-	if (!tmio->fcr)
-		return -EIO;
+	tmio->fcr = ioremap(fcr->start, resource_size(fcr));
+	if (!tmio->fcr) {
+		retval = -EIO;
+		goto err_iomap_fcr;
+	}
 
 	retval = tmio_hw_init(dev, tmio);
 	if (retval)
-		return retval;
+		goto err_hwinit;
 
 	/* Set address of NAND IO lines */
 	nand_chip->IO_ADDR_R = tmio->fcr;
@@ -406,12 +429,12 @@ static int tmio_probe(struct platform_device *dev)
 	nand_chip->read_byte = tmio_nand_read_byte;
 	nand_chip->write_buf = tmio_nand_write_buf;
 	nand_chip->read_buf = tmio_nand_read_buf;
+	nand_chip->verify_buf = tmio_nand_verify_buf;
 
 	/* set eccmode using hardware ECC */
 	nand_chip->ecc.mode = NAND_ECC_HW;
 	nand_chip->ecc.size = 512;
 	nand_chip->ecc.bytes = 6;
-	nand_chip->ecc.strength = 2;
 	nand_chip->ecc.hwctl = tmio_nand_enable_hwecc;
 	nand_chip->ecc.calculate = tmio_nand_calculate_ecc;
 	nand_chip->ecc.correct = tmio_nand_correct_data;
@@ -422,8 +445,8 @@ static int tmio_probe(struct platform_device *dev)
 	/* 15 us command delay time */
 	nand_chip->chip_delay = 15;
 
-	retval = devm_request_irq(&dev->dev, irq, &tmio_irq, 0,
-				  dev_name(&dev->dev), tmio);
+	retval = request_irq(irq, &tmio_irq,
+				IRQF_DISABLED, dev_name(&dev->dev), tmio);
 	if (retval) {
 		dev_err(&dev->dev, "request_irq error %d\n", retval);
 		goto err_irq;
@@ -435,19 +458,35 @@ static int tmio_probe(struct platform_device *dev)
 	/* Scan to find existence of the device */
 	if (nand_scan(mtd, 1)) {
 		retval = -ENODEV;
-		goto err_irq;
+		goto err_scan;
 	}
 	/* Register the partitions */
-	retval = mtd_device_parse_register(mtd, NULL, NULL,
-					   data ? data->partition : NULL,
-					   data ? data->num_partitions : 0);
+#ifdef CONFIG_MTD_CMDLINE_PARTS
+	nbparts = parse_mtd_partitions(mtd, part_probes, &parts, 0);
+#endif
+	if (nbparts <= 0 && data) {
+		parts = data->partition;
+		nbparts = data->num_partitions;
+	}
+
+	retval = mtd_device_register(mtd, parts, nbparts);
 	if (!retval)
 		return retval;
 
 	nand_release(mtd);
 
+err_scan:
+	if (tmio->irq)
+		free_irq(tmio->irq, tmio);
 err_irq:
 	tmio_hw_stop(dev, tmio);
+err_hwinit:
+	iounmap(tmio->fcr);
+err_iomap_fcr:
+	iounmap(tmio->ccr);
+err_iomap_ccr:
+	kfree(tmio);
+err_kzalloc:
 	return retval;
 }
 
@@ -456,7 +495,12 @@ static int tmio_remove(struct platform_device *dev)
 	struct tmio_nand *tmio = platform_get_drvdata(dev);
 
 	nand_release(&tmio->mtd);
+	if (tmio->irq)
+		free_irq(tmio->irq, tmio);
 	tmio_hw_stop(dev, tmio);
+	iounmap(tmio->fcr);
+	iounmap(tmio->ccr);
+	kfree(tmio);
 	return 0;
 }
 
@@ -500,7 +544,18 @@ static struct platform_driver tmio_driver = {
 	.resume		= tmio_resume,
 };
 
-module_platform_driver(tmio_driver);
+static int __init tmio_init(void)
+{
+	return platform_driver_register(&tmio_driver);
+}
+
+static void __exit tmio_exit(void)
+{
+	platform_driver_unregister(&tmio_driver);
+}
+
+module_init(tmio_init);
+module_exit(tmio_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Ian Molton, Dirk Opfer, Chris Humbert, Dmitry Baryshkov");

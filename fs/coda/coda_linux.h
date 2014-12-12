@@ -12,12 +12,6 @@
 #ifndef _LINUX_CODA_FS
 #define _LINUX_CODA_FS
 
-#ifdef pr_fmt
-#undef pr_fmt
-#endif
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/kernel.h>
 #include <linux/param.h>
 #include <linux/mm.h>
@@ -46,7 +40,7 @@ extern const struct file_operations coda_ioctl_operations;
 int coda_open(struct inode *i, struct file *f);
 int coda_release(struct inode *i, struct file *f);
 int coda_permission(struct inode *inode, int mask);
-int coda_revalidate_inode(struct inode *);
+int coda_revalidate_inode(struct dentry *);
 int coda_getattr(struct vfsmount *, struct dentry *, struct kstat *);
 int coda_setattr(struct dentry *, struct iattr *);
 
@@ -65,11 +59,12 @@ void coda_sysctl_clean(void);
 
 #define CODA_ALLOC(ptr, cast, size) do { \
     if (size < PAGE_SIZE) \
-        ptr = kzalloc((unsigned long) size, GFP_KERNEL); \
+        ptr = kmalloc((unsigned long) size, GFP_KERNEL); \
     else \
-        ptr = (cast)vzalloc((unsigned long) size); \
+        ptr = (cast)vmalloc((unsigned long) size); \
     if (!ptr) \
-	pr_warn("kernel malloc returns 0 at %s:%d\n", __FILE__, __LINE__); \
+        printk("kernel malloc returns 0 at %s:%d\n", __FILE__, __LINE__); \
+    else memset( ptr, 0, size ); \
 } while (0)
 
 

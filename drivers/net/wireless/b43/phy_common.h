@@ -231,11 +231,8 @@ struct b43_phy {
 	/* HT info */
 	bool is_40mhz;
 
-	/* Is GMODE (2 GHz mode) bit enabled? */
+	/* GMODE bit enabled? */
 	bool gmode;
-
-	/* After power reset full init has to be performed */
-	bool do_full_init;
 
 	/* Analog Type */
 	u8 analog;
@@ -368,12 +365,6 @@ void b43_radio_set(struct b43_wldev *dev, u16 offset, u16 set);
 void b43_radio_maskset(struct b43_wldev *dev, u16 offset, u16 mask, u16 set);
 
 /**
- * b43_radio_wait_value - Waits for a given value in masked register read
- */
-bool b43_radio_wait_value(struct b43_wldev *dev, u16 offset, u16 mask,
-			  u16 value, int delay, int timeout);
-
-/**
  * b43_radio_lock - Lock firmware radio register access
  */
 void b43_radio_lock(struct b43_wldev *dev);
@@ -392,9 +383,6 @@ void b43_phy_lock(struct b43_wldev *dev);
  * b43_phy_unlock - Unlock firmware PHY register access
  */
 void b43_phy_unlock(struct b43_wldev *dev);
-
-void b43_phy_put_into_reset(struct b43_wldev *dev);
-void b43_phy_take_out_of_reset(struct b43_wldev *dev);
 
 /**
  * b43_switch_channel - Switch to another channel
@@ -455,8 +443,6 @@ int b43_phy_shm_tssi_read(struct b43_wldev *dev, u16 shm_offset);
 void b43_phyop_switch_analog_generic(struct b43_wldev *dev, bool on);
 
 bool b43_channel_type_is_40mhz(enum nl80211_channel_type channel_type);
-
-void b43_phy_force_clock(struct b43_wldev *dev, bool force);
 
 struct b43_c32 b43_cordic(int theta);
 

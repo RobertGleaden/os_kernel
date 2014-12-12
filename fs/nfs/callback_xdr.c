@@ -9,14 +9,11 @@
 #include <linux/sunrpc/svc.h>
 #include <linux/nfs4.h>
 #include <linux/nfs_fs.h>
-#include <linux/ratelimit.h>
-#include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/sunrpc/bc_xprt.h>
 #include "nfs4_fs.h"
 #include "callback.h"
 #include "internal.h"
-#include "nfs4session.h"
 
 #define CB_OP_TAGLEN_MAXSZ	(512)
 #define CB_OP_HDR_RES_MAXSZ	(2 + CB_OP_TAGLEN_MAXSZ)
@@ -76,7 +73,7 @@ static __be32 *read_buf(struct xdr_stream *xdr, int nbytes)
 
 	p = xdr_inline_decode(xdr, nbytes);
 	if (unlikely(p == NULL))
-		printk(KERN_WARNING "NFS: NFSv4 callback reply buffer overflowed!\n");
+		printk(KERN_WARNING "NFSv4 callback reply buffer overflowed!\n");
 	return p;
 }
 
@@ -141,10 +138,10 @@ static __be32 decode_stateid(struct xdr_stream *xdr, nfs4_stateid *stateid)
 {
 	__be32 *p;
 
-	p = read_buf(xdr, NFS4_STATEID_SIZE);
+	p = read_buf(xdr, 16);
 	if (unlikely(p == NULL))
 		return htonl(NFS4ERR_RESOURCE);
-	memcpy(stateid, p, NFS4_STATEID_SIZE);
+	memcpy(stateid->data, p, 16);
 	return 0;
 }
 
@@ -158,7 +155,7 @@ static __be32 decode_compound_hdr_arg(struct xdr_stream *xdr, struct cb_compound
 		return status;
 	/* We do not like overly long tags! */
 	if (hdr->taglen > CB_OP_TAGLEN_MAXSZ - 12) {
-		printk("NFS: NFSv4 CALLBACK %s: client sent tag of length %u\n",
+		printk("NFSv4 CALLBACK %s: client sent tag of length %u\n",
 				__func__, hdr->taglen);
 		return htonl(NFS4ERR_RESOURCE);
 	}
@@ -166,11 +163,11 @@ static __be32 decode_compound_hdr_arg(struct xdr_stream *xdr, struct cb_compound
 	if (unlikely(p == NULL))
 		return htonl(NFS4ERR_RESOURCE);
 	hdr->minorversion = ntohl(*p++);
-	/* Check for minor version support */
-	if (hdr->minorversion <= NFS4_MAX_MINOR_VERSION) {
-		hdr->cb_ident = ntohl(*p++); /* ignored by v4.1 and v4.2 */
+	/* Check minor version is zero or one. */
+	if (hdr->minorversion <= 1) {
+		hdr->cb_ident = ntohl(*p++); /* ignored by v4.1 */
 	} else {
-		pr_warn_ratelimited("NFS: %s: NFSv4 server callback with "
+		printk(KERN_WARNING "%s: NFSv4 server callback with "
 			"illegal minor version %u!\n",
 			__func__, hdr->minorversion);
 		return htonl(NFS4ERR_MINOR_VERS_MISMATCH);
@@ -308,10 +305,6 @@ __be32 decode_devicenotify_args(struct svc_rqst *rqstp,
 	n = ntohl(*p++);
 	if (n <= 0)
 		goto out;
-	if (n > ULONG_MAX / sizeof(*args->devs)) {
-		status = htonl(NFS4ERR_BADXDR);
-		goto out;
-	}
 
 	args->devs = kmalloc(n * sizeof(*args->devs), GFP_KERNEL);
 	if (!args->devs) {
@@ -456,9 +449,9 @@ static __be32 decode_cb_sequence_args(struct svc_rqst *rqstp,
 	args->csa_nrclists = ntohl(*p++);
 	args->csa_rclists = NULL;
 	if (args->csa_nrclists) {
-		args->csa_rclists = kmalloc_array(args->csa_nrclists,
-						  sizeof(*args->csa_rclists),
-						  GFP_KERNEL);
+		args->csa_rclists = kmalloc(args->csa_nrclists *
+					    sizeof(*args->csa_rclists),
+					    GFP_KERNEL);
 		if (unlikely(args->csa_rclists == NULL))
 			goto out;
 
@@ -495,18 +488,17 @@ static __be32 decode_recallany_args(struct svc_rqst *rqstp,
 				      struct xdr_stream *xdr,
 				      struct cb_recallanyargs *args)
 {
-	uint32_t bitmap[2];
-	__be32 *p, status;
+	__be32 *p;
 
 	args->craa_addr = svc_addr(rqstp);
 	p = read_buf(xdr, 4);
 	if (unlikely(p == NULL))
 		return htonl(NFS4ERR_BADXDR);
 	args->craa_objs_to_keep = ntohl(*p++);
-	status = decode_bitmap(xdr, bitmap);
-	if (unlikely(status))
-		return status;
-	args->craa_type_mask = bitmap[0];
+	p = read_buf(xdr, 4);
+	if (unlikely(p == NULL))
+		return htonl(NFS4ERR_BADXDR);
+	args->craa_type_mask = ntohl(*p);
 
 	return 0;
 }
@@ -521,7 +513,7 @@ static __be32 decode_recallslot_args(struct svc_rqst *rqstp,
 	p = read_buf(xdr, 4);
 	if (unlikely(p == NULL))
 		return htonl(NFS4ERR_BADXDR);
-	args->crsa_target_highest_slotid = ntohl(*p++);
+	args->crsa_target_max_slots = ntohl(*p++);
 	return 0;
 }
 
@@ -697,7 +689,7 @@ static __be32 encode_cb_sequence_res(struct svc_rqst *rqstp,
 				       const struct cb_sequenceres *res)
 {
 	__be32 *p;
-	__be32 status = res->csr_status;
+	unsigned status = res->csr_status;
 
 	if (unlikely(status != 0))
 		goto out;
@@ -762,14 +754,14 @@ static void nfs4_callback_free_slot(struct nfs4_session *session)
 	 * Let the state manager know callback processing done.
 	 * A single slot, so highest used slotid is either 0 or -1
 	 */
-	tbl->highest_used_slotid = NFS4_NO_SLOT;
-	nfs4_slot_tbl_drain_complete(tbl);
+	tbl->highest_used_slotid = -1;
+	nfs4_check_drain_bc_complete(session);
 	spin_unlock(&tbl->slot_tbl_lock);
 }
 
 static void nfs4_cb_free_slot(struct cb_process_state *cps)
 {
-	if (cps->slotid != NFS4_NO_SLOT)
+	if (cps->slotid != -1)
 		nfs4_callback_free_slot(cps->clp->cl_session);
 }
 
@@ -786,26 +778,6 @@ static void nfs4_cb_free_slot(struct cb_process_state *cps)
 }
 #endif /* CONFIG_NFS_V4_1 */
 
-#ifdef CONFIG_NFS_V4_2
-static __be32
-preprocess_nfs42_op(int nop, unsigned int op_nr, struct callback_op **op)
-{
-	__be32 status = preprocess_nfs41_op(nop, op_nr, op);
-	if (status != htonl(NFS4ERR_OP_ILLEGAL))
-		return status;
-
-	if (op_nr == OP_CB_OFFLOAD)
-		return htonl(NFS4ERR_NOTSUPP);
-	return htonl(NFS4ERR_OP_ILLEGAL);
-}
-#else /* CONFIG_NFS_V4_2 */
-static __be32
-preprocess_nfs42_op(int nop, unsigned int op_nr, struct callback_op **op)
-{
-	return htonl(NFS4ERR_MINOR_VERS_MISMATCH);
-}
-#endif /* CONFIG_NFS_V4_2 */
-
 static __be32
 preprocess_nfs4_op(unsigned int op_nr, struct callback_op **op)
 {
@@ -821,7 +793,8 @@ preprocess_nfs4_op(unsigned int op_nr, struct callback_op **op)
 	return htonl(NFS_OK);
 }
 
-static __be32 process_op(int nop, struct svc_rqst *rqstp,
+static __be32 process_op(uint32_t minorversion, int nop,
+		struct svc_rqst *rqstp,
 		struct xdr_stream *xdr_in, void *argp,
 		struct xdr_stream *xdr_out, void *resp,
 		struct cb_process_state *cps)
@@ -838,22 +811,10 @@ static __be32 process_op(int nop, struct svc_rqst *rqstp,
 		return status;
 
 	dprintk("%s: minorversion=%d nop=%d op_nr=%u\n",
-		__func__, cps->minorversion, nop, op_nr);
+		__func__, minorversion, nop, op_nr);
 
-	switch (cps->minorversion) {
-	case 0:
-		status = preprocess_nfs4_op(op_nr, &op);
-		break;
-	case 1:
-		status = preprocess_nfs41_op(nop, op_nr, &op);
-		break;
-	case 2:
-		status = preprocess_nfs42_op(nop, op_nr, &op);
-		break;
-	default:
-		status = htonl(NFS4ERR_MINOR_VERS_MISMATCH);
-	}
-
+	status = minorversion ? preprocess_nfs41_op(nop, op_nr, &op) :
+				preprocess_nfs4_op(op_nr, &op);
 	if (status == htonl(NFS4ERR_OP_ILLEGAL))
 		op_nr = OP_CB_ILLEGAL;
 	if (status)
@@ -894,8 +855,7 @@ static __be32 nfs4_callback_compound(struct svc_rqst *rqstp, void *argp, void *r
 	struct cb_process_state cps = {
 		.drc_status = 0,
 		.clp = NULL,
-		.slotid = NFS4_NO_SLOT,
-		.net = SVC_NET(rqstp),
+		.slotid = -1,
 	};
 	unsigned int nops = 0;
 
@@ -911,20 +871,19 @@ static __be32 nfs4_callback_compound(struct svc_rqst *rqstp, void *argp, void *r
 		return rpc_garbage_args;
 
 	if (hdr_arg.minorversion == 0) {
-		cps.clp = nfs4_find_client_ident(SVC_NET(rqstp), hdr_arg.cb_ident);
+		cps.clp = nfs4_find_client_ident(hdr_arg.cb_ident);
 		if (!cps.clp || !check_gss_callback_principal(cps.clp, rqstp))
 			return rpc_drop_reply;
 	}
 
-	cps.minorversion = hdr_arg.minorversion;
 	hdr_res.taglen = hdr_arg.taglen;
 	hdr_res.tag = hdr_arg.tag;
 	if (encode_compound_hdr_res(&xdr_out, &hdr_res) != 0)
 		return rpc_system_err;
 
 	while (status == 0 && nops != hdr_arg.nops) {
-		status = process_op(nops, rqstp, &xdr_in,
-				    argp, &xdr_out, resp, &cps);
+		status = process_op(hdr_arg.minorversion, nops, rqstp,
+				    &xdr_in, argp, &xdr_out, resp, &cps);
 		nops++;
 	}
 
@@ -1027,5 +986,4 @@ struct svc_version nfs4_callback_version4 = {
 	.vs_proc = nfs4_callback_procedures1,
 	.vs_xdrsize = NFS4_CALLBACK_XDRSIZE,
 	.vs_dispatch = NULL,
-	.vs_hidden = 1,
 };

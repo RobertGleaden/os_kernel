@@ -28,14 +28,14 @@
 #include <linux/cpu.h>
 #include <linux/clockchips.h>
 #include <linux/slab.h>
-#include <linux/acpi.h>
+#include <acpi/acpi_bus.h>
+#include <acpi/acpi_drivers.h>
 #include <asm/mwait.h>
 
 #define ACPI_PROCESSOR_AGGREGATOR_CLASS	"acpi_pad"
 #define ACPI_PROCESSOR_AGGREGATOR_DEVICE_NAME "Processor Aggregator"
 #define ACPI_PROCESSOR_AGGREGATOR_NOTIFY 0x80
 static DEFINE_MUTEX(isolated_cpus_lock);
-static DEFINE_MUTEX(round_robin_lock);
 
 static unsigned long power_saving_mwait_eax;
 
@@ -107,7 +107,7 @@ static void round_robin_cpu(unsigned int tsk_index)
 	if (!alloc_cpumask_var(&tmp, GFP_KERNEL))
 		return;
 
-	mutex_lock(&round_robin_lock);
+	mutex_lock(&isolated_cpus_lock);
 	cpumask_clear(tmp);
 	for_each_cpu(cpu, pad_busy_cpus)
 		cpumask_or(tmp, tmp, topology_thread_cpumask(cpu));
@@ -116,7 +116,7 @@ static void round_robin_cpu(unsigned int tsk_index)
 	if (cpumask_empty(tmp))
 		cpumask_andnot(tmp, cpu_online_mask, pad_busy_cpus);
 	if (cpumask_empty(tmp)) {
-		mutex_unlock(&round_robin_lock);
+		mutex_unlock(&isolated_cpus_lock);
 		return;
 	}
 	for_each_cpu(cpu, tmp) {
@@ -131,7 +131,7 @@ static void round_robin_cpu(unsigned int tsk_index)
 	tsk_in_cpu[tsk_index] = preferred_cpu;
 	cpumask_set_cpu(preferred_cpu, pad_busy_cpus);
 	cpu_weight[preferred_cpu]++;
-	mutex_unlock(&round_robin_lock);
+	mutex_unlock(&isolated_cpus_lock);
 
 	set_cpus_allowed_ptr(current, cpumask_of(preferred_cpu));
 }
@@ -144,7 +144,7 @@ static void exit_round_robin(unsigned int tsk_index)
 }
 
 static unsigned int idle_pct = 5; /* percentage */
-static unsigned int round_robin_time = 1; /* second */
+static unsigned int round_robin_time = 10; /* second */
 static int power_saving_thread(void *data)
 {
 	struct sched_param param = {.sched_priority = 1};
@@ -156,13 +156,12 @@ static int power_saving_thread(void *data)
 
 	while (!kthread_should_stop()) {
 		int cpu;
-		unsigned long expire_time;
+		u64 expire_time;
 
 		try_to_freeze();
 
 		/* round robin to cpus */
-		expire_time = last_jiffies + round_robin_time * HZ;
-		if (time_before(expire_time, jiffies)) {
+		if (last_jiffies + round_robin_time * HZ < jiffies) {
 			last_jiffies = jiffies;
 			round_robin_cpu(tsk_index);
 		}
@@ -193,7 +192,10 @@ static int power_saving_thread(void *data)
 					CLOCK_EVT_NOTIFY_BROADCAST_ENTER, &cpu);
 			stop_critical_timings();
 
-			mwait_idle_with_hints(power_saving_mwait_eax, 1);
+			__monitor((void *)&current_thread_info()->flags, 0, 0);
+			smp_mb();
+			if (!need_resched())
+				__mwait(power_saving_mwait_eax, 1);
 
 			start_critical_timings();
 			if (lapic_marked_unstable)
@@ -201,7 +203,7 @@ static int power_saving_thread(void *data)
 					CLOCK_EVT_NOTIFY_BROADCAST_EXIT, &cpu);
 			local_irq_enable();
 
-			if (time_before(expire_time, jiffies)) {
+			if (jiffies > expire_time) {
 				do_sleep = 1;
 				break;
 			}
@@ -216,15 +218,8 @@ static int power_saving_thread(void *data)
 		 * borrow CPU time from this CPU and cause RT task use > 95%
 		 * CPU time. To make 'avoid starvation' work, takes a nap here.
 		 */
-		if (unlikely(do_sleep))
+		if (do_sleep)
 			schedule_timeout_killable(HZ * idle_pct / 100);
-
-		/* If an external event has set the need_resched flag, then
-		 * we need to deal with it, or this loop will continue to
-		 * spin without calling __mwait().
-		 */
-		if (unlikely(need_resched()))
-			schedule();
 	}
 
 	exit_round_robin(tsk_index);
@@ -235,19 +230,16 @@ static struct task_struct *ps_tsks[NR_CPUS];
 static unsigned int ps_tsk_num;
 static int create_power_saving_task(void)
 {
-	int rc;
+	int rc = -ENOMEM;
 
 	ps_tsks[ps_tsk_num] = kthread_run(power_saving_thread,
 		(void *)(unsigned long)ps_tsk_num,
-		"acpi_pad/%d", ps_tsk_num);
-
-	if (IS_ERR(ps_tsks[ps_tsk_num])) {
-		rc = PTR_ERR(ps_tsks[ps_tsk_num]);
-		ps_tsks[ps_tsk_num] = NULL;
-	} else {
-		rc = 0;
+		"power_saving/%d", ps_tsk_num);
+	rc = IS_ERR(ps_tsks[ps_tsk_num]) ? PTR_ERR(ps_tsks[ps_tsk_num]) : 0;
+	if (!rc)
 		ps_tsk_num++;
-	}
+	else
+		ps_tsks[ps_tsk_num] = NULL;
 
 	return rc;
 }
@@ -293,7 +285,7 @@ static ssize_t acpi_pad_rrtime_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long num;
-	if (kstrtoul(buf, 0, &num))
+	if (strict_strtoul(buf, 0, &num))
 		return -EINVAL;
 	if (num < 1 || num >= 100)
 		return -EINVAL;
@@ -316,7 +308,7 @@ static ssize_t acpi_pad_idlepct_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long num;
-	if (kstrtoul(buf, 0, &num))
+	if (strict_strtoul(buf, 0, &num))
 		return -EINVAL;
 	if (num < 1 || num >= 100)
 		return -EINVAL;
@@ -339,7 +331,7 @@ static ssize_t acpi_pad_idlecpus_store(struct device *dev,
 	struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned long num;
-	if (kstrtoul(buf, 0, &num))
+	if (strict_strtoul(buf, 0, &num))
 		return -EINVAL;
 	mutex_lock(&isolated_cpus_lock);
 	acpi_pad_idle_cpus(num);
@@ -416,14 +408,28 @@ static int acpi_pad_pur(acpi_handle handle)
 	return num;
 }
 
+/* Notify firmware how many CPUs are idle */
+static void acpi_pad_ost(acpi_handle handle, int stat,
+	uint32_t idle_cpus)
+{
+	union acpi_object params[3] = {
+		{.type = ACPI_TYPE_INTEGER,},
+		{.type = ACPI_TYPE_INTEGER,},
+		{.type = ACPI_TYPE_BUFFER,},
+	};
+	struct acpi_object_list arg_list = {3, params};
+
+	params[0].integer.value = ACPI_PROCESSOR_AGGREGATOR_NOTIFY;
+	params[1].integer.value =  stat;
+	params[2].buffer.length = 4;
+	params[2].buffer.pointer = (void *)&idle_cpus;
+	acpi_evaluate_object(handle, "_OST", &arg_list, NULL);
+}
+
 static void acpi_pad_handle_notify(acpi_handle handle)
 {
 	int num_cpus;
 	uint32_t idle_cpus;
-	struct acpi_buffer param = {
-		.length = 4,
-		.pointer = (void *)&idle_cpus,
-	};
 
 	mutex_lock(&isolated_cpus_lock);
 	num_cpus = acpi_pad_pur(handle);
@@ -433,7 +439,7 @@ static void acpi_pad_handle_notify(acpi_handle handle)
 	}
 	acpi_pad_idle_cpus(num_cpus);
 	idle_cpus = acpi_pad_idle_cpus_num();
-	acpi_evaluate_ost(handle, ACPI_PROCESSOR_AGGREGATOR_NOTIFY, 0, &param);
+	acpi_pad_ost(handle, 0, idle_cpus);
 	mutex_unlock(&isolated_cpus_lock);
 }
 
@@ -445,11 +451,12 @@ static void acpi_pad_notify(acpi_handle handle, u32 event,
 	switch (event) {
 	case ACPI_PROCESSOR_AGGREGATOR_NOTIFY:
 		acpi_pad_handle_notify(handle);
+		acpi_bus_generate_proc_event(device, event, 0);
 		acpi_bus_generate_netlink_event(device->pnp.device_class,
 			dev_name(&device->dev), event, 0);
 		break;
 	default:
-		pr_warn("Unsupported event [0x%x]\n", event);
+		printk(KERN_WARNING "Unsupported event [0x%x]\n", event);
 		break;
 	}
 }
@@ -474,7 +481,8 @@ static int acpi_pad_add(struct acpi_device *device)
 	return 0;
 }
 
-static int acpi_pad_remove(struct acpi_device *device)
+static int acpi_pad_remove(struct acpi_device *device,
+	int type)
 {
 	mutex_lock(&isolated_cpus_lock);
 	acpi_pad_idle_cpus(0);

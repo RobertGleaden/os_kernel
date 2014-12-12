@@ -50,6 +50,8 @@
 #include <linux/pnp.h>
 #include <linux/spinlock.h>
 
+#define DEB(x)
+#define DEB1(x)
 #include "sound_config.h"
 
 #include "ad1848.h"
@@ -117,9 +119,9 @@ ad1848_port_info;
 static struct address_info cfg;
 static int nr_ad1848_devs;
 
-static bool deskpro_xl;
-static bool deskpro_m;
-static bool soundpro;
+static int deskpro_xl;
+static int deskpro_m;
+static int soundpro;
 
 static volatile signed char irq2dev[17] = {
 	-1, -1, -1, -1, -1, -1, -1, -1,
@@ -175,7 +177,7 @@ static struct {
 #ifdef CONFIG_PNP
 static int isapnp	= 1;
 static int isapnpjump;
-static bool reverse;
+static int reverse;
 
 static int audio_activated;
 #else
@@ -1013,6 +1015,8 @@ static void ad1848_close(int dev)
 	unsigned long   flags;
 	ad1848_info    *devc = (ad1848_info *) audio_devs[dev]->devc;
 	ad1848_port_info *portc = (ad1848_port_info *) audio_devs[dev]->portc;
+
+	DEB(printk("ad1848_close(void)\n"));
 
 	devc->intr_active = 0;
 	ad1848_halt(dev);
@@ -2860,7 +2864,7 @@ static struct {
 	{NULL}
 };
 
-static struct isapnp_device_id id_table[] = {
+static struct isapnp_device_id id_table[] __devinitdata = {
 	{	ISAPNP_VENDOR('C','M','I'), ISAPNP_DEVICE(0x0001),
 		ISAPNP_VENDOR('@','@','@'), ISAPNP_FUNCTION(0x0001), 0 },
         {       ISAPNP_ANY_ID, ISAPNP_ANY_ID,

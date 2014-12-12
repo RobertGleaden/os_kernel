@@ -23,7 +23,6 @@
 #include <linux/workqueue.h>
 #include <linux/fs.h>
 #include <linux/syscalls.h>
-#include <linux/export.h>
 #include <linux/ctype.h>
 #include <linux/memblock.h>
 #include <linux/of.h>
@@ -280,13 +279,13 @@ static void os_area_set_property(struct device_node *node,
 
 	if (tmp) {
 		pr_debug("%s:%d found %s\n", __func__, __LINE__, prop->name);
-		of_remove_property(node, tmp);
+		prom_remove_property(node, tmp);
 	}
 
-	result = of_add_property(node, prop);
+	result = prom_add_property(node, prop);
 
 	if (result)
-		pr_debug("%s:%d of_set_property failed\n", __func__,
+		pr_debug("%s:%d prom_set_property failed\n", __func__,
 			__LINE__);
 }
 

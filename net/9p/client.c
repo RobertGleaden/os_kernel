@@ -23,8 +23,6 @@
  *
  */
 
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
@@ -39,9 +37,6 @@
 #include <net/9p/client.h>
 #include <net/9p/transport.h>
 #include "protocol.h"
-
-#define CREATE_TRACE_POINTS
-#include <trace/events/9p.h>
 
 /*
   * Client Option Parsing (code inspired by NFS code)
@@ -76,20 +71,6 @@ inline int p9_is_proto_dotu(struct p9_client *clnt)
 }
 EXPORT_SYMBOL(p9_is_proto_dotu);
 
-/*
- * Some error codes are taken directly from the server replies,
- * make sure they are valid.
- */
-static int safe_errno(int err)
-{
-	if ((err > 0) || (err < -MAX_ERRNO)) {
-		p9_debug(P9_DEBUG_ERROR, "Invalid error code %d\n", err);
-		return -EPROTO;
-	}
-	return err;
-}
-
-
 /* Interpret mount option for protocol version */
 static int get_protocol_version(char *s)
 {
@@ -97,15 +78,15 @@ static int get_protocol_version(char *s)
 
 	if (!strcmp(s, "9p2000")) {
 		version = p9_proto_legacy;
-		p9_debug(P9_DEBUG_9P, "Protocol version: Legacy\n");
+		P9_DPRINTK(P9_DEBUG_9P, "Protocol version: Legacy\n");
 	} else if (!strcmp(s, "9p2000.u")) {
 		version = p9_proto_2000u;
-		p9_debug(P9_DEBUG_9P, "Protocol version: 9P2000.u\n");
+		P9_DPRINTK(P9_DEBUG_9P, "Protocol version: 9P2000.u\n");
 	} else if (!strcmp(s, "9p2000.L")) {
 		version = p9_proto_2000L;
-		p9_debug(P9_DEBUG_9P, "Protocol version: 9P2000.L\n");
+		P9_DPRINTK(P9_DEBUG_9P, "Protocol version: 9P2000.L\n");
 	} else
-		pr_info("Unknown protocol version %s\n", s);
+		printk(KERN_INFO "9p: Unknown protocol version %s.\n", s);
 
 	return version;
 }
@@ -127,7 +108,7 @@ static int parse_opts(char *opts, struct p9_client *clnt)
 	char *s;
 	int ret = 0;
 
-	clnt->proto_version = p9_proto_2000L;
+	clnt->proto_version = p9_proto_2000u;
 	clnt->msize = 8192;
 
 	if (!opts)
@@ -135,40 +116,43 @@ static int parse_opts(char *opts, struct p9_client *clnt)
 
 	tmp_options = kstrdup(opts, GFP_KERNEL);
 	if (!tmp_options) {
-		p9_debug(P9_DEBUG_ERROR,
-			 "failed to allocate copy of option string\n");
+		P9_DPRINTK(P9_DEBUG_ERROR,
+				"failed to allocate copy of option string\n");
 		return -ENOMEM;
 	}
 	options = tmp_options;
 
 	while ((p = strsep(&options, ",")) != NULL) {
-		int token, r;
+		int token;
 		if (!*p)
 			continue;
 		token = match_token(p, tokens, args);
-		switch (token) {
-		case Opt_msize:
-			r = match_int(&args[0], &option);
+		if (token < Opt_trans) {
+			int r = match_int(&args[0], &option);
 			if (r < 0) {
-				p9_debug(P9_DEBUG_ERROR,
-					 "integer field, but no integer?\n");
+				P9_DPRINTK(P9_DEBUG_ERROR,
+					"integer field, but no integer?\n");
 				ret = r;
 				continue;
 			}
+		}
+		switch (token) {
+		case Opt_msize:
 			clnt->msize = option;
 			break;
 		case Opt_trans:
 			s = match_strdup(&args[0]);
 			if (!s) {
 				ret = -ENOMEM;
-				p9_debug(P9_DEBUG_ERROR,
-					 "problem allocating copy of trans arg\n");
+				P9_DPRINTK(P9_DEBUG_ERROR,
+					"problem allocating copy of trans arg\n");
 				goto free_and_return;
 			 }
 			clnt->trans_mod = v9fs_get_trans_by_name(s);
 			if (clnt->trans_mod == NULL) {
-				pr_info("Could not find request transport: %s\n",
-					s);
+				printk(KERN_INFO
+					"9p: Could not find "
+					"request transport: %s\n", s);
 				ret = -EINVAL;
 				kfree(s);
 				goto free_and_return;
@@ -182,8 +166,8 @@ static int parse_opts(char *opts, struct p9_client *clnt)
 			s = match_strdup(&args[0]);
 			if (!s) {
 				ret = -ENOMEM;
-				p9_debug(P9_DEBUG_ERROR,
-					 "problem allocating copy of version arg\n");
+				P9_DPRINTK(P9_DEBUG_ERROR,
+					"problem allocating copy of version arg\n");
 				goto free_and_return;
 			}
 			ret = get_protocol_version(s);
@@ -204,17 +188,6 @@ free_and_return:
 	return ret;
 }
 
-static struct p9_fcall *p9_fcall_alloc(int alloc_msize)
-{
-	struct p9_fcall *fc;
-	fc = kmalloc(sizeof(struct p9_fcall) + alloc_msize, GFP_NOFS);
-	if (!fc)
-		return NULL;
-	fc->capacity = alloc_msize;
-	fc->sdata = (char *) fc + sizeof(struct p9_fcall);
-	return fc;
-}
-
 /**
  * p9_tag_alloc - lookup/allocate a request by tag
  * @c: client session to lookup tag within
@@ -230,13 +203,11 @@ static struct p9_fcall *p9_fcall_alloc(int alloc_msize)
  *
  */
 
-static struct p9_req_t *
-p9_tag_alloc(struct p9_client *c, u16 tag, unsigned int max_size)
+static struct p9_req_t *p9_tag_alloc(struct p9_client *c, u16 tag)
 {
 	unsigned long flags;
 	int row, col;
 	struct p9_req_t *req;
-	int alloc_msize = min(c->msize, max_size);
 
 	/* This looks up the original request by tag so we know which
 	 * buffer to read the data into */
@@ -251,7 +222,7 @@ p9_tag_alloc(struct p9_client *c, u16 tag, unsigned int max_size)
 					sizeof(struct p9_req_t), GFP_ATOMIC);
 
 			if (!c->reqs[row]) {
-				pr_err("Couldn't grow tag array\n");
+				printk(KERN_ERR "Couldn't grow tag array\n");
 				spin_unlock_irqrestore(&c->lock, flags);
 				return ERR_PTR(-ENOMEM);
 			}
@@ -267,19 +238,42 @@ p9_tag_alloc(struct p9_client *c, u16 tag, unsigned int max_size)
 	col = tag % P9_ROW_MAXTAG;
 
 	req = &c->reqs[row][col];
-	if (!req->wq) {
+	if (!req->tc) {
 		req->wq = kmalloc(sizeof(wait_queue_head_t), GFP_NOFS);
-		if (!req->wq)
-			goto grow_failed;
+		if (!req->wq) {
+			printk(KERN_ERR "Couldn't grow tag array\n");
+			return ERR_PTR(-ENOMEM);
+		}
 		init_waitqueue_head(req->wq);
+		if ((c->trans_mod->pref & P9_TRANS_PREF_PAYLOAD_MASK) ==
+				P9_TRANS_PREF_PAYLOAD_SEP) {
+			int alloc_msize = min(c->msize, 4096);
+			req->tc = kmalloc(sizeof(struct p9_fcall)+alloc_msize,
+					  GFP_NOFS);
+			req->tc->capacity = alloc_msize;
+			req->rc = kmalloc(sizeof(struct p9_fcall)+alloc_msize,
+					  GFP_NOFS);
+			req->rc->capacity = alloc_msize;
+		} else {
+			req->tc = kmalloc(sizeof(struct p9_fcall)+c->msize,
+					  GFP_NOFS);
+			req->tc->capacity = c->msize;
+			req->rc = kmalloc(sizeof(struct p9_fcall)+c->msize,
+					  GFP_NOFS);
+			req->rc->capacity = c->msize;
+		}
+		if ((!req->tc) || (!req->rc)) {
+			printk(KERN_ERR "Couldn't grow tag array\n");
+			kfree(req->tc);
+			kfree(req->rc);
+			kfree(req->wq);
+			req->tc = req->rc = NULL;
+			req->wq = NULL;
+			return ERR_PTR(-ENOMEM);
+		}
+		req->tc->sdata = (char *) req->tc + sizeof(struct p9_fcall);
+		req->rc->sdata = (char *) req->rc + sizeof(struct p9_fcall);
 	}
-
-	if (!req->tc)
-		req->tc = p9_fcall_alloc(alloc_msize);
-	if (!req->rc)
-		req->rc = p9_fcall_alloc(alloc_msize);
-	if (!req->tc || !req->rc)
-		goto grow_failed;
 
 	p9pdu_reset(req->tc);
 	p9pdu_reset(req->rc);
@@ -287,16 +281,7 @@ p9_tag_alloc(struct p9_client *c, u16 tag, unsigned int max_size)
 	req->tc->tag = tag-1;
 	req->status = REQ_STATUS_ALLOC;
 
-	return req;
-
-grow_failed:
-	pr_err("Couldn't grow tag array\n");
-	kfree(req->tc);
-	kfree(req->rc);
-	kfree(req->wq);
-	req->tc = req->rc = NULL;
-	req->wq = NULL;
-	return ERR_PTR(-ENOMEM);
+	return &c->reqs[row][col];
 }
 
 /**
@@ -366,9 +351,9 @@ static void p9_tag_cleanup(struct p9_client *c)
 	for (row = 0; row < (c->max_tag/P9_ROW_MAXTAG); row++) {
 		for (col = 0; col < P9_ROW_MAXTAG; col++) {
 			if (c->reqs[row][col].status != REQ_STATUS_IDLE) {
-				p9_debug(P9_DEBUG_MUX,
-					 "Attempting to cleanup non-free tag %d,%d\n",
-					 row, col);
+				P9_DPRINTK(P9_DEBUG_MUX,
+				  "Attempting to cleanup non-free tag %d,%d\n",
+				  row, col);
 				/* TODO: delay execution of cleanup */
 				return;
 			}
@@ -402,7 +387,7 @@ static void p9_tag_cleanup(struct p9_client *c)
 static void p9_free_req(struct p9_client *c, struct p9_req_t *r)
 {
 	int tag = r->tc->tag;
-	p9_debug(P9_DEBUG_MUX, "clnt %p req %p tag: %d\n", c, r, tag);
+	P9_DPRINTK(P9_DEBUG_MUX, "clnt %p req %p tag: %d\n", c, r, tag);
 
 	r->status = REQ_STATUS_IDLE;
 	if (tag != P9_NOTAG && p9_idpool_check(tag, c->tagpool))
@@ -415,19 +400,11 @@ static void p9_free_req(struct p9_client *c, struct p9_req_t *r)
  * req: request received
  *
  */
-void p9_client_cb(struct p9_client *c, struct p9_req_t *req, int status)
+void p9_client_cb(struct p9_client *c, struct p9_req_t *req)
 {
-	p9_debug(P9_DEBUG_MUX, " tag %d\n", req->tc->tag);
-
-	/*
-	 * This barrier is needed to make sure any change made to req before
-	 * the other thread wakes up will indeed be seen by the waiting side.
-	 */
-	smp_wmb();
-	req->status = status;
-
+	P9_DPRINTK(P9_DEBUG_MUX, " tag %d\n", req->tc->tag);
 	wake_up(req->wq);
-	p9_debug(P9_DEBUG_MUX, "wakeup: %d\n", req->tc->tag);
+	P9_DPRINTK(P9_DEBUG_MUX, "wakeup: %d\n", req->tc->tag);
 }
 EXPORT_SYMBOL(p9_client_cb);
 
@@ -462,8 +439,8 @@ p9_parse_header(struct p9_fcall *pdu, int32_t *size, int8_t *type, int16_t *tag,
 	pdu->id = r_type;
 	pdu->tag = r_tag;
 
-	p9_debug(P9_DEBUG_9P, "<<< size=%d type: %d tag: %d\n",
-		 pdu->size, pdu->id, pdu->tag);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< size=%d type: %d tag: %d\n", pdu->size,
+							pdu->id, pdu->tag);
 
 	if (type)
 		*type = r_type;
@@ -498,114 +475,37 @@ static int p9_check_errors(struct p9_client *c, struct p9_req_t *req)
 	int ecode;
 
 	err = p9_parse_header(req->rc, NULL, &type, NULL, 0);
-	/*
-	 * dump the response from server
-	 * This should be after check errors which poplulate pdu_fcall.
-	 */
-	trace_9p_protocol_dump(c, req->rc);
 	if (err) {
-		p9_debug(P9_DEBUG_ERROR, "couldn't parse header %d\n", err);
+		P9_DPRINTK(P9_DEBUG_ERROR, "couldn't parse header %d\n", err);
 		return err;
 	}
+
 	if (type != P9_RERROR && type != P9_RLERROR)
 		return 0;
 
 	if (!p9_is_proto_dotl(c)) {
 		char *ename;
-		err = p9pdu_readf(req->rc, c->proto_version, "s?d",
-				  &ename, &ecode);
-		if (err)
-			goto out_err;
 
-		if (p9_is_proto_dotu(c))
-			err = -ecode;
-
-		if (!err || !IS_ERR_VALUE(err)) {
-			err = p9_errstr2errno(ename, strlen(ename));
-
-			p9_debug(P9_DEBUG_9P, "<<< RERROR (%d) %s\n",
-				 -ecode, ename);
-		}
-		kfree(ename);
-	} else {
-		err = p9pdu_readf(req->rc, c->proto_version, "d", &ecode);
-		err = -ecode;
-
-		p9_debug(P9_DEBUG_9P, "<<< RLERROR (%d)\n", -ecode);
-	}
-
-	return err;
-
-out_err:
-	p9_debug(P9_DEBUG_ERROR, "couldn't parse error%d\n", err);
-
-	return err;
-}
-
-/**
- * p9_check_zc_errors - check 9p packet for error return and process it
- * @c: current client instance
- * @req: request to parse and check for error conditions
- * @in_hdrlen: Size of response protocol buffer.
- *
- * returns error code if one is discovered, otherwise returns 0
- *
- * this will have to be more complicated if we have multiple
- * error packet types
- */
-
-static int p9_check_zc_errors(struct p9_client *c, struct p9_req_t *req,
-			      char *uidata, int in_hdrlen, int kern_buf)
-{
-	int err;
-	int ecode;
-	int8_t type;
-	char *ename = NULL;
-
-	err = p9_parse_header(req->rc, NULL, &type, NULL, 0);
-	/*
-	 * dump the response from server
-	 * This should be after parse_header which poplulate pdu_fcall.
-	 */
-	trace_9p_protocol_dump(c, req->rc);
-	if (err) {
-		p9_debug(P9_DEBUG_ERROR, "couldn't parse header %d\n", err);
-		return err;
-	}
-
-	if (type != P9_RERROR && type != P9_RLERROR)
-		return 0;
-
-	if (!p9_is_proto_dotl(c)) {
-		/* Error is reported in string format */
-		int len;
-		/* 7 = header size for RERROR; */
-		int inline_len = in_hdrlen - 7;
-
-		len =  req->rc->size - req->rc->offset;
-		if (len > (P9_ZC_HDR_SZ - 7)) {
-			err = -EFAULT;
-			goto out_err;
-		}
-
-		ename = &req->rc->sdata[req->rc->offset];
-		if (len > inline_len) {
-			/* We have error in external buffer */
-			if (kern_buf) {
-				memcpy(ename + inline_len, uidata,
-				       len - inline_len);
-			} else {
-				err = copy_from_user(ename + inline_len,
-						     uidata, len - inline_len);
+		if (req->tc->pbuf_size) {
+			/* Handle user buffers */
+			size_t len = req->rc->size - req->rc->offset;
+			if (req->tc->pubuf) {
+				/* User Buffer */
+				err = copy_from_user(
+					&req->rc->sdata[req->rc->offset],
+					req->tc->pubuf, len);
 				if (err) {
 					err = -EFAULT;
 					goto out_err;
 				}
+			} else {
+				/* Kernel Buffer */
+				memmove(&req->rc->sdata[req->rc->offset],
+						req->tc->pkbuf, len);
 			}
 		}
-		ename = NULL;
 		err = p9pdu_readf(req->rc, c->proto_version, "s?d",
-				  &ename, &ecode);
+				&ename, &ecode);
 		if (err)
 			goto out_err;
 
@@ -615,20 +515,24 @@ static int p9_check_zc_errors(struct p9_client *c, struct p9_req_t *req,
 		if (!err || !IS_ERR_VALUE(err)) {
 			err = p9_errstr2errno(ename, strlen(ename));
 
-			p9_debug(P9_DEBUG_9P, "<<< RERROR (%d) %s\n",
-				 -ecode, ename);
+			P9_DPRINTK(P9_DEBUG_9P, "<<< RERROR (%d) %s\n", -ecode,
+					ename);
+
+			kfree(ename);
 		}
-		kfree(ename);
 	} else {
 		err = p9pdu_readf(req->rc, c->proto_version, "d", &ecode);
 		err = -ecode;
 
-		p9_debug(P9_DEBUG_9P, "<<< RLERROR (%d)\n", -ecode);
+		P9_DPRINTK(P9_DEBUG_9P, "<<< RLERROR (%d)\n", -ecode);
 	}
+
+
 	return err;
 
 out_err:
-	p9_debug(P9_DEBUG_ERROR, "couldn't parse error%d\n", err);
+	P9_DPRINTK(P9_DEBUG_ERROR, "couldn't parse error%d\n", err);
+
 	return err;
 }
 
@@ -657,63 +561,22 @@ static int p9_client_flush(struct p9_client *c, struct p9_req_t *oldreq)
 	if (err)
 		return err;
 
-	p9_debug(P9_DEBUG_9P, ">>> TFLUSH tag %d\n", oldtag);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TFLUSH tag %d\n", oldtag);
 
 	req = p9_client_rpc(c, P9_TFLUSH, "w", oldtag);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
-	/*
-	 * if we haven't received a response for oldreq,
-	 * remove it from the list
-	 */
-	if (oldreq->status == REQ_STATUS_SENT)
-		if (c->trans_mod->cancelled)
-			c->trans_mod->cancelled(c, oldreq);
+
+	/* if we haven't received a response for oldreq,
+	   remove it from the list. */
+	spin_lock(&c->lock);
+	if (oldreq->status == REQ_STATUS_FLSH)
+		list_del(&oldreq->req_list);
+	spin_unlock(&c->lock);
 
 	p9_free_req(c, req);
 	return 0;
-}
-
-static struct p9_req_t *p9_client_prepare_req(struct p9_client *c,
-					      int8_t type, int req_size,
-					      const char *fmt, va_list ap)
-{
-	int tag, err;
-	struct p9_req_t *req;
-
-	p9_debug(P9_DEBUG_MUX, "client %p op %d\n", c, type);
-
-	/* we allow for any status other than disconnected */
-	if (c->status == Disconnected)
-		return ERR_PTR(-EIO);
-
-	/* if status is begin_disconnected we allow only clunk request */
-	if ((c->status == BeginDisconnect) && (type != P9_TCLUNK))
-		return ERR_PTR(-EIO);
-
-	tag = P9_NOTAG;
-	if (type != P9_TVERSION) {
-		tag = p9_idpool_get(c->tagpool);
-		if (tag < 0)
-			return ERR_PTR(-ENOMEM);
-	}
-
-	req = p9_tag_alloc(c, tag, req_size);
-	if (IS_ERR(req))
-		return req;
-
-	/* marshall the data */
-	p9pdu_prepare(req->tc, tag, type);
-	err = p9pdu_vwritef(req->tc, c->proto_version, fmt, ap);
-	if (err)
-		goto reterr;
-	p9pdu_finalize(c, req->tc);
-	trace_9p_client_req(c, type, tag);
-	return req;
-reterr:
-	p9_free_req(c, req);
-	return ERR_PTR(err);
 }
 
 /**
@@ -729,21 +592,46 @@ static struct p9_req_t *
 p9_client_rpc(struct p9_client *c, int8_t type, const char *fmt, ...)
 {
 	va_list ap;
-	int sigpending, err;
-	unsigned long flags;
+	int tag, err;
 	struct p9_req_t *req;
+	unsigned long flags;
+	int sigpending;
 
-	va_start(ap, fmt);
-	req = p9_client_prepare_req(c, type, c->msize, fmt, ap);
-	va_end(ap);
-	if (IS_ERR(req))
-		return req;
+	P9_DPRINTK(P9_DEBUG_MUX, "client %p op %d\n", c, type);
+
+	/* we allow for any status other than disconnected */
+	if (c->status == Disconnected)
+		return ERR_PTR(-EIO);
+
+	/* if status is begin_disconnected we allow only clunk request */
+	if ((c->status == BeginDisconnect) && (type != P9_TCLUNK))
+		return ERR_PTR(-EIO);
 
 	if (signal_pending(current)) {
 		sigpending = 1;
 		clear_thread_flag(TIF_SIGPENDING);
 	} else
 		sigpending = 0;
+
+	tag = P9_NOTAG;
+	if (type != P9_TVERSION) {
+		tag = p9_idpool_get(c->tagpool);
+		if (tag < 0)
+			return ERR_PTR(-ENOMEM);
+	}
+
+	req = p9_tag_alloc(c, tag);
+	if (IS_ERR(req))
+		return req;
+
+	/* marshall the data */
+	p9pdu_prepare(req->tc, tag, type);
+	va_start(ap, fmt);
+	err = p9pdu_vwritef(req->tc, c->proto_version, fmt, ap);
+	va_end(ap);
+	if (err)
+		goto reterr;
+	p9pdu_finalize(req->tc);
 
 	err = c->trans_mod->request(c, req);
 	if (err < 0) {
@@ -751,30 +639,20 @@ p9_client_rpc(struct p9_client *c, int8_t type, const char *fmt, ...)
 			c->status = Disconnected;
 		goto reterr;
 	}
-again:
-	/* Wait for the response */
+
+	P9_DPRINTK(P9_DEBUG_MUX, "wait %p tag: %d\n", req->wq, tag);
 	err = wait_event_interruptible(*req->wq,
-				       req->status >= REQ_STATUS_RCVD);
-
-	/*
-	 * Make sure our req is coherent with regard to updates in other
-	 * threads - echoes to wmb() in the callback
-	 */
-	smp_rmb();
-
-	if ((err == -ERESTARTSYS) && (c->status == Connected)
-				  && (type == P9_TFLUSH)) {
-		sigpending = 1;
-		clear_thread_flag(TIF_SIGPENDING);
-		goto again;
-	}
+						req->status >= REQ_STATUS_RCVD);
+	P9_DPRINTK(P9_DEBUG_MUX, "wait %p tag: %d returned %d\n",
+						req->wq, tag, err);
 
 	if (req->status == REQ_STATUS_ERROR) {
-		p9_debug(P9_DEBUG_ERROR, "req_status error %d\n", req->t_err);
+		P9_DPRINTK(P9_DEBUG_ERROR, "req_status error %d\n", req->t_err);
 		err = req->t_err;
 	}
+
 	if ((err == -ERESTARTSYS) && (c->status == Connected)) {
-		p9_debug(P9_DEBUG_MUX, "flushing\n");
+		P9_DPRINTK(P9_DEBUG_MUX, "flushing\n");
 		sigpending = 1;
 		clear_thread_flag(TIF_SIGPENDING);
 
@@ -785,104 +663,27 @@ again:
 		if (req->status == REQ_STATUS_RCVD)
 			err = 0;
 	}
+
 	if (sigpending) {
 		spin_lock_irqsave(&current->sighand->siglock, flags);
 		recalc_sigpending();
 		spin_unlock_irqrestore(&current->sighand->siglock, flags);
 	}
+
 	if (err < 0)
 		goto reterr;
 
 	err = p9_check_errors(c, req);
-	trace_9p_client_res(c, type, req->rc->tag, err);
-	if (!err)
+	if (!err) {
+		P9_DPRINTK(P9_DEBUG_MUX, "exit: client %p op %d\n", c, type);
 		return req;
+	}
+
 reterr:
+	P9_DPRINTK(P9_DEBUG_MUX, "exit: client %p op %d error: %d\n", c, type,
+									err);
 	p9_free_req(c, req);
-	return ERR_PTR(safe_errno(err));
-}
-
-/**
- * p9_client_zc_rpc - issue a request and wait for a response
- * @c: client session
- * @type: type of request
- * @uidata: user bffer that should be ued for zero copy read
- * @uodata: user buffer that shoud be user for zero copy write
- * @inlen: read buffer size
- * @olen: write buffer size
- * @hdrlen: reader header size, This is the size of response protocol data
- * @fmt: protocol format string (see protocol.c)
- *
- * Returns request structure (which client must free using p9_free_req)
- */
-static struct p9_req_t *p9_client_zc_rpc(struct p9_client *c, int8_t type,
-					 char *uidata, char *uodata,
-					 int inlen, int olen, int in_hdrlen,
-					 int kern_buf, const char *fmt, ...)
-{
-	va_list ap;
-	int sigpending, err;
-	unsigned long flags;
-	struct p9_req_t *req;
-
-	va_start(ap, fmt);
-	/*
-	 * We allocate a inline protocol data of only 4k bytes.
-	 * The actual content is passed in zero-copy fashion.
-	 */
-	req = p9_client_prepare_req(c, type, P9_ZC_HDR_SZ, fmt, ap);
-	va_end(ap);
-	if (IS_ERR(req))
-		return req;
-
-	if (signal_pending(current)) {
-		sigpending = 1;
-		clear_thread_flag(TIF_SIGPENDING);
-	} else
-		sigpending = 0;
-
-	/* If we are called with KERNEL_DS force kern_buf */
-	if (segment_eq(get_fs(), KERNEL_DS))
-		kern_buf = 1;
-
-	err = c->trans_mod->zc_request(c, req, uidata, uodata,
-				       inlen, olen, in_hdrlen, kern_buf);
-	if (err < 0) {
-		if (err == -EIO)
-			c->status = Disconnected;
-		goto reterr;
-	}
-	if (req->status == REQ_STATUS_ERROR) {
-		p9_debug(P9_DEBUG_ERROR, "req_status error %d\n", req->t_err);
-		err = req->t_err;
-	}
-	if ((err == -ERESTARTSYS) && (c->status == Connected)) {
-		p9_debug(P9_DEBUG_MUX, "flushing\n");
-		sigpending = 1;
-		clear_thread_flag(TIF_SIGPENDING);
-
-		if (c->trans_mod->cancel(c, req))
-			p9_client_flush(c, req);
-
-		/* if we received the response anyway, don't signal error */
-		if (req->status == REQ_STATUS_RCVD)
-			err = 0;
-	}
-	if (sigpending) {
-		spin_lock_irqsave(&current->sighand->siglock, flags);
-		recalc_sigpending();
-		spin_unlock_irqrestore(&current->sighand->siglock, flags);
-	}
-	if (err < 0)
-		goto reterr;
-
-	err = p9_check_zc_errors(c, req, uidata, in_hdrlen, kern_buf);
-	trace_9p_client_res(c, type, req->rc->tag, err);
-	if (!err)
-		return req;
-reterr:
-	p9_free_req(c, req);
-	return ERR_PTR(safe_errno(err));
+	return ERR_PTR(err);
 }
 
 static struct p9_fid *p9_fid_create(struct p9_client *clnt)
@@ -891,7 +692,7 @@ static struct p9_fid *p9_fid_create(struct p9_client *clnt)
 	struct p9_fid *fid;
 	unsigned long flags;
 
-	p9_debug(P9_DEBUG_FID, "clnt %p\n", clnt);
+	P9_DPRINTK(P9_DEBUG_FID, "clnt %p\n", clnt);
 	fid = kmalloc(sizeof(struct p9_fid), GFP_KERNEL);
 	if (!fid)
 		return ERR_PTR(-ENOMEM);
@@ -924,7 +725,7 @@ static void p9_fid_destroy(struct p9_fid *fid)
 	struct p9_client *clnt;
 	unsigned long flags;
 
-	p9_debug(P9_DEBUG_FID, "fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_FID, "fid %d\n", fid->fid);
 	clnt = fid->clnt;
 	p9_idpool_put(fid->fid, clnt->fidpool);
 	spin_lock_irqsave(&clnt->lock, flags);
@@ -941,8 +742,8 @@ static int p9_client_version(struct p9_client *c)
 	char *version;
 	int msize;
 
-	p9_debug(P9_DEBUG_9P, ">>> TVERSION msize %d protocol %d\n",
-		 c->msize, c->proto_version);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TVERSION msize %d protocol %d\n",
+						c->msize, c->proto_version);
 
 	switch (c->proto_version) {
 	case p9_proto_2000L:
@@ -967,12 +768,12 @@ static int p9_client_version(struct p9_client *c)
 
 	err = p9pdu_readf(req->rc, c->proto_version, "ds", &msize, &version);
 	if (err) {
-		p9_debug(P9_DEBUG_9P, "version error %d\n", err);
-		trace_9p_protocol_dump(c, req->rc);
+		P9_DPRINTK(P9_DEBUG_9P, "version error %d\n", err);
+		P9_DUMP_PKT(1, req->rc);
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RVERSION msize %d %s\n", msize, version);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RVERSION msize %d %s\n", msize, version);
 	if (!strncmp(version, "9P2000.L", 8))
 		c->proto_version = p9_proto_2000L;
 	else if (!strncmp(version, "9P2000.u", 8))
@@ -998,7 +799,6 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 {
 	int err;
 	struct p9_client *clnt;
-	char *client_id;
 
 	err = 0;
 	clnt = kmalloc(sizeof(struct p9_client), GFP_KERNEL);
@@ -1007,10 +807,6 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 
 	clnt->trans_mod = NULL;
 	clnt->trans = NULL;
-
-	client_id = utsname()->nodename;
-	memcpy(clnt->name, client_id, strlen(client_id) + 1);
-
 	spin_lock_init(&clnt->lock);
 	INIT_LIST_HEAD(&clnt->fidlist);
 
@@ -1027,8 +823,8 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 
 	if (clnt->trans_mod == NULL) {
 		err = -EPROTONOSUPPORT;
-		p9_debug(P9_DEBUG_ERROR,
-			 "No transport defined or default transport\n");
+		P9_DPRINTK(P9_DEBUG_ERROR,
+				"No transport defined or default transport\n");
 		goto destroy_tagpool;
 	}
 
@@ -1038,8 +834,8 @@ struct p9_client *p9_client_create(const char *dev_name, char *options)
 		goto put_trans;
 	}
 
-	p9_debug(P9_DEBUG_MUX, "clnt %p trans %p msize %d protocol %d\n",
-		 clnt, clnt->trans_mod, clnt->msize, clnt->proto_version);
+	P9_DPRINTK(P9_DEBUG_MUX, "clnt %p trans %p msize %d protocol %d\n",
+		clnt, clnt->trans_mod, clnt->msize, clnt->proto_version);
 
 	err = clnt->trans_mod->create(clnt, dev_name, options);
 	if (err)
@@ -1072,7 +868,7 @@ void p9_client_destroy(struct p9_client *clnt)
 {
 	struct p9_fid *fid, *fidptr;
 
-	p9_debug(P9_DEBUG_MUX, "clnt %p\n", clnt);
+	P9_DPRINTK(P9_DEBUG_MUX, "clnt %p\n", clnt);
 
 	if (clnt->trans_mod)
 		clnt->trans_mod->close(clnt);
@@ -1080,7 +876,7 @@ void p9_client_destroy(struct p9_client *clnt)
 	v9fs_put_trans(clnt->trans_mod);
 
 	list_for_each_entry_safe(fid, fidptr, &clnt->fidlist, flist) {
-		pr_info("Found fid %d not clunked\n", fid->fid);
+		printk(KERN_INFO "Found fid %d not clunked\n", fid->fid);
 		p9_fid_destroy(fid);
 	}
 
@@ -1095,29 +891,30 @@ EXPORT_SYMBOL(p9_client_destroy);
 
 void p9_client_disconnect(struct p9_client *clnt)
 {
-	p9_debug(P9_DEBUG_9P, "clnt %p\n", clnt);
+	P9_DPRINTK(P9_DEBUG_9P, "clnt %p\n", clnt);
 	clnt->status = Disconnected;
 }
 EXPORT_SYMBOL(p9_client_disconnect);
 
 void p9_client_begin_disconnect(struct p9_client *clnt)
 {
-	p9_debug(P9_DEBUG_9P, "clnt %p\n", clnt);
+	P9_DPRINTK(P9_DEBUG_9P, "clnt %p\n", clnt);
 	clnt->status = BeginDisconnect;
 }
 EXPORT_SYMBOL(p9_client_begin_disconnect);
 
 struct p9_fid *p9_client_attach(struct p9_client *clnt, struct p9_fid *afid,
-	char *uname, kuid_t n_uname, char *aname)
+	char *uname, u32 n_uname, char *aname)
 {
-	int err = 0;
+	int err;
 	struct p9_req_t *req;
 	struct p9_fid *fid;
 	struct p9_qid qid;
 
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TATTACH afid %d uname %s aname %s\n",
+					afid ? afid->fid : -1, uname, aname);
+	err = 0;
 
-	p9_debug(P9_DEBUG_9P, ">>> TATTACH afid %d uname %s aname %s\n",
-		 afid ? afid->fid : -1, uname, aname);
 	fid = p9_fid_create(clnt);
 	if (IS_ERR(fid)) {
 		err = PTR_ERR(fid);
@@ -1125,7 +922,7 @@ struct p9_fid *p9_client_attach(struct p9_client *clnt, struct p9_fid *afid,
 		goto error;
 	}
 
-	req = p9_client_rpc(clnt, P9_TATTACH, "ddss?u", fid->fid,
+	req = p9_client_rpc(clnt, P9_TATTACH, "ddss?d", fid->fid,
 			afid ? afid->fid : P9_NOFID, uname, aname, n_uname);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -1134,13 +931,15 @@ struct p9_fid *p9_client_attach(struct p9_client *clnt, struct p9_fid *afid,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "Q", &qid);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		p9_free_req(clnt, req);
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RATTACH qid %x.%llx.%x\n",
-		 qid.type, (unsigned long long)qid.path, qid.version);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RATTACH qid %x.%llx.%x\n",
+					qid.type,
+					(unsigned long long)qid.path,
+					qid.version);
 
 	memmove(&fid->qid, &qid, sizeof(struct p9_qid));
 
@@ -1180,8 +979,8 @@ struct p9_fid *p9_client_walk(struct p9_fid *oldfid, uint16_t nwname,
 		fid = oldfid;
 
 
-	p9_debug(P9_DEBUG_9P, ">>> TWALK fids %d,%d nwname %ud wname[0] %s\n",
-		 oldfid->fid, fid->fid, nwname, wnames ? wnames[0] : NULL);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TWALK fids %d,%d nwname %ud wname[0] %s\n",
+		oldfid->fid, fid->fid, nwname, wnames ? wnames[0] : NULL);
 
 	req = p9_client_rpc(clnt, P9_TWALK, "ddT", oldfid->fid, fid->fid,
 								nwname, wnames);
@@ -1192,13 +991,13 @@ struct p9_fid *p9_client_walk(struct p9_fid *oldfid, uint16_t nwname,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "R", &nwqids, &wqids);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		p9_free_req(clnt, req);
 		goto clunk_fid;
 	}
 	p9_free_req(clnt, req);
 
-	p9_debug(P9_DEBUG_9P, "<<< RWALK nwqid %d:\n", nwqids);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RWALK nwqid %d:\n", nwqids);
 
 	if (nwqids != nwname) {
 		err = -ENOENT;
@@ -1206,7 +1005,7 @@ struct p9_fid *p9_client_walk(struct p9_fid *oldfid, uint16_t nwname,
 	}
 
 	for (count = 0; count < nwqids; count++)
-		p9_debug(P9_DEBUG_9P, "<<<     [%d] %x.%llx.%x\n",
+		P9_DPRINTK(P9_DEBUG_9P, "<<<     [%d] %x.%llx.%x\n",
 			count, wqids[count].type,
 			(unsigned long long)wqids[count].path,
 			wqids[count].version);
@@ -1241,7 +1040,7 @@ int p9_client_open(struct p9_fid *fid, int mode)
 	int iounit;
 
 	clnt = fid->clnt;
-	p9_debug(P9_DEBUG_9P, ">>> %s fid %d mode %d\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> %s fid %d mode %d\n",
 		p9_is_proto_dotl(clnt) ? "TLOPEN" : "TOPEN", fid->fid, mode);
 	err = 0;
 
@@ -1259,11 +1058,11 @@ int p9_client_open(struct p9_fid *fid, int mode)
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "Qd", &qid, &iounit);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto free_and_error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< %s qid %x.%llx.%x iounit %x\n",
+	P9_DPRINTK(P9_DEBUG_9P, "<<< %s qid %x.%llx.%x iounit %x\n",
 		p9_is_proto_dotl(clnt) ? "RLOPEN" : "ROPEN",  qid.type,
 		(unsigned long long)qid.path, qid.version, iounit);
 
@@ -1278,23 +1077,22 @@ error:
 EXPORT_SYMBOL(p9_client_open);
 
 int p9_client_create_dotl(struct p9_fid *ofid, char *name, u32 flags, u32 mode,
-		kgid_t gid, struct p9_qid *qid)
+		gid_t gid, struct p9_qid *qid)
 {
 	int err = 0;
 	struct p9_client *clnt;
 	struct p9_req_t *req;
 	int iounit;
 
-	p9_debug(P9_DEBUG_9P,
+	P9_DPRINTK(P9_DEBUG_9P,
 			">>> TLCREATE fid %d name %s flags %d mode %d gid %d\n",
-			ofid->fid, name, flags, mode,
-		 	from_kgid(&init_user_ns, gid));
+			ofid->fid, name, flags, mode, gid);
 	clnt = ofid->clnt;
 
 	if (ofid->mode != -1)
 		return -EINVAL;
 
-	req = p9_client_rpc(clnt, P9_TLCREATE, "dsddg", ofid->fid, name, flags,
+	req = p9_client_rpc(clnt, P9_TLCREATE, "dsddd", ofid->fid, name, flags,
 			mode, gid);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -1303,11 +1101,11 @@ int p9_client_create_dotl(struct p9_fid *ofid, char *name, u32 flags, u32 mode,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "Qd", qid, &iounit);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto free_and_error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RLCREATE qid %x.%llx.%x iounit %x\n",
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RLCREATE qid %x.%llx.%x iounit %x\n",
 			qid->type,
 			(unsigned long long)qid->path,
 			qid->version, iounit);
@@ -1331,7 +1129,7 @@ int p9_client_fcreate(struct p9_fid *fid, char *name, u32 perm, int mode,
 	struct p9_qid qid;
 	int iounit;
 
-	p9_debug(P9_DEBUG_9P, ">>> TCREATE fid %d name %s perm %d mode %d\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TCREATE fid %d name %s perm %d mode %d\n",
 						fid->fid, name, perm, mode);
 	err = 0;
 	clnt = fid->clnt;
@@ -1348,11 +1146,11 @@ int p9_client_fcreate(struct p9_fid *fid, char *name, u32 perm, int mode,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "Qd", &qid, &iounit);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto free_and_error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RCREATE qid %x.%llx.%x iounit %x\n",
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RCREATE qid %x.%llx.%x iounit %x\n",
 				qid.type,
 				(unsigned long long)qid.path,
 				qid.version, iounit);
@@ -1367,18 +1165,18 @@ error:
 }
 EXPORT_SYMBOL(p9_client_fcreate);
 
-int p9_client_symlink(struct p9_fid *dfid, char *name, char *symtgt, kgid_t gid,
+int p9_client_symlink(struct p9_fid *dfid, char *name, char *symtgt, gid_t gid,
 		struct p9_qid *qid)
 {
 	int err = 0;
 	struct p9_client *clnt;
 	struct p9_req_t *req;
 
-	p9_debug(P9_DEBUG_9P, ">>> TSYMLINK dfid %d name %s  symtgt %s\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TSYMLINK dfid %d name %s  symtgt %s\n",
 			dfid->fid, name, symtgt);
 	clnt = dfid->clnt;
 
-	req = p9_client_rpc(clnt, P9_TSYMLINK, "dssg", dfid->fid, name, symtgt,
+	req = p9_client_rpc(clnt, P9_TSYMLINK, "dssd", dfid->fid, name, symtgt,
 			gid);
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -1387,11 +1185,11 @@ int p9_client_symlink(struct p9_fid *dfid, char *name, char *symtgt, kgid_t gid,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "Q", qid);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto free_and_error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RSYMLINK qid %x.%llx.%x\n",
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RSYMLINK qid %x.%llx.%x\n",
 			qid->type, (unsigned long long)qid->path, qid->version);
 
 free_and_error:
@@ -1406,7 +1204,7 @@ int p9_client_link(struct p9_fid *dfid, struct p9_fid *oldfid, char *newname)
 	struct p9_client *clnt;
 	struct p9_req_t *req;
 
-	p9_debug(P9_DEBUG_9P, ">>> TLINK dfid %d oldfid %d newname %s\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TLINK dfid %d oldfid %d newname %s\n",
 			dfid->fid, oldfid->fid, newname);
 	clnt = dfid->clnt;
 	req = p9_client_rpc(clnt, P9_TLINK, "dds", dfid->fid, oldfid->fid,
@@ -1414,7 +1212,7 @@ int p9_client_link(struct p9_fid *dfid, struct p9_fid *oldfid, char *newname)
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
-	p9_debug(P9_DEBUG_9P, "<<< RLINK\n");
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RLINK\n");
 	p9_free_req(clnt, req);
 	return 0;
 }
@@ -1426,7 +1224,7 @@ int p9_client_fsync(struct p9_fid *fid, int datasync)
 	struct p9_client *clnt;
 	struct p9_req_t *req;
 
-	p9_debug(P9_DEBUG_9P, ">>> TFSYNC fid %d datasync:%d\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TFSYNC fid %d datasync:%d\n",
 			fid->fid, datasync);
 	err = 0;
 	clnt = fid->clnt;
@@ -1437,7 +1235,7 @@ int p9_client_fsync(struct p9_fid *fid, int datasync)
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RFSYNC fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RFSYNC fid %d\n", fid->fid);
 
 	p9_free_req(clnt, req);
 
@@ -1451,18 +1249,14 @@ int p9_client_clunk(struct p9_fid *fid)
 	int err;
 	struct p9_client *clnt;
 	struct p9_req_t *req;
-	int retries = 0;
 
 	if (!fid) {
-		pr_warn("%s (%d): Trying to clunk with NULL fid\n",
-			__func__, task_pid_nr(current));
+		P9_EPRINTK(KERN_WARNING, "Trying to clunk with NULL fid\n");
 		dump_stack();
 		return 0;
 	}
 
-again:
-	p9_debug(P9_DEBUG_9P, ">>> TCLUNK fid %d (try %d)\n", fid->fid,
-								retries);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TCLUNK fid %d\n", fid->fid);
 	err = 0;
 	clnt = fid->clnt;
 
@@ -1472,20 +1266,14 @@ again:
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RCLUNK fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RCLUNK fid %d\n", fid->fid);
 
 	p9_free_req(clnt, req);
 error:
 	/*
 	 * Fid is not valid even after a failed clunk
-	 * If interrupted, retry once then give up and
-	 * leak fid until umount.
 	 */
-	if (err == -ERESTARTSYS) {
-		if (retries++ == 0)
-			goto again;
-	} else
-		p9_fid_destroy(fid);
+	p9_fid_destroy(fid);
 	return err;
 }
 EXPORT_SYMBOL(p9_client_clunk);
@@ -1496,7 +1284,7 @@ int p9_client_remove(struct p9_fid *fid)
 	struct p9_client *clnt;
 	struct p9_req_t *req;
 
-	p9_debug(P9_DEBUG_9P, ">>> TREMOVE fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TREMOVE fid %d\n", fid->fid);
 	err = 0;
 	clnt = fid->clnt;
 
@@ -1506,14 +1294,11 @@ int p9_client_remove(struct p9_fid *fid)
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RREMOVE fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RREMOVE fid %d\n", fid->fid);
 
 	p9_free_req(clnt, req);
 error:
-	if (err == -ERESTARTSYS)
-		p9_client_clunk(fid);
-	else
-		p9_fid_destroy(fid);
+	p9_fid_destroy(fid);
 	return err;
 }
 EXPORT_SYMBOL(p9_client_remove);
@@ -1524,7 +1309,7 @@ int p9_client_unlinkat(struct p9_fid *dfid, const char *name, int flags)
 	struct p9_req_t *req;
 	struct p9_client *clnt;
 
-	p9_debug(P9_DEBUG_9P, ">>> TUNLINKAT fid %d %s %d\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TUNLINKAT fid %d %s %d\n",
 		   dfid->fid, name, flags);
 
 	clnt = dfid->clnt;
@@ -1533,7 +1318,7 @@ int p9_client_unlinkat(struct p9_fid *dfid, const char *name, int flags)
 		err = PTR_ERR(req);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RUNLINKAT fid %d %s\n", dfid->fid, name);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RUNLINKAT fid %d %s\n", dfid->fid, name);
 
 	p9_free_req(clnt, req);
 error:
@@ -1545,15 +1330,13 @@ int
 p9_client_read(struct p9_fid *fid, char *data, char __user *udata, u64 offset,
 								u32 count)
 {
-	char *dataptr;
-	int kernel_buf = 0;
-	struct p9_req_t *req;
+	int err, rsize;
 	struct p9_client *clnt;
-	int err, rsize, non_zc = 0;
+	struct p9_req_t *req;
+	char *dataptr;
 
-
-	p9_debug(P9_DEBUG_9P, ">>> TREAD fid %d offset %llu %d\n",
-		   fid->fid, (unsigned long long) offset, count);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TREAD fid %d offset %llu %d\n", fid->fid,
+					(long long unsigned) offset, count);
 	err = 0;
 	clnt = fid->clnt;
 
@@ -1565,24 +1348,13 @@ p9_client_read(struct p9_fid *fid, char *data, char __user *udata, u64 offset,
 		rsize = count;
 
 	/* Don't bother zerocopy for small IO (< 1024) */
-	if (clnt->trans_mod->zc_request && rsize > 1024) {
-		char *indata;
-		if (data) {
-			kernel_buf = 1;
-			indata = data;
-		} else
-			indata = (__force char *)udata;
-		/*
-		 * response header len is 11
-		 * PDU Header(7) + IO Size (4)
-		 */
-		req = p9_client_zc_rpc(clnt, P9_TREAD, indata, NULL, rsize, 0,
-				       11, kernel_buf, "dqd", fid->fid,
-				       offset, rsize);
+	if (((clnt->trans_mod->pref & P9_TRANS_PREF_PAYLOAD_MASK) ==
+			P9_TRANS_PREF_PAYLOAD_SEP) && (rsize > 1024)) {
+		req = p9_client_rpc(clnt, P9_TREAD, "dqE", fid->fid, offset,
+				rsize, data, udata);
 	} else {
-		non_zc = 1;
 		req = p9_client_rpc(clnt, P9_TREAD, "dqd", fid->fid, offset,
-				    rsize);
+				rsize);
 	}
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -1591,13 +1363,14 @@ p9_client_read(struct p9_fid *fid, char *data, char __user *udata, u64 offset,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "D", &count, &dataptr);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto free_and_error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RREAD count %d\n", count);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RREAD count %d\n", count);
+	P9_DUMP_PKT(1, req->rc);
 
-	if (non_zc) {
+	if (!req->tc->pbuf_size) {
 		if (data) {
 			memmove(data, dataptr, count);
 		} else {
@@ -1623,12 +1396,11 @@ p9_client_write(struct p9_fid *fid, char *data, const char __user *udata,
 							u64 offset, u32 count)
 {
 	int err, rsize;
-	int kernel_buf = 0;
 	struct p9_client *clnt;
 	struct p9_req_t *req;
 
-	p9_debug(P9_DEBUG_9P, ">>> TWRITE fid %d offset %llu count %d\n",
-				fid->fid, (unsigned long long) offset, count);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TWRITE fid %d offset %llu count %d\n",
+				fid->fid, (long long unsigned) offset, count);
 	err = 0;
 	clnt = fid->clnt;
 
@@ -1639,24 +1411,19 @@ p9_client_write(struct p9_fid *fid, char *data, const char __user *udata,
 	if (count < rsize)
 		rsize = count;
 
-	/* Don't bother zerocopy for small IO (< 1024) */
-	if (clnt->trans_mod->zc_request && rsize > 1024) {
-		char *odata;
-		if (data) {
-			kernel_buf = 1;
-			odata = data;
-		} else
-			odata = (char *)udata;
-		req = p9_client_zc_rpc(clnt, P9_TWRITE, NULL, odata, 0, rsize,
-				       P9_ZC_HDR_SZ, kernel_buf, "dqd",
-				       fid->fid, offset, rsize);
+	/* Don't bother zerocopy form small IO (< 1024) */
+	if (((clnt->trans_mod->pref & P9_TRANS_PREF_PAYLOAD_MASK) ==
+				P9_TRANS_PREF_PAYLOAD_SEP) && (rsize > 1024)) {
+		req = p9_client_rpc(clnt, P9_TWRITE, "dqE", fid->fid, offset,
+				rsize, data, udata);
 	} else {
+
 		if (data)
 			req = p9_client_rpc(clnt, P9_TWRITE, "dqD", fid->fid,
-					    offset, rsize, data);
+					offset, rsize, data);
 		else
 			req = p9_client_rpc(clnt, P9_TWRITE, "dqU", fid->fid,
-					    offset, rsize, udata);
+					offset, rsize, udata);
 	}
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -1665,11 +1432,11 @@ p9_client_write(struct p9_fid *fid, char *data, const char __user *udata,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "d", &count);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto free_and_error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RWRITE count %d\n", count);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RWRITE count %d\n", count);
 
 	p9_free_req(clnt, req);
 	return count;
@@ -1689,7 +1456,7 @@ struct p9_wstat *p9_client_stat(struct p9_fid *fid)
 	struct p9_req_t *req;
 	u16 ignored;
 
-	p9_debug(P9_DEBUG_9P, ">>> TSTAT fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TSTAT fid %d\n", fid->fid);
 
 	if (!ret)
 		return ERR_PTR(-ENOMEM);
@@ -1705,12 +1472,12 @@ struct p9_wstat *p9_client_stat(struct p9_fid *fid)
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "wS", &ignored, ret);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		p9_free_req(clnt, req);
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P,
+	P9_DPRINTK(P9_DEBUG_9P,
 		"<<< RSTAT sz=%x type=%x dev=%x qid=%x.%llx.%x\n"
 		"<<<    mode=%8.8x atime=%8.8x mtime=%8.8x length=%llx\n"
 		"<<<    name=%s uid=%s gid=%s muid=%s extension=(%s)\n"
@@ -1719,9 +1486,7 @@ struct p9_wstat *p9_client_stat(struct p9_fid *fid)
 		(unsigned long long)ret->qid.path, ret->qid.version, ret->mode,
 		ret->atime, ret->mtime, (unsigned long long)ret->length,
 		ret->name, ret->uid, ret->gid, ret->muid, ret->extension,
-		from_kuid(&init_user_ns, ret->n_uid),
-		from_kgid(&init_user_ns, ret->n_gid),
-		from_kuid(&init_user_ns, ret->n_muid));
+		ret->n_uid, ret->n_gid, ret->n_muid);
 
 	p9_free_req(clnt, req);
 	return ret;
@@ -1741,7 +1506,7 @@ struct p9_stat_dotl *p9_client_getattr_dotl(struct p9_fid *fid,
 								GFP_KERNEL);
 	struct p9_req_t *req;
 
-	p9_debug(P9_DEBUG_9P, ">>> TGETATTR fid %d, request_mask %lld\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TGETATTR fid %d, request_mask %lld\n",
 							fid->fid, request_mask);
 
 	if (!ret)
@@ -1758,12 +1523,12 @@ struct p9_stat_dotl *p9_client_getattr_dotl(struct p9_fid *fid,
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "A", ret);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		p9_free_req(clnt, req);
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P,
+	P9_DPRINTK(P9_DEBUG_9P,
 		"<<< RGETATTR st_result_mask=%lld\n"
 		"<<< qid=%x.%llx.%x\n"
 		"<<< st_mode=%8.8x st_nlink=%llu\n"
@@ -1775,10 +1540,8 @@ struct p9_stat_dotl *p9_client_getattr_dotl(struct p9_fid *fid,
 		"<<< st_btime_sec=%lld st_btime_nsec=%lld\n"
 		"<<< st_gen=%lld st_data_version=%lld",
 		ret->st_result_mask, ret->qid.type, ret->qid.path,
-		ret->qid.version, ret->st_mode, ret->st_nlink,
-		from_kuid(&init_user_ns, ret->st_uid),
-		from_kgid(&init_user_ns, ret->st_gid),
-		ret->st_rdev, ret->st_size, ret->st_blksize,
+		ret->qid.version, ret->st_mode, ret->st_nlink, ret->st_uid,
+		ret->st_gid, ret->st_rdev, ret->st_size, ret->st_blksize,
 		ret->st_blocks, ret->st_atime_sec, ret->st_atime_nsec,
 		ret->st_mtime_sec, ret->st_mtime_nsec, ret->st_ctime_sec,
 		ret->st_ctime_nsec, ret->st_btime_sec, ret->st_btime_nsec,
@@ -1831,8 +1594,8 @@ int p9_client_wstat(struct p9_fid *fid, struct p9_wstat *wst)
 	err = 0;
 	clnt = fid->clnt;
 	wst->size = p9_client_statsize(wst, clnt->proto_version);
-	p9_debug(P9_DEBUG_9P, ">>> TWSTAT fid %d\n", fid->fid);
-	p9_debug(P9_DEBUG_9P,
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TWSTAT fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P,
 		"     sz=%x type=%x dev=%x qid=%x.%llx.%x\n"
 		"     mode=%8.8x atime=%8.8x mtime=%8.8x length=%llx\n"
 		"     name=%s uid=%s gid=%s muid=%s extension=(%s)\n"
@@ -1841,9 +1604,7 @@ int p9_client_wstat(struct p9_fid *fid, struct p9_wstat *wst)
 		(unsigned long long)wst->qid.path, wst->qid.version, wst->mode,
 		wst->atime, wst->mtime, (unsigned long long)wst->length,
 		wst->name, wst->uid, wst->gid, wst->muid, wst->extension,
-		from_kuid(&init_user_ns, wst->n_uid),
-		from_kgid(&init_user_ns, wst->n_gid),
-		from_kuid(&init_user_ns, wst->n_muid));
+		wst->n_uid, wst->n_gid, wst->n_muid);
 
 	req = p9_client_rpc(clnt, P9_TWSTAT, "dwS", fid->fid, wst->size+2, wst);
 	if (IS_ERR(req)) {
@@ -1851,7 +1612,7 @@ int p9_client_wstat(struct p9_fid *fid, struct p9_wstat *wst)
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RWSTAT fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RWSTAT fid %d\n", fid->fid);
 
 	p9_free_req(clnt, req);
 error:
@@ -1867,14 +1628,12 @@ int p9_client_setattr(struct p9_fid *fid, struct p9_iattr_dotl *p9attr)
 
 	err = 0;
 	clnt = fid->clnt;
-	p9_debug(P9_DEBUG_9P, ">>> TSETATTR fid %d\n", fid->fid);
-	p9_debug(P9_DEBUG_9P,
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TSETATTR fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P,
 		"    valid=%x mode=%x uid=%d gid=%d size=%lld\n"
 		"    atime_sec=%lld atime_nsec=%lld\n"
 		"    mtime_sec=%lld mtime_nsec=%lld\n",
-		p9attr->valid, p9attr->mode,
-		from_kuid(&init_user_ns, p9attr->uid),
-		from_kgid(&init_user_ns, p9attr->gid),
+		p9attr->valid, p9attr->mode, p9attr->uid, p9attr->gid,
 		p9attr->size, p9attr->atime_sec, p9attr->atime_nsec,
 		p9attr->mtime_sec, p9attr->mtime_nsec);
 
@@ -1884,7 +1643,7 @@ int p9_client_setattr(struct p9_fid *fid, struct p9_iattr_dotl *p9attr)
 		err = PTR_ERR(req);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RSETATTR fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RSETATTR fid %d\n", fid->fid);
 	p9_free_req(clnt, req);
 error:
 	return err;
@@ -1900,7 +1659,7 @@ int p9_client_statfs(struct p9_fid *fid, struct p9_rstatfs *sb)
 	err = 0;
 	clnt = fid->clnt;
 
-	p9_debug(P9_DEBUG_9P, ">>> TSTATFS fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TSTATFS fid %d\n", fid->fid);
 
 	req = p9_client_rpc(clnt, P9_TSTATFS, "d", fid->fid);
 	if (IS_ERR(req)) {
@@ -1912,12 +1671,12 @@ int p9_client_statfs(struct p9_fid *fid, struct p9_rstatfs *sb)
 		&sb->bsize, &sb->blocks, &sb->bfree, &sb->bavail,
 		&sb->files, &sb->ffree, &sb->fsid, &sb->namelen);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		p9_free_req(clnt, req);
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RSTATFS fid %d type 0x%lx bsize %ld "
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RSTATFS fid %d type 0x%lx bsize %ld "
 		"blocks %llu bfree %llu bavail %llu files %llu ffree %llu "
 		"fsid %llu namelen %ld\n",
 		fid->fid, (long unsigned int)sb->type, (long int)sb->bsize,
@@ -1940,7 +1699,7 @@ int p9_client_rename(struct p9_fid *fid,
 	err = 0;
 	clnt = fid->clnt;
 
-	p9_debug(P9_DEBUG_9P, ">>> TRENAME fid %d newdirfid %d name %s\n",
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TRENAME fid %d newdirfid %d name %s\n",
 			fid->fid, newdirfid->fid, name);
 
 	req = p9_client_rpc(clnt, P9_TRENAME, "dds", fid->fid,
@@ -1950,7 +1709,7 @@ int p9_client_rename(struct p9_fid *fid,
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RRENAME fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RRENAME fid %d\n", fid->fid);
 
 	p9_free_req(clnt, req);
 error:
@@ -1968,7 +1727,7 @@ int p9_client_renameat(struct p9_fid *olddirfid, const char *old_name,
 	err = 0;
 	clnt = olddirfid->clnt;
 
-	p9_debug(P9_DEBUG_9P, ">>> TRENAMEAT olddirfid %d old name %s"
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TRENAMEAT olddirfid %d old name %s"
 		   " newdirfid %d new name %s\n", olddirfid->fid, old_name,
 		   newdirfid->fid, new_name);
 
@@ -1979,7 +1738,7 @@ int p9_client_renameat(struct p9_fid *olddirfid, const char *old_name,
 		goto error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RRENAMEAT newdirfid %d new name %s\n",
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RRENAMEAT newdirfid %d new name %s\n",
 		   newdirfid->fid, new_name);
 
 	p9_free_req(clnt, req);
@@ -2007,7 +1766,7 @@ struct p9_fid *p9_client_xattrwalk(struct p9_fid *file_fid,
 		attr_fid = NULL;
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P,
+	P9_DPRINTK(P9_DEBUG_9P,
 		">>> TXATTRWALK file_fid %d, attr_fid %d name %s\n",
 		file_fid->fid, attr_fid->fid, attr_name);
 
@@ -2019,12 +1778,12 @@ struct p9_fid *p9_client_xattrwalk(struct p9_fid *file_fid,
 	}
 	err = p9pdu_readf(req->rc, clnt->proto_version, "q", attr_size);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		p9_free_req(clnt, req);
 		goto clunk_fid;
 	}
 	p9_free_req(clnt, req);
-	p9_debug(P9_DEBUG_9P, "<<<  RXATTRWALK fid %d size %llu\n",
+	P9_DPRINTK(P9_DEBUG_9P, "<<<  RXATTRWALK fid %d size %llu\n",
 		attr_fid->fid, *attr_size);
 	return attr_fid;
 clunk_fid:
@@ -2045,7 +1804,7 @@ int p9_client_xattrcreate(struct p9_fid *fid, const char *name,
 	struct p9_req_t *req;
 	struct p9_client *clnt;
 
-	p9_debug(P9_DEBUG_9P,
+	P9_DPRINTK(P9_DEBUG_9P,
 		">>> TXATTRCREATE fid %d name  %s size %lld flag %d\n",
 		fid->fid, name, (long long)attr_size, flags);
 	err = 0;
@@ -2056,7 +1815,7 @@ int p9_client_xattrcreate(struct p9_fid *fid, const char *name,
 		err = PTR_ERR(req);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RXATTRCREATE fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RXATTRCREATE fid %d\n", fid->fid);
 	p9_free_req(clnt, req);
 error:
 	return err;
@@ -2065,13 +1824,13 @@ EXPORT_SYMBOL_GPL(p9_client_xattrcreate);
 
 int p9_client_readdir(struct p9_fid *fid, char *data, u32 count, u64 offset)
 {
-	int err, rsize, non_zc = 0;
+	int err, rsize;
 	struct p9_client *clnt;
 	struct p9_req_t *req;
 	char *dataptr;
 
-	p9_debug(P9_DEBUG_9P, ">>> TREADDIR fid %d offset %llu count %d\n",
-				fid->fid, (unsigned long long) offset, count);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TREADDIR fid %d offset %llu count %d\n",
+				fid->fid, (long long unsigned) offset, count);
 
 	err = 0;
 	clnt = fid->clnt;
@@ -2083,18 +1842,13 @@ int p9_client_readdir(struct p9_fid *fid, char *data, u32 count, u64 offset)
 	if (count < rsize)
 		rsize = count;
 
-	/* Don't bother zerocopy for small IO (< 1024) */
-	if (clnt->trans_mod->zc_request && rsize > 1024) {
-		/*
-		 * response header len is 11
-		 * PDU Header(7) + IO Size (4)
-		 */
-		req = p9_client_zc_rpc(clnt, P9_TREADDIR, data, NULL, rsize, 0,
-				       11, 1, "dqd", fid->fid, offset, rsize);
+	if ((clnt->trans_mod->pref & P9_TRANS_PREF_PAYLOAD_MASK) ==
+			P9_TRANS_PREF_PAYLOAD_SEP) {
+		req = p9_client_rpc(clnt, P9_TREADDIR, "dqF", fid->fid,
+				offset, rsize, data);
 	} else {
-		non_zc = 1;
 		req = p9_client_rpc(clnt, P9_TREADDIR, "dqd", fid->fid,
-				    offset, rsize);
+				offset, rsize);
 	}
 	if (IS_ERR(req)) {
 		err = PTR_ERR(req);
@@ -2103,13 +1857,13 @@ int p9_client_readdir(struct p9_fid *fid, char *data, u32 count, u64 offset)
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "D", &count, &dataptr);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto free_and_error;
 	}
 
-	p9_debug(P9_DEBUG_9P, "<<< RREADDIR count %d\n", count);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RREADDIR count %d\n", count);
 
-	if (non_zc)
+	if (!req->tc->pbuf_size && data)
 		memmove(data, dataptr, count);
 
 	p9_free_req(clnt, req);
@@ -2123,7 +1877,7 @@ error:
 EXPORT_SYMBOL(p9_client_readdir);
 
 int p9_client_mknod_dotl(struct p9_fid *fid, char *name, int mode,
-			dev_t rdev, kgid_t gid, struct p9_qid *qid)
+			dev_t rdev, gid_t gid, struct p9_qid *qid)
 {
 	int err;
 	struct p9_client *clnt;
@@ -2131,19 +1885,19 @@ int p9_client_mknod_dotl(struct p9_fid *fid, char *name, int mode,
 
 	err = 0;
 	clnt = fid->clnt;
-	p9_debug(P9_DEBUG_9P, ">>> TMKNOD fid %d name %s mode %d major %d "
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TMKNOD fid %d name %s mode %d major %d "
 		"minor %d\n", fid->fid, name, mode, MAJOR(rdev), MINOR(rdev));
-	req = p9_client_rpc(clnt, P9_TMKNOD, "dsdddg", fid->fid, name, mode,
+	req = p9_client_rpc(clnt, P9_TMKNOD, "dsdddd", fid->fid, name, mode,
 		MAJOR(rdev), MINOR(rdev), gid);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "Q", qid);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RMKNOD qid %x.%llx.%x\n", qid->type,
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RMKNOD qid %x.%llx.%x\n", qid->type,
 				(unsigned long long)qid->path, qid->version);
 
 error:
@@ -2154,7 +1908,7 @@ error:
 EXPORT_SYMBOL(p9_client_mknod_dotl);
 
 int p9_client_mkdir_dotl(struct p9_fid *fid, char *name, int mode,
-				kgid_t gid, struct p9_qid *qid)
+				gid_t gid, struct p9_qid *qid)
 {
 	int err;
 	struct p9_client *clnt;
@@ -2162,19 +1916,19 @@ int p9_client_mkdir_dotl(struct p9_fid *fid, char *name, int mode,
 
 	err = 0;
 	clnt = fid->clnt;
-	p9_debug(P9_DEBUG_9P, ">>> TMKDIR fid %d name %s mode %d gid %d\n",
-		 fid->fid, name, mode, from_kgid(&init_user_ns, gid));
-	req = p9_client_rpc(clnt, P9_TMKDIR, "dsdg", fid->fid, name, mode,
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TMKDIR fid %d name %s mode %d gid %d\n",
+		 fid->fid, name, mode, gid);
+	req = p9_client_rpc(clnt, P9_TMKDIR, "dsdd", fid->fid, name, mode,
 		gid);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "Q", qid);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RMKDIR qid %x.%llx.%x\n", qid->type,
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RMKDIR qid %x.%llx.%x\n", qid->type,
 				(unsigned long long)qid->path, qid->version);
 
 error:
@@ -2192,7 +1946,7 @@ int p9_client_lock_dotl(struct p9_fid *fid, struct p9_flock *flock, u8 *status)
 
 	err = 0;
 	clnt = fid->clnt;
-	p9_debug(P9_DEBUG_9P, ">>> TLOCK fid %d type %i flags %d "
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TLOCK fid %d type %i flags %d "
 			"start %lld length %lld proc_id %d client_id %s\n",
 			fid->fid, flock->type, flock->flags, flock->start,
 			flock->length, flock->proc_id, flock->client_id);
@@ -2206,10 +1960,10 @@ int p9_client_lock_dotl(struct p9_fid *fid, struct p9_flock *flock, u8 *status)
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "b", status);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RLOCK status %i\n", *status);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RLOCK status %i\n", *status);
 error:
 	p9_free_req(clnt, req);
 	return err;
@@ -2225,7 +1979,7 @@ int p9_client_getlock_dotl(struct p9_fid *fid, struct p9_getlock *glock)
 
 	err = 0;
 	clnt = fid->clnt;
-	p9_debug(P9_DEBUG_9P, ">>> TGETLOCK fid %d, type %i start %lld "
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TGETLOCK fid %d, type %i start %lld "
 		"length %lld proc_id %d client_id %s\n", fid->fid, glock->type,
 		glock->start, glock->length, glock->proc_id, glock->client_id);
 
@@ -2239,10 +1993,10 @@ int p9_client_getlock_dotl(struct p9_fid *fid, struct p9_getlock *glock)
 			&glock->start, &glock->length, &glock->proc_id,
 			&glock->client_id);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RGETLOCK type %i start %lld length %lld "
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RGETLOCK type %i start %lld length %lld "
 		"proc_id %d client_id %s\n", glock->type, glock->start,
 		glock->length, glock->proc_id, glock->client_id);
 error:
@@ -2259,7 +2013,7 @@ int p9_client_readlink(struct p9_fid *fid, char **target)
 
 	err = 0;
 	clnt = fid->clnt;
-	p9_debug(P9_DEBUG_9P, ">>> TREADLINK fid %d\n", fid->fid);
+	P9_DPRINTK(P9_DEBUG_9P, ">>> TREADLINK fid %d\n", fid->fid);
 
 	req = p9_client_rpc(clnt, P9_TREADLINK, "d", fid->fid);
 	if (IS_ERR(req))
@@ -2267,10 +2021,10 @@ int p9_client_readlink(struct p9_fid *fid, char **target)
 
 	err = p9pdu_readf(req->rc, clnt->proto_version, "s", target);
 	if (err) {
-		trace_9p_protocol_dump(clnt, req->rc);
+		P9_DUMP_PKT(1, req->rc);
 		goto error;
 	}
-	p9_debug(P9_DEBUG_9P, "<<< RREADLINK target %s\n", *target);
+	P9_DPRINTK(P9_DEBUG_9P, "<<< RREADLINK target %s\n", *target);
 error:
 	p9_free_req(clnt, req);
 	return err;

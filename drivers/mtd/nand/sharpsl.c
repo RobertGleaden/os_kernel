@@ -103,16 +103,20 @@ static int sharpsl_nand_calculate_ecc(struct mtd_info *mtd, const u_char * dat, 
 	return readb(sharpsl->io + ECCCNTR) != 0;
 }
 
+static const char *part_probes[] = { "cmdlinepart", NULL };
+
 /*
  * Main initialization routine
  */
-static int sharpsl_nand_probe(struct platform_device *pdev)
+static int __devinit sharpsl_nand_probe(struct platform_device *pdev)
 {
 	struct nand_chip *this;
+	struct mtd_partition *sharpsl_partition_info;
+	int nr_partitions;
 	struct resource *r;
 	int err = 0;
 	struct sharpsl_nand *sharpsl;
-	struct sharpsl_nand_platform_data *data = dev_get_platdata(&pdev->dev);
+	struct sharpsl_nand_platform_data *data = pdev->dev.platform_data;
 
 	if (!data) {
 		dev_err(&pdev->dev, "no platform data!\n");
@@ -121,8 +125,10 @@ static int sharpsl_nand_probe(struct platform_device *pdev)
 
 	/* Allocate memory for MTD device structure and private data */
 	sharpsl = kzalloc(sizeof(struct sharpsl_nand), GFP_KERNEL);
-	if (!sharpsl)
+	if (!sharpsl) {
+		printk("Unable to allocate SharpSL NAND MTD device structure.\n");
 		return -ENOMEM;
+	}
 
 	r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!r) {
@@ -134,7 +140,7 @@ static int sharpsl_nand_probe(struct platform_device *pdev)
 	/* map physical address */
 	sharpsl->io = ioremap(r->start, resource_size(r));
 	if (!sharpsl->io) {
-		dev_err(&pdev->dev, "ioremap to access Sharp SL NAND chip failed\n");
+		printk("ioremap to access Sharp SL NAND chip failed\n");
 		err = -EIO;
 		goto err_ioremap;
 	}
@@ -165,7 +171,6 @@ static int sharpsl_nand_probe(struct platform_device *pdev)
 	this->ecc.mode = NAND_ECC_HW;
 	this->ecc.size = 256;
 	this->ecc.bytes = 3;
-	this->ecc.strength = 1;
 	this->badblock_pattern = data->badblock_pattern;
 	this->ecc.layout = data->ecc_layout;
 	this->ecc.hwctl = sharpsl_nand_enable_hwecc;
@@ -179,9 +184,14 @@ static int sharpsl_nand_probe(struct platform_device *pdev)
 
 	/* Register the partitions */
 	sharpsl->mtd.name = "sharpsl-nand";
+	nr_partitions = parse_mtd_partitions(&sharpsl->mtd, part_probes, &sharpsl_partition_info, 0);
+	if (nr_partitions <= 0) {
+		nr_partitions = data->nr_partitions;
+		sharpsl_partition_info = data->partitions;
+	}
 
-	err = mtd_device_parse_register(&sharpsl->mtd, NULL, NULL,
-					data->partitions, data->nr_partitions);
+	err = mtd_device_register(&sharpsl->mtd, sharpsl_partition_info,
+				  nr_partitions);
 	if (err)
 		goto err_add;
 
@@ -192,6 +202,7 @@ err_add:
 	nand_release(&sharpsl->mtd);
 
 err_scan:
+	platform_set_drvdata(pdev, NULL);
 	iounmap(sharpsl->io);
 err_ioremap:
 err_get_res:
@@ -202,12 +213,14 @@ err_get_res:
 /*
  * Clean up routine
  */
-static int sharpsl_nand_remove(struct platform_device *pdev)
+static int __devexit sharpsl_nand_remove(struct platform_device *pdev)
 {
 	struct sharpsl_nand *sharpsl = platform_get_drvdata(pdev);
 
 	/* Release resources, unregister device */
 	nand_release(&sharpsl->mtd);
+
+	platform_set_drvdata(pdev, NULL);
 
 	iounmap(sharpsl->io);
 
@@ -223,10 +236,20 @@ static struct platform_driver sharpsl_nand_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= sharpsl_nand_probe,
-	.remove		= sharpsl_nand_remove,
+	.remove		= __devexit_p(sharpsl_nand_remove),
 };
 
-module_platform_driver(sharpsl_nand_driver);
+static int __init sharpsl_nand_init(void)
+{
+	return platform_driver_register(&sharpsl_nand_driver);
+}
+module_init(sharpsl_nand_init);
+
+static void __exit sharpsl_nand_exit(void)
+{
+	platform_driver_unregister(&sharpsl_nand_driver);
+}
+module_exit(sharpsl_nand_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Richard Purdie <rpurdie@rpsys.net>");
